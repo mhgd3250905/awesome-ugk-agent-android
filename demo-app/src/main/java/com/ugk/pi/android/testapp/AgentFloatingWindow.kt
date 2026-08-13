@@ -560,10 +560,14 @@ class AgentFloatingWindow(private val context: Context) : ConfirmationOverlayHos
             addConfirmation(container, confirmation)
         }
 
-        snapshot.latestMessage?.takeIf { it.isNotBlank() }?.let { message ->
-            val role = if (snapshot.latestMessageRole == "assistant") "Agent" else "你"
-            addSectionLabel(container, role)
-            addText(container, message, 13f, Ui.TextPrimary, Ui.SurfaceElevated, dp(10), selectable = true)
+        // Keep the user's prompt before the run, but place the assistant's
+        // final answer after the process and activity history. This mirrors
+        // the main conversation timeline instead of putting the answer above
+        // the evidence that explains how it was produced.
+        val latestMessage = snapshot.latestMessage?.takeIf { it.isNotBlank() }
+        val showLatestBeforeProcess = latestMessage != null && snapshot.latestMessageRole != "assistant"
+        if (showLatestBeforeProcess) {
+            addLatestMessage(container, latestMessage!!, snapshot.latestMessageRole)
         }
 
         if (snapshot.steps.isNotEmpty()) {
@@ -586,6 +590,11 @@ class AgentFloatingWindow(private val context: Context) : ConfirmationOverlayHos
                 dp(8)
             )
         }
+        if (!showLatestBeforeProcess) {
+            latestMessage?.let { message ->
+                addLatestMessage(container, message, snapshot.latestMessageRole)
+            }
+        }
         if (container.childCount == 0) {
             addText(
                 container,
@@ -607,6 +616,16 @@ class AgentFloatingWindow(private val context: Context) : ConfirmationOverlayHos
                 scrollView?.fullScroll(View.FOCUS_DOWN)
             }
         }
+    }
+
+    private fun addLatestMessage(
+        container: LinearLayout,
+        message: String,
+        role: String?
+    ) {
+        val label = if (role == "assistant") "Agent" else "你"
+        addSectionLabel(container, label)
+        addText(container, message, 13f, Ui.TextPrimary, Ui.SurfaceElevated, dp(10), selectable = true)
     }
 
     private fun addConfirmation(
