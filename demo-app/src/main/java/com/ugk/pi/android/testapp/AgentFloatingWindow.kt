@@ -14,8 +14,10 @@ import android.view.MotionEvent
 import android.view.View
 import android.view.ViewGroup
 import android.view.WindowManager
+import android.view.ViewConfiguration
 import android.view.inputmethod.InputMethodManager
 import android.widget.EditText
+import android.widget.FrameLayout
 import android.widget.LinearLayout
 import android.widget.ScrollView
 import android.widget.TextView
@@ -70,7 +72,7 @@ class AgentFloatingWindow(private val context: Context) {
 
     private val expandedParams = WindowManager.LayoutParams().apply {
         width = expandedWidth()
-        height = WindowManager.LayoutParams.WRAP_CONTENT
+        height = expandedHeight()
         type = overlayType
         flags = WindowManager.LayoutParams.FLAG_NOT_TOUCH_MODAL
         format = PixelFormat.TRANSLUCENT
@@ -106,9 +108,10 @@ class AgentFloatingWindow(private val context: Context) {
         collapsedX = collapsedParams.x
         collapsedY = collapsedParams.y
         hideCollapsed()
-        expandedParams.width = expandedWidth()
+        expandedParams.width = clampExpandedWidth(expandedParams.width)
+        expandedParams.height = clampExpandedHeight(expandedParams.height)
         expandedParams.x = clampX(collapsedX, expandedParams.width)
-        expandedParams.y = clampY(collapsedY)
+        expandedParams.y = clampY(collapsedY, expandedParams.height)
         expandedX = expandedParams.x
         expandedY = expandedParams.y
 
@@ -176,7 +179,7 @@ class AgentFloatingWindow(private val context: Context) {
     private fun showCollapsed() {
         if (collapsedView != null) return
         collapsedParams.x = clampX(collapsedX, collapsedParams.width)
-        collapsedParams.y = clampY(collapsedY)
+        collapsedParams.y = clampY(collapsedY, collapsedParams.height)
         val view = buildCollapsedView()
         if (addViewSafely(view, collapsedParams)) collapsedView = view
     }
@@ -206,7 +209,7 @@ class AgentFloatingWindow(private val context: Context) {
         expandedX = expandedParams.x
         expandedY = expandedParams.y
         collapsedX = clampX(expandedX, collapsedParams.width)
-        collapsedY = clampY(expandedY)
+        collapsedY = clampY(expandedY, collapsedParams.height)
         hideExpanded()
         showCollapsed()
     }
@@ -246,7 +249,7 @@ class AgentFloatingWindow(private val context: Context) {
         root.addView(icon, LinearLayout.LayoutParams(dp(20), dp(34)))
         root.addView(labels, LinearLayout.LayoutParams(0, LinearLayout.LayoutParams.WRAP_CONTENT, 1f))
 
-        setupDrag(root, collapsedParams) {
+        setupDrag(root, root, collapsedParams) {
             showExpanded()
         }
         return root
@@ -254,12 +257,20 @@ class AgentFloatingWindow(private val context: Context) {
 
     @SuppressLint("ClickableViewAccessibility")
     private fun buildExpandedView(): View {
-        val root = LinearLayout(context).apply {
-            orientation = LinearLayout.VERTICAL
+        val root = FrameLayout(context).apply {
             background = Ui.rounded(context, Ui.SurfaceElevated, 16, Ui.Outline)
             clipChildren = true
-            setPadding(dp(8), dp(8), dp(8), dp(8))
         }
+        val contentRoot = LinearLayout(context).apply {
+            orientation = LinearLayout.VERTICAL
+            // Reserve the bottom corner for the resize handle so it never
+            // competes with the composer or its send/stop buttons.
+            setPadding(dp(8), dp(8), dp(8), dp(32))
+        }
+        root.addView(contentRoot, FrameLayout.LayoutParams(
+            FrameLayout.LayoutParams.MATCH_PARENT,
+            FrameLayout.LayoutParams.MATCH_PARENT
+        ))
 
         val header = LinearLayout(context).apply {
             orientation = LinearLayout.HORIZONTAL
@@ -294,14 +305,16 @@ class AgentFloatingWindow(private val context: Context) {
         header.addView(actionButton("收起", "收起 Agent 悬浮窗") {
             collapseToBubble()
         })
-        root.addView(header, LinearLayout.LayoutParams(
+        contentRoot.addView(header, LinearLayout.LayoutParams(
             LinearLayout.LayoutParams.MATCH_PARENT,
             LinearLayout.LayoutParams.WRAP_CONTENT
         ))
-        setupDrag(header, expandedParams) { }
+        // Only the title/status area moves the window. The three action
+        // buttons keep their own click targets and never become drag handles.
+        setupDrag(headerText, root, expandedParams) { }
 
-        scrollView = OverlayScrollView(context, maxScrollHeight()).apply {
-            isFillViewport = false
+        scrollView = ScrollView(context).apply {
+            isFillViewport = true
             setBackgroundColor(Ui.Surface)
         }
         contentContainer = LinearLayout(context).apply {
@@ -312,9 +325,10 @@ class AgentFloatingWindow(private val context: Context) {
             ViewGroup.LayoutParams.MATCH_PARENT,
             ViewGroup.LayoutParams.WRAP_CONTENT
         ))
-        root.addView(scrollView, LinearLayout.LayoutParams(
+        contentRoot.addView(scrollView, LinearLayout.LayoutParams(
             LinearLayout.LayoutParams.MATCH_PARENT,
-            maxScrollHeight()
+            0,
+            1f
         ))
 
         val composer = LinearLayout(context).apply {
@@ -347,14 +361,36 @@ class AgentFloatingWindow(private val context: Context) {
             LinearLayout.LayoutParams.WRAP_CONTENT,
             dp(42)
         ).apply { marginStart = dp(4) })
-        root.addView(composer, LinearLayout.LayoutParams(
+        contentRoot.addView(composer, LinearLayout.LayoutParams(
             LinearLayout.LayoutParams.MATCH_PARENT,
             LinearLayout.LayoutParams.WRAP_CONTENT
         ).apply { topMargin = dp(6) })
 
+        val resizeHandle = TextView(context).apply {
+            text = "↘"
+            textSize = 17f
+            setTextColor(Ui.MintDark)
+            gravity = Gravity.CENTER
+            setPadding(dp(2), dp(2), dp(1), dp(1))
+            background = Ui.rounded(context, Ui.SurfaceSoft, 8, Ui.Outline)
+            contentDescription = "调整 Agent 悬浮窗大小"
+            isClickable = true
+            isFocusable = true
+        }
+        root.addView(resizeHandle, FrameLayout.LayoutParams(
+            dp(28),
+            dp(28),
+            Gravity.END or Gravity.BOTTOM
+        ).apply {
+            marginEnd = dp(4)
+            bottomMargin = dp(4)
+        })
+        setupResize(resizeHandle, root)
+
         return root
     }
 
+    @SuppressLint("ClickableViewAccessibility")
     private fun actionButton(label: String, description: String, action: () -> Unit): TextView =
         TextView(context).apply {
             text = label
@@ -368,7 +404,95 @@ class AgentFloatingWindow(private val context: Context) {
             background = Ui.rounded(context, Ui.SurfaceSoft, 10)
             contentDescription = description
             setOnClickListener { action() }
+            // A swipe that starts on a button must stay a window drag, not
+            // accidentally invoke Hide/Collapse when the finger is lifted.
+            setOnTouchListener(object : View.OnTouchListener {
+                private var downX = 0f
+                private var downY = 0f
+                private var moved = false
+
+                override fun onTouch(view: View, event: MotionEvent): Boolean {
+                    when (event.actionMasked) {
+                        MotionEvent.ACTION_DOWN -> {
+                            downX = event.rawX
+                            downY = event.rawY
+                            moved = false
+                            view.isPressed = true
+                        }
+                        MotionEvent.ACTION_MOVE -> {
+                            if (!moved && (
+                                kotlin.math.abs(event.rawX - downX) > touchSlop() ||
+                                    kotlin.math.abs(event.rawY - downY) > touchSlop()
+                                )
+                            ) {
+                                moved = true
+                                view.isPressed = false
+                            }
+                        }
+                        MotionEvent.ACTION_UP -> {
+                            val shouldClick = !moved
+                            view.isPressed = false
+                            if (shouldClick) view.performClick()
+                        }
+                        MotionEvent.ACTION_CANCEL -> {
+                            moved = true
+                            view.isPressed = false
+                        }
+                    }
+                    return true
+                }
+            })
         }
+
+    @SuppressLint("ClickableViewAccessibility")
+    private fun setupResize(handle: View, windowRoot: View) {
+        handle.setOnTouchListener(object : View.OnTouchListener {
+            private var initialWidth = 0
+            private var initialHeight = 0
+            private var touchX = 0f
+            private var touchY = 0f
+
+            override fun onTouch(view: View, event: MotionEvent): Boolean {
+                when (event.actionMasked) {
+                    MotionEvent.ACTION_DOWN -> {
+                        initialWidth = expandedParams.width
+                        initialHeight = expandedParams.height
+                        touchX = event.rawX
+                        touchY = event.rawY
+                        view.isPressed = true
+                        return true
+                    }
+                    MotionEvent.ACTION_MOVE -> {
+                        val nextWidth = clampExpandedWidth(
+                            initialWidth + (event.rawX - touchX).toInt()
+                        )
+                        val nextHeight = clampExpandedHeight(
+                            initialHeight + (event.rawY - touchY).toInt()
+                        )
+                        if (nextWidth != expandedParams.width || nextHeight != expandedParams.height) {
+                            expandedParams.width = nextWidth
+                            expandedParams.height = nextHeight
+                            expandedParams.x = clampX(expandedParams.x, nextWidth)
+                            expandedParams.y = clampY(expandedParams.y, nextHeight)
+                            expandedX = expandedParams.x
+                            expandedY = expandedParams.y
+                            runCatching {
+                                windowManager.updateViewLayout(windowRoot, expandedParams)
+                            }.onFailure {
+                                Log.w(TAG, "Unable to resize Agent overlay window", it)
+                            }
+                        }
+                        return true
+                    }
+                    MotionEvent.ACTION_UP, MotionEvent.ACTION_CANCEL -> {
+                        view.isPressed = false
+                        return true
+                    }
+                }
+                return true
+            }
+        })
+    }
 
     private fun sendInput() {
         val field = inputField ?: return
@@ -554,6 +678,7 @@ class AgentFloatingWindow(private val context: Context) {
     @SuppressLint("ClickableViewAccessibility")
     private fun setupDrag(
         dragTarget: View,
+        windowRoot: View,
         params: WindowManager.LayoutParams,
         onClick: () -> Unit
     ) {
@@ -577,12 +702,12 @@ class AgentFloatingWindow(private val context: Context) {
                     MotionEvent.ACTION_MOVE -> {
                         val dx = event.rawX - touchX
                         val dy = event.rawY - touchY
-                        if (!dragging && (kotlin.math.abs(dx) > dp(8) || kotlin.math.abs(dy) > dp(8))) {
+                        if (!dragging && (kotlin.math.abs(dx) > touchSlop() || kotlin.math.abs(dy) > touchSlop())) {
                             dragging = true
                         }
                         if (dragging) {
                             params.x = clampX(initialX + dx.toInt(), params.width)
-                            params.y = clampY(initialY + dy.toInt())
+                            params.y = clampY(initialY + dy.toInt(), params.height)
                             if (params === expandedParams) {
                                 expandedX = params.x
                                 expandedY = params.y
@@ -590,7 +715,11 @@ class AgentFloatingWindow(private val context: Context) {
                                 collapsedX = params.x
                                 collapsedY = params.y
                             }
-                            runCatching { windowManager.updateViewLayout(view, params) }
+                            runCatching {
+                                windowManager.updateViewLayout(windowRoot, params)
+                            }.onFailure {
+                                Log.w(TAG, "Unable to move Agent overlay window", it)
+                            }
                         }
                         return true
                     }
@@ -627,21 +756,45 @@ class AgentFloatingWindow(private val context: Context) {
 
     private fun stepKey(index: Int): String = "step-$index"
 
-    private fun expandedWidth(): Int = minOf(dp(360), (context.resources.displayMetrics.widthPixels - dp(24)).coerceAtLeast(dp(260)))
+    private fun expandedWidth(): Int = clampExpandedWidth(dp(360))
 
-    private fun maxScrollHeight(): Int = minOf(dp(360), (context.resources.displayMetrics.heightPixels * 0.48f).toInt())
+    private fun expandedHeight(): Int = clampExpandedHeight(dp(520))
 
-    private fun clampX(value: Int, width: Int): Int = value.coerceIn(dp(8), (context.resources.displayMetrics.widthPixels - width - dp(8)).coerceAtLeast(dp(8)))
+    private fun clampExpandedWidth(value: Int): Int = value.coerceIn(
+        minExpandedWidth(),
+        maxExpandedWidth()
+    )
 
-    private fun clampY(value: Int): Int = value.coerceIn(dp(48), (context.resources.displayMetrics.heightPixels - dp(100)).coerceAtLeast(dp(48)))
+    private fun clampExpandedHeight(value: Int): Int = value.coerceIn(
+        minExpandedHeight(),
+        maxExpandedHeight()
+    )
+
+    private fun minExpandedWidth(): Int = minOf(dp(280), availableWidth())
+
+    private fun maxExpandedWidth(): Int = availableWidth().coerceAtLeast(minExpandedWidth())
+
+    private fun minExpandedHeight(): Int = minOf(dp(240), availableHeight())
+
+    private fun maxExpandedHeight(): Int = availableHeight().coerceAtLeast(minExpandedHeight())
+
+    private fun availableWidth(): Int = (context.resources.displayMetrics.widthPixels - dp(16)).coerceAtLeast(dp(1))
+
+    private fun availableHeight(): Int = (context.resources.displayMetrics.heightPixels - dp(56)).coerceAtLeast(dp(1))
+
+    private fun clampX(value: Int, width: Int): Int = value.coerceIn(
+        dp(8),
+        (context.resources.displayMetrics.widthPixels - width - dp(8)).coerceAtLeast(dp(8))
+    )
+
+    private fun clampY(value: Int, height: Int): Int = value.coerceIn(
+        dp(48),
+        (context.resources.displayMetrics.heightPixels - height - dp(8)).coerceAtLeast(dp(48))
+    )
 
     private fun dp(value: Int): Int = (value * context.resources.displayMetrics.density).toInt()
 
-    private class OverlayScrollView(context: Context, private val maxHeight: Int) : ScrollView(context) {
-        override fun onMeasure(widthMeasureSpec: Int, heightMeasureSpec: Int) {
-            super.onMeasure(widthMeasureSpec, MeasureSpec.makeMeasureSpec(maxHeight, MeasureSpec.AT_MOST))
-        }
-    }
+    private fun touchSlop(): Int = ViewConfiguration.get(context).scaledTouchSlop
 
     private companion object {
         const val TAG = "AgentFloatingWindow"
