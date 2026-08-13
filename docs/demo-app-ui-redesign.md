@@ -21,7 +21,8 @@ OpenAI 官方 Android 帮助中心把聊天历史、删除会话和设置作为�
 - 聊天正文不因气泡行数或字符数被 UI 自动替换为省略号，长消息由外层消息流滚动阅读。
 - 本地会话管理：新建、切换、重命名、删除，默认保存最近的有界消息内容。
 - 无配置 API、无障碍未开启、悬浮窗未授权等情况使用非阻塞状态提示。
-- 悬浮窗只展示当前 Agent 任务摘要，和主界面使用同一运行状态模型。
+- 跨 App 悬浮窗：获得“显示在其他应用上层”权限后，离开主界面显示可拖动状态胶囊；展开后可查看完整消息/过程、发送消息、停止任务、返回主界面或隐藏悬浮窗。
+- 悬浮窗与主界面使用同一运行状态模型；运行中从悬浮窗发送的消息进入队列，不直接打断当前 Agent 操作。
 - 不新增生产依赖，不读取或输出真实 API Key，不把真实 LLM 调用加入自动化测试。
 
 ## 状态优先级
@@ -74,13 +75,13 @@ OpenAI 官方 Android 帮助中心把聊天历史、删除会话和设置作为�
 .\gradlew.bat :demo-app:connectedDebugAndroidTest --console=plain
 ```
 
-真实 API 只做一次人工冒烟：发送一个短请求，确认消息层级、过程卡片、停止/完成和会话保存，不重复天气网站或 Terminal Runtime 组件测试。
+真实 API 人工冒烟应控制为最少次数：发送短请求，确认消息层级、过程卡片、停止/完成和会话保存，不重复天气网站或 Terminal Runtime 组件测试。
 
 ## 当前验收记录
 
 日期：2026-08-13
 
-- `:demo-app:testDebugUnitTest`：通过；当前模块无 JVM unit test source，完成编译任务后为 `NO-SOURCE`。
+- `:demo-app:testDebugUnitTest`：通过；覆盖悬浮窗显示与权限策略的 4 组纯 JVM 测试。
 - `:demo-app:assembleDebug`：通过。
 - `:demo-app:assembleRelease`：通过；未注入 Release API 配置。
 - `:demo-app:connectedDebugAndroidTest`：通过，真机 `2602BRT18C - 16` 共 14 个测试。
@@ -88,5 +89,8 @@ OpenAI 官方 Android 帮助中心把聊天历史、删除会话和设置作为�
 - 真机过程卡片验收：外层展开后步骤默认收起，单步骤可独立展开完整结果，顶部和底部均可收起整个过程；外层重新展开后子步骤不会恢复为展开状态。
 - 真机键盘验收：IME 出现后消息区缩短到键盘上方，输入框和发送按钮保持可见，消息流仍可滚动。
 - 真实 API 人工冒烟：使用本机 Debug 配置在真机完成只读读屏场景，实际观察到模型思考、工具调用、工具结果和最终回答；未输出 API Key。
+- 真机悬浮窗验收：在系统设置授予 `SYSTEM_ALERT_WINDOW` 后，从 Agent Test 切到系统设置，确认 `TYPE_APPLICATION_OVERLAY` 窗口出现；折叠态约 `112dp × 46dp`，点击后展开为不超过屏幕宽度的可交互面板。
+- 真机悬浮窗键盘验收：展开面板并点击输入区后，IME 显示且悬浮窗窗口区域收缩到键盘上方，`EditText` 成为当前输入目标。
+- 真机回前台验收：重新打开 Agent Test 后悬浮窗自动隐藏，主界面仍保持会话内容。
 
-真实 API 冒烟已完成，后续人工回归应控制调用次数，避免重复计费；当前事件映射仍由 `DemoRunStateReducer` 负责，代码已通过 Debug/Release 编译。
+真实 API 冒烟已完成，后续人工回归应控制调用次数，避免重复计费；当前事件映射仍由 `DemoRunStateReducer` 负责，悬浮窗渲染由 `AgentFloatingWindow` 负责。

@@ -41,6 +41,7 @@ import kotlinx.coroutines.Job
 import kotlinx.coroutines.launch
 import kotlinx.coroutines.withContext
 import java.text.DateFormat
+import java.util.ArrayDeque
 import java.util.Date
 
 class MainActivity : Activity() {
@@ -53,6 +54,9 @@ class MainActivity : Activity() {
     private lateinit var session: AgentSession
     private var runJob: Job? = null
     private var runState: DemoRunState = DemoRunState.initial()
+    private val pendingOverlayMessages = ArrayDeque<String>()
+    private var activityResumed = false
+    private var overlayPermissionDialog: AlertDialog? = null
     private val confirmationPresenter = ActivityUserConfirmationDialogPresenter(this)
 
     private lateinit var appBarTitle: TextView
@@ -68,7 +72,18 @@ class MainActivity : Activity() {
     private var lastImeInsetBottom = 0
     private val floatingWindow by lazy {
         AgentFloatingWindow(applicationContext).apply {
-            onSendMessage = { text -> runAgent(text) }
+            onSendMessage = { text -> enqueueOverlayMessage(text) }
+            onStopAgent = { runOnUiThread { stopAgent(clearQueuedMessages = true) } }
+            onOpenApp = {
+                runOnUiThread {
+                    startActivity(
+                        Intent(this@MainActivity, MainActivity::class.java).apply {
+                            addFlags(Intent.FLAG_ACTIVITY_REORDER_TO_FRONT)
+                        }
+                    )
+                }
+            }
+            onHide = { runOnUiThread { hideFloatingWindow() } }
         }
     }
 
@@ -93,8 +108,16 @@ class MainActivity : Activity() {
         setIntent(intent)
     }
 
+    override fun onUserLeaveHint() {
+        super.onUserLeaveHint()
+        // Home/launcher transitions can happen before onPause on some OEM
+        // builds. This callback makes the cross-app handoff deterministic.
+        showFloatingWindowIfNeeded()
+    }
+
     override fun onResume() {
         super.onResume()
+        activityResumed = true
         updateCapabilityBanner()
         renderRunState()
         // The main chat is the primary surface. The overlay is only a
@@ -104,26 +127,37 @@ class MainActivity : Activity() {
     }
 
     override fun onPause() {
+        activityResumed = false
         super.onPause()
-        // A background Agent run must not crash the host when the user has
-        // declined the SYSTEM_ALERT_WINDOW permission. The Activity itself
-        // remains the safe fallback while the run continues.
-        if (shouldShowFloatingWindowOnPause(
-                agentRunActive = runJob?.isActive == true,
-                overlayPermissionGranted = Settings.canDrawOverlays(this)
-            )
-        ) {
-            floatingWindow.show()
-        }
+        showFloatingWindowIfNeeded()
     }
 
     override fun onDestroy() {
         runJob?.cancel()
         terminalPlugin?.cancelAll()
+        pendingOverlayMessages.clear()
         confirmationPresenter.cancelPending()
         DemoActivityState.rememberSession(activeConversation.id, session)
         super.onDestroy()
+        hideFloatingWindow()
+    }
+
+    private fun hideFloatingWindow() {
         floatingWindow.hide()
+    }
+
+    private fun showFloatingWindowIfNeeded() {
+        // A background Agent run must not crash the host when the user has
+        // declined the SYSTEM_ALERT_WINDOW permission. The Activity itself
+        // remains the safe fallback while the run continues.
+        if (AgentOverlayPolicy.shouldShowOnPause(
+                agentRunActive = runJob?.isActive == true || runState.isBusy,
+                overlayPermissionGranted = Settings.canDrawOverlays(this),
+                activityResumed = false
+            )
+        ) {
+            floatingWindow.show()
+        }
     }
 
     private fun isAccessibilityEnabled(): Boolean {
@@ -486,7 +520,56 @@ class MainActivity : Activity() {
         val text = inputField.text.toString().trim()
         if (text.isBlank()) return
         inputField.setText("")
+        maybeOfferOverlayPermission()
         runAgent(text)
+    }
+
+    private fun enqueueOverlayMessage(text: String) {
+        val message = text.trim()
+        if (message.isBlank()) return
+
+        if (runState.isBusy || runJob?.isActive == true) {
+            pendingOverlayMessages.addLast(message)
+            floatingWindow.addLog("已排队：${message.take(48)}")
+            renderRunState()
+        } else {
+            runAgent(message)
+        }
+    }
+
+    private fun startNextQueuedOverlayMessage() {
+        if (runState.isBusy || pendingOverlayMessages.isEmpty()) return
+        val next = pendingOverlayMessages.removeFirst()
+        floatingWindow.addLog("开始处理排队消息")
+        runAgent(next)
+    }
+
+    private fun maybeOfferOverlayPermission() {
+        if (!AgentOverlayPolicy.shouldOfferPermission(
+                permissionGranted = Settings.canDrawOverlays(this),
+                hasActiveRun = true
+            ) || DemoActivityState.overlayPromptShown || isFinishing
+        ) {
+            return
+        }
+        DemoActivityState.overlayPromptShown = true
+        overlayPermissionDialog = AlertDialog.Builder(this)
+            .setTitle("开启跨 App 悬浮窗")
+            .setMessage("离开 Agent Test 后，悬浮小窗可以继续显示任务进度，并发送后续消息，不会打断当前 Agent 操作。")
+            .setNegativeButton("暂不") { dialog, _ -> dialog.dismiss() }
+            .setPositiveButton("去开启") { _, _ ->
+                startActivity(
+                    Intent(
+                        Settings.ACTION_MANAGE_OVERLAY_PERMISSION,
+                        android.net.Uri.parse("package:$packageName")
+                    )
+                )
+            }
+            .create()
+            .also { dialog ->
+                dialog.setOnDismissListener { overlayPermissionDialog = null }
+                dialog.show()
+            }
     }
 
     private fun runAgent(text: String) {
@@ -540,6 +623,7 @@ class MainActivity : Activity() {
                     updateComposerState()
                     floatingWindow.setSending(false)
                     floatingWindow.setStatus(runState.statusLabel)
+                    startNextQueuedOverlayMessage()
                 }
             }
         }
@@ -668,6 +752,25 @@ class MainActivity : Activity() {
                     resultSummary = step.resultSummary
                 )
             }
+            floatingWindow.bindSnapshot(
+                AgentOverlaySnapshot(
+                    title = activeConversation.title,
+                    statusLabel = state.statusLabel,
+                    statusDetail = state.detailLabel,
+                    latestMessage = activeConversation.messages.lastOrNull()?.content,
+                    latestMessageRole = activeConversation.messages.lastOrNull()?.role,
+                    steps = state.steps.map { step ->
+                        AgentOverlayStep(
+                            title = step.title,
+                            statusLabel = step.status.label,
+                            detail = step.detailLabel,
+                            resultSummary = step.resultSummary
+                        )
+                    },
+                    isBusy = state.isBusy,
+                    queuedMessages = pendingOverlayMessages.size
+                )
+            )
             processCard?.bind(
                 DemoChatProcessState(
                     stage = stage,
@@ -677,6 +780,18 @@ class MainActivity : Activity() {
                     footerLeft = if (processSteps.isEmpty()) null else "${processSteps.size} 个步骤",
                     footerRight = state.statusLabel,
                     expanded = state.detailsExpanded
+                )
+            )
+        } else {
+            floatingWindow.bindSnapshot(
+                AgentOverlaySnapshot(
+                    title = activeConversation.title,
+                    statusLabel = state.statusLabel,
+                    statusDetail = state.detailLabel,
+                    latestMessage = activeConversation.messages.lastOrNull()?.content,
+                    latestMessageRole = activeConversation.messages.lastOrNull()?.role,
+                    isBusy = state.isBusy,
+                    queuedMessages = pendingOverlayMessages.size
                 )
             )
         }
@@ -701,8 +816,9 @@ class MainActivity : Activity() {
         sendButton.alpha = if (!busy && inputField.text.isNullOrBlank()) 0.55f else 1f
     }
 
-    private fun stopAgent() {
+    private fun stopAgent(clearQueuedMessages: Boolean = true) {
         if (!runState.isBusy) return
+        if (clearQueuedMessages) pendingOverlayMessages.clear()
         terminalPlugin?.cancelAll()
         runJob?.cancel()
         runState = runState.cancel()
@@ -1167,4 +1283,8 @@ class MainActivity : Activity() {
 internal fun shouldShowFloatingWindowOnPause(
     agentRunActive: Boolean,
     overlayPermissionGranted: Boolean
-): Boolean = agentRunActive && overlayPermissionGranted
+): Boolean = AgentOverlayPolicy.shouldShowOnPause(
+    agentRunActive = agentRunActive,
+    overlayPermissionGranted = overlayPermissionGranted,
+    activityResumed = false
+)
