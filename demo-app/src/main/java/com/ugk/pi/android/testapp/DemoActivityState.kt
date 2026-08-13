@@ -18,8 +18,26 @@ data class DemoTranscriptEntry(
 
 object DemoActivityState {
     var session: AgentSession? = null
+    var activeConversationId: String? = null
+    var draft: String = ""
+    val sessions: MutableMap<String, AgentSession> = mutableMapOf()
     val transcript: MutableList<DemoTranscriptEntry> = mutableListOf()
 
     var accessibilityPromptShown: Boolean = false
     var overlayPromptShown: Boolean = false
+
+    fun rememberSession(conversationId: String, value: AgentSession) {
+        activeConversationId = conversationId
+        session = value
+        sessions[conversationId] = value
+    }
+
+    fun sessionFor(conversationId: String): AgentSession? = sessions[conversationId]
+
+    fun clearActiveConversation() {
+        activeConversationId = null
+        session = null
+        transcript.clear()
+        draft = ""
+    }
 }

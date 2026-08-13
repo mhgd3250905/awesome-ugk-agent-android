@@ -87,7 +87,17 @@ class AgentFloatingWindow(private val context: Context) {
     fun isShowing(): Boolean = expandedView != null || collapsedView != null
 
     fun setStatus(text: String) {
-        statusText?.text = text
+        statusText?.apply {
+            this.text = text
+            setTextColor(
+                when {
+                    text.contains("失败") -> Ui.Danger
+                    text.contains("确认") -> Ui.Warning
+                    text.contains("完成") -> Ui.Success
+                    else -> Ui.MintDark
+                }
+            )
+        }
     }
 
     fun addLog(text: String) {
@@ -95,7 +105,7 @@ class AgentFloatingWindow(private val context: Context) {
         val tv = TextView(context).apply {
             this.text = text
             textSize = 11f
-            setTextColor(Color.rgb(210, 210, 210))
+            setTextColor(Ui.TextSecondary)
             setPadding(0, dp(1), 0, dp(1))
         }
         container.addView(tv)
@@ -196,16 +206,17 @@ class AgentFloatingWindow(private val context: Context) {
         statusText = TextView(context).apply {
             text = "Agent 就绪"
             textSize = 13f
-            setTextColor(Color.WHITE)
+            setTextColor(Ui.MintDark)
             setTypeface(null, Typeface.BOLD)
             setPadding(dp(10), dp(6), dp(10), dp(6))
-            setBackgroundColor(Ui.Mint)
+            background = Ui.rounded(context, Ui.SurfaceSoft, 999)
+            gravity = Gravity.CENTER_VERTICAL
         }
 
         val collapseBtn = TextView(context).apply {
             text = "×"
             textSize = 16f
-            setTextColor(Color.WHITE)
+            setTextColor(Ui.TextPrimary)
             setTypeface(null, Typeface.BOLD)
             setPadding(dp(10), dp(6), dp(10), dp(6))
             gravity = Gravity.CENTER
@@ -217,7 +228,7 @@ class AgentFloatingWindow(private val context: Context) {
 
         val titleBar = LinearLayout(context).apply {
             orientation = LinearLayout.HORIZONTAL
-            setBackgroundColor(Ui.Mint)
+            setBackgroundColor(Ui.SurfaceElevated)
             addView(statusText, LinearLayout.LayoutParams(0, LinearLayout.LayoutParams.WRAP_CONTENT, 1f))
             addView(collapseBtn, LinearLayout.LayoutParams(dp(36), LinearLayout.LayoutParams.MATCH_PARENT))
         }
@@ -233,20 +244,20 @@ class AgentFloatingWindow(private val context: Context) {
 
         inputField = EditText(context).apply {
             hint = "输入..."
-            setHintTextColor(Color.rgb(120, 120, 120))
-            setTextColor(Color.WHITE)
+            setHintTextColor(Ui.TextMuted)
+            setTextColor(Ui.TextPrimary)
             textSize = 13f
             maxLines = 5
             inputType = InputType.TYPE_CLASS_TEXT or InputType.TYPE_TEXT_FLAG_MULTI_LINE
             background = null
             setPadding(dp(8), dp(4), dp(8), dp(4))
-            setBackgroundColor(Color.argb(255, 50, 50, 50))
+            setBackgroundColor(Ui.SurfaceElevated)
         }
 
         sendBtn = TextView(context).apply {
             text = "发送"
             textSize = 12f
-            setTextColor(Color.WHITE)
+            setTextColor(Ui.SurfaceElevated)
             setTypeface(null, Typeface.BOLD)
             gravity = Gravity.CENTER
             background = Ui.rounded(context, Ui.Mint, 6)
@@ -256,7 +267,7 @@ class AgentFloatingWindow(private val context: Context) {
 
         val inputBar = LinearLayout(context).apply {
             orientation = LinearLayout.HORIZONTAL
-            setBackgroundColor(Color.argb(255, 40, 40, 40))
+            background = Ui.rounded(context, Ui.SurfaceSoft, 10)
             setPadding(dp(4), dp(2), dp(4), dp(2))
             addView(inputField, LinearLayout.LayoutParams(0, LinearLayout.LayoutParams.WRAP_CONTENT, 1f).apply {
                 gravity = Gravity.CENTER_VERTICAL
@@ -269,7 +280,7 @@ class AgentFloatingWindow(private val context: Context) {
 
         val root = LinearLayout(context).apply {
             orientation = LinearLayout.VERTICAL
-            background = Ui.rounded(context, Color.argb(245, 35, 35, 35), 14)
+            background = Ui.rounded(context, Ui.SurfaceElevated, 14, Ui.Outline)
             clipChildren = true
             addView(titleBar, LinearLayout.LayoutParams(widthPx, LinearLayout.LayoutParams.WRAP_CONTENT))
             addView(scrollView, LinearLayout.LayoutParams(widthPx, dp(17) * 10))

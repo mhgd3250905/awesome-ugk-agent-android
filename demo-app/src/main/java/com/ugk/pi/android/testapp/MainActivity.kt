@@ -3,21 +3,22 @@ package com.ugk.pi.android.testapp
 import android.app.AlertDialog
 import android.content.ComponentName
 import android.content.Intent
-import android.net.Uri
 import android.provider.Settings
 import android.app.Activity
-import android.graphics.Color
 import android.graphics.Typeface
 import android.os.Build
 import android.os.Bundle
-import android.util.TypedValue
+import android.text.Editable
+import android.text.InputType
+import android.text.TextWatcher
 import android.view.Gravity
 import android.view.View
 import android.view.WindowInsets
+import android.view.WindowInsetsAnimation
+import android.view.WindowManager
 import android.widget.EditText
-import android.widget.ImageView
+import android.widget.FrameLayout
 import android.widget.LinearLayout
-import android.widget.ProgressBar
 import android.widget.ScrollView
 import android.widget.TextView
 import com.ugk.pi.android.AgentCapabilityPlugin
@@ -37,24 +38,34 @@ import kotlinx.coroutines.CancellationException
 import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.Job
-import kotlinx.coroutines.flow.catch
 import kotlinx.coroutines.launch
+import kotlinx.coroutines.withContext
+import java.text.DateFormat
+import java.util.Date
 
 class MainActivity : Activity() {
 
-    private val store by lazy { ApiProviderSettingsStore(this) }
+    private val apiStore by lazy { ApiProviderSettingsStore(this) }
+    private val conversationStore by lazy { DemoConversationStore(this) }
     private var runtime: AgentRuntime? = null
-    private var session = createSession()
+    private var terminalPlugin: TerminalAgentPlugin? = null
+    private lateinit var activeConversation: DemoConversation
+    private lateinit var session: AgentSession
     private var runJob: Job? = null
+    private var runState: DemoRunState = DemoRunState.initial()
     private val confirmationPresenter = ActivityUserConfirmationDialogPresenter(this)
 
+    private lateinit var appBarTitle: TextView
     private lateinit var messageContainer: LinearLayout
     private lateinit var messageScrollView: ScrollView
     private lateinit var inputField: EditText
-    private lateinit var sendButton: View
-    private lateinit var progressBar: ProgressBar
+    private lateinit var sendButton: TextView
     private lateinit var providerLabel: TextView
-    private lateinit var accessibilityIndicator: TextView
+    private lateinit var runStatusLabel: TextView
+    private lateinit var statusBanner: TextView
+    private var processCard: DemoChatProcessCardView? = null
+    private var assistantMessageView: DemoChatMessageView? = null
+    private var lastImeInsetBottom = 0
     private val floatingWindow by lazy {
         AgentFloatingWindow(applicationContext).apply {
             onSendMessage = { text -> runAgent(text) }
@@ -63,20 +74,18 @@ class MainActivity : Activity() {
 
     override fun onCreate(savedInstanceState: Bundle?) {
         super.onCreate(savedInstanceState)
-        session = restoreSession()
+        window.setSoftInputMode(WindowManager.LayoutParams.SOFT_INPUT_ADJUST_RESIZE)
+        activeConversation = conversationStore.get(
+            DemoActivityState.activeConversationId ?: conversationStore.activeId()
+        ) ?: conversationStore.ensureActive()
+        conversationStore.setActive(activeConversation.id)
+        session = DemoActivityState.sessionFor(activeConversation.id)
+            ?: createSession(activeConversation).also {
+                DemoActivityState.rememberSession(activeConversation.id, it)
+            }
         setContentView(buildUi())
         restoreDraft(savedInstanceState)
-        restoreTranscript(savedInstanceState)
         rebuildRuntime()
-        if (!DemoActivityState.accessibilityPromptShown) {
-            checkAccessibility()
-        }
-        if (!DemoActivityState.overlayPromptShown) {
-            checkOverlayPermission()
-        }
-        if (Settings.canDrawOverlays(this)) {
-            floatingWindow.show()
-        }
     }
 
     override fun onNewIntent(intent: Intent?) {
@@ -86,11 +95,12 @@ class MainActivity : Activity() {
 
     override fun onResume() {
         super.onResume()
-        updateAccessibilityIndicator()
-        updateOverlayIndicator()
-        if (Settings.canDrawOverlays(this) && !floatingWindow.isShowing()) {
-            floatingWindow.show()
-        }
+        updateCapabilityBanner()
+        renderRunState()
+        // The main chat is the primary surface. The overlay is only a
+        // background-run summary, so keep it hidden while this Activity is
+        // visible to avoid competing with the conversation.
+        floatingWindow.hide()
     }
 
     override fun onPause() {
@@ -109,27 +119,11 @@ class MainActivity : Activity() {
 
     override fun onDestroy() {
         runJob?.cancel()
+        terminalPlugin?.cancelAll()
         confirmationPresenter.cancelPending()
-        DemoActivityState.session = session
+        DemoActivityState.rememberSession(activeConversation.id, session)
         super.onDestroy()
         floatingWindow.hide()
-    }
-
-    private fun checkAccessibility() {
-        DemoActivityState.accessibilityPromptShown = true
-        if (!isAccessibilityEnabled()) {
-            AlertDialog.Builder(this)
-                .setTitle("需要开启无障碍服务")
-                .setMessage("本应用需要无障碍权限才能正常工作。\n\n点击「去设置」跳转到系统无障碍页面，找到「Agent Test」并开启。")
-                .setCancelable(false)
-                .setPositiveButton("去设置") { _, _ ->
-                    startActivity(Intent(Settings.ACTION_ACCESSIBILITY_SETTINGS))
-                }
-                .setNegativeButton("稍后") { dialog, _ ->
-                    dialog.dismiss()
-                }
-                .show()
-        }
     }
 
     private fun isAccessibilityEnabled(): Boolean {
@@ -141,124 +135,222 @@ class MainActivity : Activity() {
         return enabledServices.contains("$packageName/${packageName}.AgentAccessibilityService")
     }
 
-    private fun updateAccessibilityIndicator() {
-        val enabled = isAccessibilityEnabled()
-        val label = if (enabled) "无障碍: 已开启" else "无障碍: 未开启"
-        accessibilityIndicator.text = label
-        accessibilityIndicator.setTextColor(if (enabled) Ui.Mint else Ui.Danger)
-    }
-
-    private fun checkOverlayPermission() {
-        DemoActivityState.overlayPromptShown = true
-        if (!Settings.canDrawOverlays(this)) {
-            AlertDialog.Builder(this)
-                .setTitle("需要悬浮窗权限")
-                .setMessage("Agent 操作其他应用时，需要悬浮窗显示操作进度。\n\n点击「去设置」开启「显示在其他应用上层」权限。")
-                .setCancelable(false)
-                .setPositiveButton("去设置") { _, _ ->
-                    val intent = Intent(
+    private fun updateCapabilityBanner() {
+        if (!::statusBanner.isInitialized) return
+        val config = apiStore.activeConfig()
+        val message = when {
+            config == null -> "还没有配置 API 源，点击这里打开设置"
+            !isAccessibilityEnabled() -> "无障碍服务未开启，跨 App 读屏和操作暂不可用"
+            !Settings.canDrawOverlays(this) -> "悬浮窗未授权，切换到其他 App 时不会显示任务摘要"
+            else -> ""
+        }
+        statusBanner.text = message
+        statusBanner.visibility = if (message.isBlank()) View.GONE else View.VISIBLE
+        statusBanner.setTextColor(
+            if (config == null || !isAccessibilityEnabled()) Ui.Warning else Ui.TextSecondary
+        )
+        statusBanner.setOnClickListener {
+            when {
+                config == null -> openSettings()
+                !isAccessibilityEnabled() -> startActivity(Intent(Settings.ACTION_ACCESSIBILITY_SETTINGS))
+                !Settings.canDrawOverlays(this) -> startActivity(
+                    Intent(
                         Settings.ACTION_MANAGE_OVERLAY_PERMISSION,
                         android.net.Uri.parse("package:$packageName")
                     )
-                    startActivity(intent)
-                }
-                .setNegativeButton("稍后") { dialog, _ ->
-                    dialog.dismiss()
-                }
-                .show()
+                )
+            }
         }
-    }
-
-    private fun hasOverlayPermission(): Boolean = Settings.canDrawOverlays(this)
-
-    private fun updateOverlayIndicator() {
-        // could add an overlay indicator in header, but keeping it simple
     }
 
     private fun buildUi(): View {
-        val root = LinearLayout(this).apply {
+        val root = FrameLayout(this).apply {
+            setBackgroundColor(Ui.Surface)
+        }
+        val content = LinearLayout(this).apply {
             orientation = LinearLayout.VERTICAL
-            setBackgroundColor(Color.rgb(245, 245, 245))
+        }
+        root.addView(content, FrameLayout.LayoutParams(
+            FrameLayout.LayoutParams.MATCH_PARENT,
+            FrameLayout.LayoutParams.MATCH_PARENT
+        ))
+
+        val historyButton = TextView(this).apply {
+            text = "☰"
+            textSize = 22f
+            gravity = Gravity.CENTER
+            setTextColor(Ui.TextPrimary)
+            contentDescription = getString(R.string.content_description_sessions)
+            isClickable = true
+            isFocusable = true
+            setOnClickListener { showConversationHistory() }
         }
 
+        appBarTitle = TextView(this).apply {
+            text = activeConversation.title
+            textSize = 18f
+            setTypeface(Typeface.create("sans-serif-medium", Typeface.NORMAL))
+            setTextColor(Ui.TextPrimary)
+            maxLines = 1
+            ellipsize = android.text.TextUtils.TruncateAt.END
+        }
         providerLabel = TextView(this).apply {
+            textSize = 11f
             setTextColor(Ui.TextSecondary)
-            textSize = 12f
-            setPadding(dp(16), dp(8), dp(16), 0)
+            maxLines = 1
+            ellipsize = android.text.TextUtils.TruncateAt.END
+        }
+        val titleStack = LinearLayout(this).apply {
+            orientation = LinearLayout.VERTICAL
+            gravity = Gravity.CENTER_VERTICAL
+            addView(appBarTitle, LinearLayout.LayoutParams(
+                LinearLayout.LayoutParams.MATCH_PARENT,
+                LinearLayout.LayoutParams.WRAP_CONTENT
+            ))
+            addView(providerLabel, LinearLayout.LayoutParams(
+                LinearLayout.LayoutParams.MATCH_PARENT,
+                LinearLayout.LayoutParams.WRAP_CONTENT
+            ).apply { topMargin = dp(2) })
         }
 
-        val settingsButton = ImageView(this).apply {
-            setImageResource(android.R.drawable.ic_menu_preferences)
-            setColorFilter(Ui.TextSecondary)
-            setPadding(dp(8), dp(8), dp(8), dp(8))
+        runStatusLabel = TextView(this).apply {
+            textSize = 12f
+            setTextColor(Ui.MintDark)
+            gravity = Gravity.CENTER
+            setPadding(dp(10), dp(6), dp(10), dp(6))
+            background = Ui.rounded(this@MainActivity, Ui.SurfaceSoft, 999)
+            maxLines = 1
+        }
+        val settingsButton = TextView(this).apply {
+            text = "⚙"
+            textSize = 22f
+            gravity = Gravity.CENTER
+            setTextColor(Ui.TextPrimary)
+            contentDescription = getString(R.string.content_description_settings)
+            isClickable = true
+            isFocusable = true
             setOnClickListener { openSettings() }
         }
-
-        accessibilityIndicator = TextView(this).apply {
-            textSize = 11f
-            setPadding(dp(16), 0, dp(16), dp(4))
-        }
-
         val header = LinearLayout(this).apply {
             orientation = LinearLayout.HORIZONTAL
             gravity = Gravity.CENTER_VERTICAL
-            setBackgroundColor(Color.WHITE)
-            setPadding(dp(12), dp(8), dp(4), dp(8))
-            addView(providerLabel, LinearLayout.LayoutParams(0, dp(36), 1f))
-            addView(settingsButton, dp(44), dp(44))
+            setPadding(dp(10), dp(8), dp(8), dp(8))
+            background = Ui.rounded(this@MainActivity, Ui.SurfaceElevated, 0)
+            addView(historyButton, LinearLayout.LayoutParams(dp(44), dp(44)))
+            addView(titleStack, LinearLayout.LayoutParams(0, dp(48), 1f).apply {
+                marginStart = dp(4)
+            })
+            addView(runStatusLabel, LinearLayout.LayoutParams(
+                LinearLayout.LayoutParams.WRAP_CONTENT,
+                LinearLayout.LayoutParams.WRAP_CONTENT
+            ).apply { marginEnd = dp(4) })
+            addView(settingsButton, LinearLayout.LayoutParams(dp(44), dp(44)))
         }
+        content.addView(header, LinearLayout.LayoutParams(
+            LinearLayout.LayoutParams.MATCH_PARENT,
+            LinearLayout.LayoutParams.WRAP_CONTENT
+        ))
 
-        root.addView(header, LinearLayout.LayoutParams(LinearLayout.LayoutParams.MATCH_PARENT, LinearLayout.LayoutParams.WRAP_CONTENT))
-        root.addView(accessibilityIndicator, LinearLayout.LayoutParams(LinearLayout.LayoutParams.MATCH_PARENT, LinearLayout.LayoutParams.WRAP_CONTENT))
+        statusBanner = TextView(this).apply {
+            textSize = 12f
+            setTextColor(Ui.Warning)
+            setPadding(dp(16), dp(8), dp(16), dp(8))
+            background = Ui.rounded(this@MainActivity, Ui.SurfaceSoft, 12)
+            isClickable = true
+            isFocusable = true
+        }
+        content.addView(statusBanner, LinearLayout.LayoutParams(
+            LinearLayout.LayoutParams.MATCH_PARENT,
+            LinearLayout.LayoutParams.WRAP_CONTENT
+        ).apply {
+            setMargins(dp(12), dp(4), dp(12), dp(4))
+        })
 
         messageContainer = LinearLayout(this).apply {
             orientation = LinearLayout.VERTICAL
-            setPadding(dp(12), dp(8), dp(12), dp(8))
+            setPadding(dp(4), dp(12), dp(4), dp(20))
         }
-
         messageScrollView = ScrollView(this).apply {
+            setFillViewport(true)
+            isSmoothScrollingEnabled = true
             addView(messageContainer)
         }
-
-        progressBar = ProgressBar(this).apply {
-            visibility = View.GONE
-            setPadding(0, dp(8), 0, dp(8))
-        }
+        content.addView(messageScrollView, LinearLayout.LayoutParams(
+            LinearLayout.LayoutParams.MATCH_PARENT,
+            0,
+            1f
+        ))
 
         inputField = EditText(this).apply {
-            hint = "输入消息..."
+            hint = "给 Agent 发消息"
             setHintTextColor(Ui.TextMuted)
             setTextColor(Ui.TextPrimary)
-            textSize = 15f
-            setSingleLine(true)
+            textSize = 16f
+            inputType = InputType.TYPE_CLASS_TEXT or InputType.TYPE_TEXT_FLAG_MULTI_LINE or
+                    InputType.TYPE_TEXT_FLAG_CAP_SENTENCES
+            setSingleLine(false)
+            maxLines = 5
+            minLines = 1
+            gravity = Gravity.TOP or Gravity.START
             background = null
-            setPadding(dp(12), dp(10), dp(12), dp(10))
+            setPadding(dp(12), dp(10), dp(8), dp(10))
+            setOnFocusChangeListener { _, hasFocus ->
+                updateComposerState()
+                if (hasFocus) scrollToEnd()
+            }
         }
-
+        inputField.addTextChangedListener(object : TextWatcher {
+            override fun beforeTextChanged(text: CharSequence?, start: Int, count: Int, after: Int) = Unit
+            override fun onTextChanged(text: CharSequence?, start: Int, before: Int, count: Int) {
+                updateComposerState()
+            }
+            override fun afterTextChanged(editable: Editable?) = Unit
+        })
         sendButton = TextView(this).apply {
-            text = "发送"
-            setTextColor(Color.WHITE)
-            textSize = 14f
+            textSize = 20f
             setTypeface(null, Typeface.BOLD)
             gravity = Gravity.CENTER
-            background = Ui.rounded(this@MainActivity, Ui.Mint, 10)
-            setPadding(dp(20), dp(10), dp(20), dp(10))
+            setTextColor(Ui.SurfaceElevated)
+            background = Ui.rounded(this@MainActivity, Ui.Mint, 22)
+            contentDescription = getString(R.string.content_description_send)
+            isClickable = true
+            isFocusable = true
             setOnClickListener { sendMessage() }
         }
-
-        val inputBar = LinearLayout(this).apply {
+        val inputShell = LinearLayout(this).apply {
             orientation = LinearLayout.HORIZONTAL
-            setBackgroundColor(Color.WHITE)
-            setPadding(dp(8), dp(4), dp(8), dp(4))
-            addView(inputField, LinearLayout.LayoutParams(0, dp(44), 1f))
-            addView(sendButton, LinearLayout.LayoutParams(dp(72), dp(44)).apply {
-                marginStart = dp(8)
+            gravity = Gravity.BOTTOM
+            background = Ui.rounded(this@MainActivity, Ui.SurfaceElevated, 18, Ui.Outline)
+            setPadding(dp(4), dp(4), dp(6), dp(4))
+            addView(inputField, LinearLayout.LayoutParams(0, LinearLayout.LayoutParams.WRAP_CONTENT, 1f))
+            addView(sendButton, LinearLayout.LayoutParams(dp(44), dp(44)).apply {
+                marginStart = dp(4)
             })
         }
+        val composerHint = TextView(this).apply {
+            text = "Agent 会按需调用工具，重要操作会先请求确认"
+            textSize = 11f
+            setTextColor(Ui.TextMuted)
+            setPadding(dp(4), dp(5), dp(4), 0)
+        }
+        val composer = LinearLayout(this).apply {
+            orientation = LinearLayout.VERTICAL
+            setPadding(dp(12), dp(8), dp(12), dp(10))
+            background = Ui.rounded(this@MainActivity, Ui.SurfaceElevated, 0)
+            addView(inputShell, LinearLayout.LayoutParams(
+                LinearLayout.LayoutParams.MATCH_PARENT,
+                LinearLayout.LayoutParams.WRAP_CONTENT
+            ))
+            addView(composerHint, LinearLayout.LayoutParams(
+                LinearLayout.LayoutParams.MATCH_PARENT,
+                LinearLayout.LayoutParams.WRAP_CONTENT
+            ))
+        }
+        content.addView(composer, LinearLayout.LayoutParams(
+            LinearLayout.LayoutParams.MATCH_PARENT,
+            LinearLayout.LayoutParams.WRAP_CONTENT
+        ))
 
-        root.addView(messageScrollView, LinearLayout.LayoutParams(LinearLayout.LayoutParams.MATCH_PARENT, 0, 1f))
-        root.addView(progressBar, LinearLayout.LayoutParams(LinearLayout.LayoutParams.MATCH_PARENT, LinearLayout.LayoutParams.WRAP_CONTENT))
-        root.addView(inputBar, LinearLayout.LayoutParams(LinearLayout.LayoutParams.MATCH_PARENT, LinearLayout.LayoutParams.WRAP_CONTENT))
         installSystemBarInsets(root)
         return root
     }
@@ -270,7 +362,7 @@ class MainActivity : Activity() {
         val initialRight = root.paddingRight
         val initialBottom = root.paddingBottom
 
-        root.setOnApplyWindowInsetsListener { view, insets ->
+        fun applyInsets(insets: WindowInsets) {
             val systemInsets = if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.R) {
                 val current = insets.getInsets(WindowInsets.Type.statusBars() or WindowInsets.Type.navigationBars())
                 InsetsSnapshot(current.left, current.top, current.right, current.bottom)
@@ -282,13 +374,48 @@ class MainActivity : Activity() {
                     insets.systemWindowInsetBottom
                 )
             }
-            view.setPadding(
+            val imeBottom = if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.R) {
+                val imeType = WindowInsets.Type.ime()
+                if (insets.isVisible(imeType)) insets.getInsets(imeType).bottom else 0
+            } else {
+                0
+            }
+            val bottomInset = maxOf(systemInsets.bottom, imeBottom)
+            root.setPadding(
                 initialLeft + systemInsets.left,
                 initialTop + systemInsets.top,
                 initialRight + systemInsets.right,
-                initialBottom + systemInsets.bottom
+                initialBottom + bottomInset
             )
+            if (imeBottom != lastImeInsetBottom) {
+                lastImeInsetBottom = imeBottom
+                if (imeBottom > 0) {
+                    messageScrollView.post { messageScrollView.fullScroll(View.FOCUS_DOWN) }
+                }
+            }
+        }
+
+        val applyInsetsListener = View.OnApplyWindowInsetsListener { _, insets ->
+            applyInsets(insets)
             insets
+        }
+        root.setOnApplyWindowInsetsListener(applyInsetsListener)
+        // Android 15 edge-to-edge can deliver IME changes to the decor view
+        // without relaying them to a content root that already applied bar
+        // insets. Listen at both levels so the composer always stays above IME.
+        window.decorView.setOnApplyWindowInsetsListener(applyInsetsListener)
+        if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.R) {
+            root.setWindowInsetsAnimationCallback(object : WindowInsetsAnimation.Callback(
+                WindowInsetsAnimation.Callback.DISPATCH_MODE_CONTINUE_ON_SUBTREE
+            ) {
+                override fun onProgress(
+                    insets: WindowInsets,
+                    runningAnimations: MutableList<WindowInsetsAnimation>
+                ): WindowInsets {
+                    applyInsets(insets)
+                    return insets
+                }
+            })
         }
         root.requestApplyInsets()
     }
@@ -301,13 +428,13 @@ class MainActivity : Activity() {
     )
 
     private fun openSettings() {
-        ApiSettingsDialog(this, store) { config ->
+        ApiSettingsDialog(this, apiStore) {
             rebuildRuntime()
         }.show()
     }
 
     private fun rebuildRuntime() {
-        val config = store.activeConfig()
+        val config = apiStore.activeConfig()
         val provider: LLMProvider = if (config != null) {
             AnthropicMessagesProvider(
                 apiKey = config.apiKey,
@@ -317,6 +444,9 @@ class MainActivity : Activity() {
         } else {
             PlaceholderProvider
         }
+        terminalPlugin?.cancelAll()
+        val nextTerminalPlugin = TerminalAgentPlugin(applicationContext)
+        terminalPlugin = nextTerminalPlugin
         runtime = AgentRuntime.Builder()
             .llmProvider(provider)
             .register(
@@ -330,22 +460,29 @@ class MainActivity : Activity() {
                     accessibilityStateProvider = AgentAccessibilityService.runtimeStateProvider
                 )
             )
-            .register(TerminalAgentPlugin(applicationContext))
+            .register(nextTerminalPlugin)
             .register(object : AgentCapabilityPlugin {
                 override val id = "accessibility-screen"
-                override fun tools() = listOf(ScreenReadUiTreeTool(), ScreenPerformActionTool(), ScreenGlobalActionTool(), ScreenGestureTool(), ScreenPressKeyTool())
+                override fun tools() = listOf(
+                    ScreenReadUiTreeTool(),
+                    ScreenPerformActionTool(),
+                    ScreenGlobalActionTool(),
+                    ScreenGestureTool(),
+                    ScreenPressKeyTool()
+                )
                 override fun skills() = listOf(accessibilityScreenSkill)
             })
             .build()
-        messageContainer.removeAllViews()
         providerLabel.text = config?.displayName() ?: "未配置 API 源"
-        if (DemoActivityState.transcript.isEmpty() && config == null) {
-            addStatusMessage("请先点击右上角齿轮图标配置 API 源。")
-        }
-        renderTranscript()
+        updateCapabilityBanner()
+        renderConversation()
     }
 
     private fun sendMessage() {
+        if (runState.isBusy) {
+            stopAgent()
+            return
+        }
         val text = inputField.text.toString().trim()
         if (text.isBlank()) return
         inputField.setText("")
@@ -353,116 +490,303 @@ class MainActivity : Activity() {
     }
 
     private fun runAgent(text: String) {
+        if (runState.isBusy) return
         val currentRuntime = runtime ?: return
-        DemoActivityState.transcript += DemoTranscriptEntry("user", text)
-        addBubble(text, isUser = true)
+        val message = text.trim()
+        if (message.isBlank()) return
 
-        runJob?.cancel()
+        if (activeConversation.title == "新对话") {
+            activeConversation.title = conversationStore.suggestedTitle(message)
+        }
+        activeConversation.messages += DemoStoredMessage("user", message)
+        activeConversation.updatedAt = System.currentTimeMillis()
+        conversationStore.save(activeConversation)
+        syncTranscript()
+        updateAppBar()
+
+        assistantMessageView = null
+        addChatMessage(DemoChatMessageRole.USER, message)
+        addProcessCard()
+        runState = DemoRunState.initial()
+        renderRunState()
+
+        floatingWindow.clear()
+        floatingWindow.setSending(true)
+        floatingWindow.setStatus("思考中")
+        floatingWindow.addLog("开始任务")
+
         runJob = CoroutineScope(Dispatchers.Main).launch {
-            progressBar.visibility = View.VISIBLE
-            sendButton.isEnabled = false
-            floatingWindow.setSending(true)
-
-            var assistantBubble: TextView? = null
-
-            floatingWindow.clear()
-            floatingWindow.setStatus("思考中...")
-            floatingWindow.addLog("用户: $text")
-
-            currentRuntime.run(session, text)
-                .catch { e ->
-                    if (e !is CancellationException) {
-                        addStatusMessage("错误: ${e.message}")
-                        floatingWindow.setStatus("出错了")
-                        floatingWindow.addLog("错误: ${e.message}")
+            try {
+                withContext(Dispatchers.Default) {
+                    currentRuntime.run(session, message).collect { event ->
+                        withContext(Dispatchers.Main.immediate) {
+                            handleAgentEvent(event)
+                        }
                     }
                 }
-                .collect { event ->
-                    when (event) {
-                        is AgentEvent.ToolStarted -> {
-                            val bubble = assistantBubble ?: addBubble("", isUser = false).also { assistantBubble = it }
-                            bubble.append("\n🔧 调用工具: ${event.call.name}")
-                            scrollToEnd()
-                            floatingWindow.setStatus("调用工具")
-                            floatingWindow.addLog("→ ${event.call.name}")
-                        }
-                        is AgentEvent.ToolFinished -> {
-                            val preview = event.result.content.take(100)
-                            addStatusMessage("  ↳ ${event.result.name}: $preview")
-                            scrollToEnd()
-                            val success = !event.result.isError
-                            floatingWindow.setStatus(if (success) "工具完成" else "工具失败")
-                            floatingWindow.addLog("✓ ${event.result.name}: ${if (success) "成功" else "失败"}")
-                        }
-                        is AgentEvent.Completed -> {
-                            if (assistantBubble != null) {
-                                assistantBubble!!.text = event.content
-                            } else {
-                                addBubble(event.content, isUser = false)
-                            }
-                            DemoActivityState.transcript += DemoTranscriptEntry("assistant", event.content)
-                            floatingWindow.setStatus("完成")
-                            floatingWindow.addLog("回答: ${event.content.take(80)}")
-                        }
-                        is AgentEvent.Failed -> {
-                            addStatusMessage("失败: ${event.message}")
-                            floatingWindow.setStatus("失败")
-                            floatingWindow.addLog("失败: ${event.message}")
-                        }
-                        else -> Unit
+            } catch (cancelled: CancellationException) {
+                withContext(Dispatchers.Main.immediate) {
+                    if (runState.isBusy) {
+                        runState = runState.cancel()
+                        renderRunState()
                     }
                 }
-
-            progressBar.visibility = View.GONE
-            sendButton.isEnabled = true
-            floatingWindow.setSending(false)
-            floatingWindow.setStatus("就绪")
-        }
-    }
-
-    private fun addBubble(text: String, isUser: Boolean): TextView {
-        val tv = TextView(this).apply {
-            this.text = text
-            textSize = 14f
-            setTextColor(Ui.TextPrimary)
-            setPadding(dp(12), dp(10), dp(12), dp(10))
-            val bg = if (isUser) {
-                Ui.rounded(this@MainActivity, Ui.Mint, 14)
-            } else {
-                Ui.rounded(this@MainActivity, Color.WHITE, 14, Color.rgb(220, 220, 220))
+            } catch (error: Throwable) {
+                withContext(Dispatchers.Main.immediate) {
+                    handleAgentEvent(AgentEvent.Failed(error.message ?: "运行时发生未知错误"))
+                }
+            } finally {
+                withContext(Dispatchers.Main.immediate) {
+                    updateComposerState()
+                    floatingWindow.setSending(false)
+                    floatingWindow.setStatus(runState.statusLabel)
+                }
             }
-            background = bg
-            if (isUser) setTextColor(Color.WHITE)
-            maxWidth = (resources.displayMetrics.widthPixels * 0.8).toInt()
         }
-        val params = LinearLayout.LayoutParams(
-            LinearLayout.LayoutParams.WRAP_CONTENT,
-            LinearLayout.LayoutParams.WRAP_CONTENT
-        ).apply {
-            topMargin = dp(6)
-            gravity = if (isUser) Gravity.END else Gravity.START
-        }
-        messageContainer.addView(tv, params)
-        scrollToEnd()
-        return tv
     }
 
-    private fun addStatusMessage(text: String) {
-        val tv = TextView(this).apply {
-            this.text = text
-            textSize = 12f
-            setTextColor(Ui.TextMuted)
-            setPadding(dp(8), dp(4), dp(8), dp(4))
+    private fun handleAgentEvent(event: AgentEvent) {
+        runState = runState.reduce(event)
+        when (event) {
+            is AgentEvent.ToolStarted -> {
+                floatingWindow.setStatus(runState.statusLabel)
+                floatingWindow.addLog("→ ${event.call.name}")
+            }
+            is AgentEvent.ToolProgress -> {
+                floatingWindow.setStatus(runState.statusLabel)
+            }
+            is AgentEvent.ToolFinished -> {
+                val resultLabel = if (event.result.isError) "失败" else "成功"
+                floatingWindow.setStatus(runState.statusLabel)
+                floatingWindow.addLog("✓ ${event.result.name}: $resultLabel")
+            }
+            is AgentEvent.Completed -> {
+                persistAssistantMessage(event.content)
+                floatingWindow.setStatus("已完成")
+                floatingWindow.addLog("回答已完成")
+            }
+            is AgentEvent.Failed -> {
+                if (event.message.isNotBlank()) {
+                    persistAssistantMessage("任务未完成：${event.message}")
+                }
+                floatingWindow.setStatus("失败")
+                floatingWindow.addLog("失败：${event.message}")
+            }
+            else -> Unit
         }
-        val params = LinearLayout.LayoutParams(
-            LinearLayout.LayoutParams.WRAP_CONTENT,
+        renderRunState()
+    }
+
+    private fun persistAssistantMessage(text: String) {
+        if (text.isBlank()) return
+        if (activeConversation.messages.lastOrNull()?.let { it.role == "assistant" && it.content == text } == true) {
+            return
+        }
+        activeConversation.messages += DemoStoredMessage("assistant", text)
+        activeConversation.updatedAt = System.currentTimeMillis()
+        conversationStore.save(activeConversation)
+        syncTranscript()
+        assistantMessageView?.updateText(text)
+            ?: run { assistantMessageView = addChatMessage(DemoChatMessageRole.ASSISTANT, text) }
+    }
+
+    private fun addChatMessage(role: DemoChatMessageRole, text: String): DemoChatMessageView {
+        val view = DemoChatMessageView(this).apply {
+            bind(role, text)
+        }
+        messageContainer.addView(view, LinearLayout.LayoutParams(
+            LinearLayout.LayoutParams.MATCH_PARENT,
             LinearLayout.LayoutParams.WRAP_CONTENT
         ).apply {
             topMargin = dp(2)
-            gravity = Gravity.START
-        }
-        messageContainer.addView(tv, params)
+            bottomMargin = dp(2)
+        })
         scrollToEnd()
+        return view
+    }
+
+    private fun addProcessCard() {
+        processCard?.let { messageContainer.removeView(it) }
+        val card = DemoChatProcessCardView(this).apply {
+            setOnExpandedChangeListener { expanded ->
+                runState = runState.setDetailsExpanded(expanded)
+            }
+            setOnStepExpandedChangeListener { _, expanded ->
+                if (expanded) scrollToEnd()
+            }
+        }
+        processCard = card
+        messageContainer.addView(card, LinearLayout.LayoutParams(
+            LinearLayout.LayoutParams.MATCH_PARENT,
+            LinearLayout.LayoutParams.WRAP_CONTENT
+        ).apply {
+            topMargin = dp(8)
+            bottomMargin = dp(8)
+        })
+        scrollToEnd()
+    }
+
+    private fun renderRunState() {
+        val state = runState
+        runStatusLabel.text = state.statusLabel
+        runStatusLabel.setTextColor(
+            when (state.status) {
+                DemoRunStatus.FAILED -> Ui.Danger
+                DemoRunStatus.WAITING_CONFIRMATION -> Ui.Warning
+                DemoRunStatus.COMPLETED -> Ui.Success
+                DemoRunStatus.CANCELLED -> Ui.TextSecondary
+                else -> Ui.MintDark
+            }
+        )
+        val latestStep = state.steps.lastOrNull()
+        val stage = when (state.status) {
+            DemoRunStatus.THINKING -> DemoChatProcessStage.THINKING
+            DemoRunStatus.TOOL_RUNNING -> DemoChatProcessStage.TOOL_CALL
+            DemoRunStatus.WAITING_CONFIRMATION -> DemoChatProcessStage.WAITING_CONFIRMATION
+            DemoRunStatus.TOOL_SUCCESS -> DemoChatProcessStage.RESULT
+            DemoRunStatus.COMPLETED -> DemoChatProcessStage.COMPLETED
+            DemoRunStatus.TOOL_FAILURE, DemoRunStatus.FAILED, DemoRunStatus.CANCELLED -> DemoChatProcessStage.ERROR
+            DemoRunStatus.IDLE -> DemoChatProcessStage.THINKING
+        }
+        if (processCard != null) {
+            val processSteps = state.steps.map { step ->
+                DemoChatProcessStep(
+                    id = step.id,
+                    title = step.title,
+                    status = when (step.status) {
+                        DemoRunStatus.COMPLETED, DemoRunStatus.TOOL_SUCCESS ->
+                            DemoChatProcessStepStatus.COMPLETE
+                        DemoRunStatus.THINKING, DemoRunStatus.TOOL_RUNNING ->
+                            DemoChatProcessStepStatus.ACTIVE
+                        DemoRunStatus.WAITING_CONFIRMATION ->
+                            DemoChatProcessStepStatus.WAITING
+                        DemoRunStatus.TOOL_FAILURE, DemoRunStatus.FAILED, DemoRunStatus.CANCELLED ->
+                            DemoChatProcessStepStatus.ERROR
+                        DemoRunStatus.IDLE -> DemoChatProcessStepStatus.PENDING
+                    },
+                    detail = step.detailLabel,
+                    resultSummary = step.resultSummary
+                )
+            }
+            processCard?.bind(
+                DemoChatProcessState(
+                    stage = stage,
+                    toolName = latestStep?.takeIf { it.kind == DemoRunStepKind.TOOL }?.title,
+                    resultSummary = state.resultSummary ?: state.detailLabel,
+                    steps = processSteps,
+                    footerLeft = if (processSteps.isEmpty()) null else "${processSteps.size} 个步骤",
+                    footerRight = state.statusLabel,
+                    expanded = state.detailsExpanded
+                )
+            )
+        }
+        updateComposerState()
+        floatingWindow.setStatus(state.statusLabel)
+        if (state.isBusy) scrollToEnd()
+    }
+
+    private fun updateComposerState() {
+        if (!::sendButton.isInitialized) return
+        val busy = runState.isBusy
+        inputField.isEnabled = !busy
+        sendButton.text = if (busy) "■" else "↑"
+        sendButton.contentDescription = getString(
+            if (busy) R.string.content_description_stop else R.string.content_description_send
+        )
+        sendButton.background = Ui.rounded(
+            this,
+            if (busy) Ui.Danger else Ui.Mint,
+            22
+        )
+        sendButton.alpha = if (!busy && inputField.text.isNullOrBlank()) 0.55f else 1f
+    }
+
+    private fun stopAgent() {
+        if (!runState.isBusy) return
+        terminalPlugin?.cancelAll()
+        runJob?.cancel()
+        runState = runState.cancel()
+        renderRunState()
+        floatingWindow.setSending(false)
+        floatingWindow.setStatus("已停止")
+    }
+
+    private fun renderConversation() {
+        if (!::messageContainer.isInitialized) return
+        messageContainer.removeAllViews()
+        processCard = null
+        assistantMessageView = null
+        if (activeConversation.messages.none { it.role == "user" || it.role == "assistant" }) {
+            renderEmptyState()
+        } else {
+            activeConversation.messages.forEach { message ->
+                when (message.role) {
+                    "user" -> addChatMessage(DemoChatMessageRole.USER, message.content)
+                    "assistant" -> addChatMessage(DemoChatMessageRole.ASSISTANT, message.content)
+                }
+            }
+        }
+        updateAppBar()
+        if (runState.isBusy) addProcessCard()
+        renderRunState()
+        scrollToEnd()
+    }
+
+    private fun renderEmptyState() {
+        val empty = LinearLayout(this).apply {
+            orientation = LinearLayout.VERTICAL
+            gravity = Gravity.CENTER_HORIZONTAL
+            setPadding(dp(28), dp(64), dp(28), dp(24))
+        }
+        val title = TextView(this).apply {
+            text = "Agent 就绪"
+            textSize = 24f
+            setTypeface(Typeface.create("sans-serif-medium", Typeface.NORMAL))
+            setTextColor(Ui.TextPrimary)
+            gravity = Gravity.CENTER
+        }
+        val description = TextView(this).apply {
+            text = "描述你想完成的任务，Agent 会在需要时调用工具并把过程整理给你。"
+            textSize = 14f
+            setTextColor(Ui.TextSecondary)
+            gravity = Gravity.CENTER
+            setPadding(0, dp(10), 0, dp(18))
+        }
+        empty.addView(title, LinearLayout.LayoutParams(
+            LinearLayout.LayoutParams.MATCH_PARENT,
+            LinearLayout.LayoutParams.WRAP_CONTENT
+        ))
+        empty.addView(description, LinearLayout.LayoutParams(
+            LinearLayout.LayoutParams.MATCH_PARENT,
+            LinearLayout.LayoutParams.WRAP_CONTENT
+        ))
+        listOf("帮我检查当前设备状态", "创建一个本地天气页面", "打开一个已安装的 App").forEach { suggestion ->
+            val item = TextView(this).apply {
+                text = suggestion
+                textSize = 14f
+                setTextColor(Ui.MintDark)
+                gravity = Gravity.CENTER
+                setPadding(dp(14), dp(10), dp(14), dp(10))
+                background = Ui.rounded(this@MainActivity, Ui.SurfaceElevated, 14, Ui.Outline)
+                isClickable = true
+                isFocusable = true
+                setOnClickListener {
+                    inputField.setText(suggestion)
+                    inputField.requestFocus()
+                    inputField.setSelection(inputField.length())
+                }
+            }
+            empty.addView(item, LinearLayout.LayoutParams(
+                LinearLayout.LayoutParams.MATCH_PARENT,
+                LinearLayout.LayoutParams.WRAP_CONTENT
+            ).apply {
+                topMargin = dp(6)
+            })
+        }
+        messageContainer.addView(empty, LinearLayout.LayoutParams(
+            LinearLayout.LayoutParams.MATCH_PARENT,
+            LinearLayout.LayoutParams.WRAP_CONTENT
+        ))
     }
 
     private fun scrollToEnd() {
@@ -472,8 +796,10 @@ class MainActivity : Activity() {
     }
 
     override fun onSaveInstanceState(outState: Bundle) {
-        DemoActivityState.session = session
+        DemoActivityState.rememberSession(activeConversation.id, session)
+        conversationStore.save(activeConversation)
         val draft = if (::inputField.isInitialized) inputField.text?.toString().orEmpty() else ""
+        DemoActivityState.draft = draft
         outState.putString(KEY_DRAFT, draft)
         val entries = DemoActivityState.transcript.takeLast(MAX_SAVED_TRANSCRIPT_ENTRIES)
         outState.putStringArrayList(KEY_TRANSCRIPT_ROLES, ArrayList(entries.map { it.role }))
@@ -481,47 +807,217 @@ class MainActivity : Activity() {
         super.onSaveInstanceState(outState)
     }
 
-    private fun restoreSession(): AgentSession {
-        // The process-scoped session is the preferred path. Android normally
-        // keeps the process alive while the user switches apps, and this
-        // preserves the full tool history without putting large tool output
-        // into the Activity saved-state Binder transaction.
-        DemoActivityState.session?.let { return it }
-        return createSession().also { DemoActivityState.session = it }
-    }
-
     private fun restoreDraft(savedInstanceState: Bundle?) {
-        savedInstanceState?.getString(KEY_DRAFT)?.let(inputField::setText)
+        val draft = savedInstanceState?.getString(KEY_DRAFT) ?: DemoActivityState.draft
+        inputField.setText(draft)
+        inputField.setSelection(inputField.length())
     }
 
-    private fun restoreTranscript(savedInstanceState: Bundle?) {
-        val roles = savedInstanceState?.getStringArrayList(KEY_TRANSCRIPT_ROLES)
-        val texts = savedInstanceState?.getStringArrayList(KEY_TRANSCRIPT_TEXTS)
-        if (roles != null && texts != null && roles.size == texts.size) {
-            DemoActivityState.transcript.clear()
-            roles.zip(texts).forEach { (role, text) ->
-                DemoActivityState.transcript += DemoTranscriptEntry(role, text)
+    private fun syncTranscript() {
+        DemoActivityState.transcript.clear()
+        activeConversation.messages.forEach { message ->
+            if (message.role == "user" || message.role == "assistant") {
+                DemoActivityState.transcript += DemoTranscriptEntry(message.role, message.content)
             }
         }
     }
 
-    private fun renderTranscript() {
-        DemoActivityState.transcript.forEach { entry ->
-            when (entry.role) {
-                "user" -> addBubble(entry.text, isUser = true)
-                "assistant" -> addBubble(entry.text, isUser = false)
-            }
-        }
+    private fun updateAppBar() {
+        if (::appBarTitle.isInitialized) appBarTitle.text = activeConversation.title
     }
 
-    private fun createSession(): AgentSession = AgentSession(
-        id = "test-session",
-        messages = mutableListOf(
+    private fun selectConversation(id: String) {
+        if (runState.isBusy) stopAgent()
+        val conversation = conversationStore.get(id) ?: return
+        activeConversation = conversation
+        conversationStore.setActive(conversation.id)
+        session = DemoActivityState.sessionFor(conversation.id)
+            ?: createSession(conversation).also {
+                DemoActivityState.rememberSession(conversation.id, it)
+            }
+        DemoActivityState.activeConversationId = conversation.id
+        runState = DemoRunState.initial()
+        syncTranscript()
+        renderConversation()
+        updateCapabilityBanner()
+    }
+
+    private fun createNewConversation() {
+        if (runState.isBusy) stopAgent()
+        val conversation = conversationStore.create()
+        activeConversation = conversation
+        session = createSession(conversation)
+        DemoActivityState.rememberSession(conversation.id, session)
+        runState = DemoRunState.initial()
+        syncTranscript()
+        renderConversation()
+    }
+
+    private fun showConversationHistory() {
+        val root = LinearLayout(this).apply {
+            orientation = LinearLayout.VERTICAL
+            setPadding(dp(18), dp(4), dp(18), 0)
+        }
+        val newButton = TextView(this).apply {
+            text = "+  新建会话"
+            textSize = 15f
+            setTextColor(Ui.MintDark)
+            setPadding(dp(4), dp(12), dp(4), dp(12))
+            isClickable = true
+            isFocusable = true
+        }
+        val listContainer = LinearLayout(this).apply {
+            orientation = LinearLayout.VERTICAL
+        }
+        val listScroll = ScrollView(this).apply {
+            addView(listContainer)
+        }
+        root.addView(newButton, LinearLayout.LayoutParams(
+            LinearLayout.LayoutParams.MATCH_PARENT,
+            LinearLayout.LayoutParams.WRAP_CONTENT
+        ))
+        root.addView(listScroll, LinearLayout.LayoutParams(
+            LinearLayout.LayoutParams.MATCH_PARENT,
+            dp(420)
+        ))
+
+        lateinit var dialog: AlertDialog
+        fun populate() {
+            listContainer.removeAllViews()
+            conversationStore.list().forEach { conversation ->
+                val row = LinearLayout(this).apply {
+                    orientation = LinearLayout.HORIZONTAL
+                    gravity = Gravity.CENTER_VERTICAL
+                    setPadding(dp(4), dp(8), 0, dp(8))
+                    background = Ui.rounded(
+                        this@MainActivity,
+                        if (conversation.id == activeConversation.id) Ui.SurfaceSoft else Ui.SurfaceElevated,
+                        12
+                    )
+                    isClickable = true
+                    isFocusable = true
+                }
+                val info = LinearLayout(this).apply {
+                    orientation = LinearLayout.VERTICAL
+                }
+                val title = TextView(this).apply {
+                    text = conversation.title
+                    textSize = 15f
+                    setTextColor(Ui.TextPrimary)
+                    maxLines = 1
+                    ellipsize = android.text.TextUtils.TruncateAt.END
+                }
+                val meta = TextView(this).apply {
+                    text = "${conversation.messages.count { it.role == "user" }} 条消息 · ${formatConversationTime(conversation.updatedAt)}"
+                    textSize = 11f
+                    setTextColor(Ui.TextMuted)
+                    setPadding(0, dp(3), 0, 0)
+                }
+                info.addView(title)
+                info.addView(meta)
+                row.addView(info, LinearLayout.LayoutParams(0, dp(58), 1f))
+                val actions = TextView(this).apply {
+                    text = "⋯"
+                    textSize = 22f
+                    gravity = Gravity.CENTER
+                    setTextColor(Ui.TextSecondary)
+                    contentDescription = "会话操作"
+                    isClickable = true
+                    isFocusable = true
+                    setOnClickListener {
+                        showConversationActions(conversation) { populate() }
+                    }
+                }
+                row.addView(actions, LinearLayout.LayoutParams(dp(44), dp(58)))
+                row.setOnClickListener {
+                    selectConversation(conversation.id)
+                    dialog.dismiss()
+                }
+                listContainer.addView(row, LinearLayout.LayoutParams(
+                    LinearLayout.LayoutParams.MATCH_PARENT,
+                    LinearLayout.LayoutParams.WRAP_CONTENT
+                ).apply { bottomMargin = dp(6) })
+            }
+        }
+        newButton.setOnClickListener {
+            createNewConversation()
+            dialog.dismiss()
+        }
+        dialog = AlertDialog.Builder(this)
+            .setTitle("会话历史")
+            .setView(root)
+            .setNegativeButton("关闭", null)
+            .create()
+        dialog.setOnShowListener { populate() }
+        dialog.show()
+    }
+
+    private fun showConversationActions(
+        conversation: DemoConversation,
+        onChanged: () -> Unit
+    ) {
+        AlertDialog.Builder(this)
+            .setItems(arrayOf("重命名", "删除")) { _, which ->
+                if (which == 0) renameConversation(conversation, onChanged)
+                else confirmDeleteConversation(conversation, onChanged)
+            }
+            .show()
+    }
+
+    private fun renameConversation(conversation: DemoConversation, onChanged: () -> Unit) {
+        val input = EditText(this).apply {
+            setSingleLine(true)
+            setText(conversation.title)
+            setSelection(length())
+            setPadding(dp(16), dp(8), dp(16), dp(8))
+        }
+        AlertDialog.Builder(this)
+            .setTitle("重命名会话")
+            .setView(input)
+            .setNegativeButton("取消", null)
+            .setPositiveButton("保存") { _, _ ->
+                conversationStore.rename(conversation.id, input.text.toString())
+                if (conversation.id == activeConversation.id) {
+                    activeConversation = conversationStore.get(conversation.id) ?: activeConversation
+                    updateAppBar()
+                }
+                onChanged()
+            }
+            .show()
+    }
+
+    private fun confirmDeleteConversation(conversation: DemoConversation, onChanged: () -> Unit) {
+        AlertDialog.Builder(this)
+            .setTitle("删除会话？")
+            .setMessage("删除后无法在本地恢复这段会话。")
+            .setNegativeButton("取消", null)
+            .setPositiveButton("删除") { _, _ ->
+                val replacement = conversationStore.delete(conversation.id)
+                if (conversation.id == activeConversation.id && replacement != null) {
+                    selectConversation(replacement.id)
+                }
+                onChanged()
+            }
+            .show()
+    }
+
+    private fun formatConversationTime(timestamp: Long): String =
+        DateFormat.getDateTimeInstance(DateFormat.SHORT, DateFormat.SHORT).format(Date(timestamp))
+
+    private fun createSession(conversation: DemoConversation): AgentSession {
+        val messages = mutableListOf<AgentMessage>(
             AgentMessage.System(
-                "你是一个有用的 AI 助手。直接回答用户问题，简洁明了。"
+                "你是一个有用的 AI 助手。直接回答用户问题，简洁明了；如果需要调用工具，先说明下一步并在工具完成后给出清晰结果。"
             )
         )
-    )
+        conversation.messages.forEach { stored ->
+            when (stored.role) {
+                "user" -> messages += AgentMessage.User(stored.content)
+                "assistant" -> messages += AgentMessage.Assistant(stored.content)
+            }
+        }
+        return AgentSession(conversation.id, messages)
+    }
 
     private object PlaceholderProvider : LLMProvider {
         override suspend fun generate(request: ModelRequest): ModelResponse {

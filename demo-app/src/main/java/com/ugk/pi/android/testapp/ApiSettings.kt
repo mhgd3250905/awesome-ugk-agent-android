@@ -143,14 +143,20 @@ class ApiProviderSettingsStore(context: Context) {
 }
 
 object Ui {
-    val Surface = Color.rgb(255, 255, 255)
-    val SurfaceSoft = Color.rgb(245, 245, 245)
+    // Keep the palette restrained and semantic. The chat surface stays quiet;
+    // accent colors are reserved for the current action and run state.
+    val Surface = Color.rgb(248, 250, 247)
+    val SurfaceElevated = Color.rgb(255, 255, 255)
+    val SurfaceSoft = Color.rgb(238, 243, 239)
     val Mint = Color.rgb(47, 195, 141)
-    val MintDark = Color.rgb(17, 126, 92)
-    val TextPrimary = Color.rgb(22, 37, 38)
-    val TextSecondary = Color.rgb(85, 108, 109)
-    val TextMuted = Color.rgb(126, 147, 148)
-    val Danger = Color.rgb(190, 45, 45)
+    val MintDark = Color.rgb(25, 126, 93)
+    val TextPrimary = Color.rgb(23, 35, 34)
+    val TextSecondary = Color.rgb(94, 109, 106)
+    val TextMuted = Color.rgb(135, 146, 143)
+    val Outline = Color.rgb(217, 226, 221)
+    val Success = Color.rgb(44, 139, 97)
+    val Warning = Color.rgb(166, 106, 31)
+    val Danger = Color.rgb(185, 74, 74)
 
     fun rounded(context: Context, color: Int, radiusDp: Int, strokeColor: Int = 0, strokeDp: Int = 1): GradientDrawable =
         GradientDrawable().apply {

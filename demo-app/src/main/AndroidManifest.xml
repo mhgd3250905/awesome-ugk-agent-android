@@ -4,7 +4,7 @@
 
     <application
         android:allowBackup="false"
-        android:label="Agent Test"
+        android:label="@string/app_name"
         android:supportsRtl="true"
         android:theme="@style/AppTheme">
         <activity
@@ -12,6 +12,7 @@
             android:exported="true"
             android:launchMode="singleTask"
             android:alwaysRetainTaskState="true"
+            android:windowSoftInputMode="adjustResize"
             android:screenOrientation="portrait">
             <intent-filter>
                 <action android:name="android.intent.action.MAIN" />
