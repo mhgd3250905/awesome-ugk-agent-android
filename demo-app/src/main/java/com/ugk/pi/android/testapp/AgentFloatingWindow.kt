@@ -64,6 +64,7 @@ class AgentFloatingWindow(private val context: Context) : ConfirmationOverlayHos
     )
     private val legacyLogs = ArrayDeque<String>()
     private val expandedStepKeys = LinkedHashSet<String>()
+    private var composerDraft = ""
     private var pendingConfirmation: AgentOverlayConfirmation? = null
     private var confirmationResult: ((String) -> Unit)? = null
     private var expandedX = dp(16)
@@ -71,10 +72,11 @@ class AgentFloatingWindow(private val context: Context) : ConfirmationOverlayHos
     private var collapsedX = dp(16)
     private var collapsedY = dp(180)
 
-    var onSendMessage: ((String) -> Unit)? = null
+    var onSendMessage: ((String) -> Boolean)? = null
     var onStopAgent: (() -> Unit)? = null
     var onOpenApp: (() -> Unit)? = null
     var onHide: (() -> Unit)? = null
+    var onDraftChanged: ((String) -> Unit)? = null
 
     private val expandedParams = WindowManager.LayoutParams().apply {
         width = expandedWidth()
@@ -167,7 +169,7 @@ class AgentFloatingWindow(private val context: Context) : ConfirmationOverlayHos
             steps = value.steps.toList(),
             pendingConfirmation = confirmation
         )
-        expandedStepKeys.retainAll(snapshot.steps.indices.map(::stepKey).toSet())
+        expandedStepKeys.retainAll(snapshot.steps.map { it.id }.toSet())
         renderSnapshot()
     }
 
@@ -189,6 +191,9 @@ class AgentFloatingWindow(private val context: Context) : ConfirmationOverlayHos
     fun clear() {
         legacyLogs.clear()
         expandedStepKeys.clear()
+        composerDraft = ""
+        inputField?.setText("")
+        onDraftChanged?.invoke("")
         pendingConfirmation = null
         confirmationResult = null
         snapshot = snapshot.copy(
@@ -210,6 +215,17 @@ class AgentFloatingWindow(private val context: Context) : ConfirmationOverlayHos
         renderSnapshot()
     }
 
+    /** Synchronize the hidden overlay composer with the main Activity draft. */
+    fun setComposerDraft(value: String) {
+        if (composerDraft == value && inputField?.text?.toString() == value) return
+        composerDraft = value
+        inputField?.let { field ->
+            if (field.text?.toString() != value) field.setText(value)
+            field.setSelection(field.length())
+        }
+        onDraftChanged?.invoke(composerDraft)
+    }
+
     private fun showCollapsed() {
         if (collapsedView != null) return
         collapsedParams.x = clampX(collapsedX, collapsedParams.width)
@@ -224,6 +240,10 @@ class AgentFloatingWindow(private val context: Context) : ConfirmationOverlayHos
     }
 
     private fun hideExpanded() {
+        inputField?.let { field ->
+            composerDraft = field.text?.toString().orEmpty()
+            onDraftChanged?.invoke(composerDraft)
+        }
         inputField?.let { field ->
             val imm = context.getSystemService(Context.INPUT_METHOD_SERVICE) as InputMethodManager
             imm.hideSoftInputFromWindow(field.windowToken, 0)
@@ -402,7 +422,20 @@ class AgentFloatingWindow(private val context: Context) : ConfirmationOverlayHos
             background = null
             setPadding(dp(5), dp(3), dp(5), dp(3))
             contentDescription = "给 Agent 输入消息"
+            setText(composerDraft)
+            setSelection(length())
         }
+        inputField?.addTextChangedListener(object : android.text.TextWatcher {
+            override fun beforeTextChanged(text: CharSequence?, start: Int, count: Int, after: Int) = Unit
+
+            override fun onTextChanged(text: CharSequence?, start: Int, before: Int, count: Int) {
+                composerDraft = text?.toString().orEmpty()
+                onDraftChanged?.invoke(composerDraft)
+                renderSnapshot()
+            }
+
+            override fun afterTextChanged(editable: android.text.Editable?) = Unit
+        })
         sendButton = actionButton("发送", "发送悬浮窗消息") { sendInput() }
         stopButton = actionButton("停止", "停止 Agent 当前任务") { onStopAgent?.invoke() }
         composer.addView(inputField, LinearLayout.LayoutParams(0, LinearLayout.LayoutParams.WRAP_CONTENT, 1f))
@@ -530,10 +563,16 @@ class AgentFloatingWindow(private val context: Context) : ConfirmationOverlayHos
         val field = inputField ?: return
         val text = field.text?.toString()?.trim().orEmpty()
         if (text.isBlank()) return
+        val accepted = onSendMessage?.invoke(text) == true
+        if (!accepted) {
+            renderSnapshot()
+            return
+        }
+        composerDraft = ""
         field.setText("")
+        onDraftChanged?.invoke("")
         val imm = context.getSystemService(Context.INPUT_METHOD_SERVICE) as InputMethodManager
         imm.hideSoftInputFromWindow(field.windowToken, 0)
-        onSendMessage?.invoke(text)
     }
 
     private fun renderSnapshot() {
@@ -548,6 +587,11 @@ class AgentFloatingWindow(private val context: Context) : ConfirmationOverlayHos
             setTextColor(statusColor(snapshot.statusLabel))
         }
         stopButton?.visibility = if (snapshot.isBusy) View.VISIBLE else View.GONE
+        sendButton?.let { button ->
+            val hasText = !inputField?.text.isNullOrBlank()
+            button.isEnabled = hasText
+            button.alpha = if (hasText) 1f else 0.55f
+        }
         if (expandedView == null) return
 
         val container = contentContainer ?: return
@@ -572,7 +616,7 @@ class AgentFloatingWindow(private val context: Context) : ConfirmationOverlayHos
 
         if (snapshot.steps.isNotEmpty()) {
             addSectionLabel(container, "Agent 过程")
-            snapshot.steps.forEachIndexed { index, step -> addStep(container, index, step) }
+            snapshot.steps.forEach { step -> addStep(container, step) }
         }
 
         if (legacyLogs.isNotEmpty()) {
@@ -733,8 +777,8 @@ class AgentFloatingWindow(private val context: Context) : ConfirmationOverlayHos
         ).apply { bottomMargin = dp(4) })
     }
 
-    private fun addStep(container: LinearLayout, index: Int, step: AgentOverlayStep) {
-        val key = stepKey(index)
+    private fun addStep(container: LinearLayout, step: AgentOverlayStep) {
+        val key = step.id
         val expanded = expandedStepKeys.contains(key)
         val row = LinearLayout(context).apply {
             orientation = LinearLayout.VERTICAL
@@ -919,8 +963,6 @@ class AgentFloatingWindow(private val context: Context) : ConfirmationOverlayHos
         status.contains("完成") -> Ui.Success
         else -> Ui.MintDark
     }
-
-    private fun stepKey(index: Int): String = "step-$index"
 
     private fun expandedWidth(): Int = clampExpandedWidth(dp(360))
 

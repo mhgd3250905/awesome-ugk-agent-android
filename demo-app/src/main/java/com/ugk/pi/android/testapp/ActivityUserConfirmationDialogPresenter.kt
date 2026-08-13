@@ -2,6 +2,7 @@ package com.ugk.pi.android.testapp
 
 import android.app.Activity
 import android.app.AlertDialog
+import android.os.Handler
 import android.os.Looper
 import android.view.Gravity
 import android.view.View
@@ -36,12 +37,39 @@ interface ConfirmationOverlayHost {
  * of being cancelled or left behind where the user cannot see it.
  */
 class ActivityUserConfirmationDialogPresenter(
-    private val activity: Activity,
-    private val isActivityResumed: () -> Boolean = { true },
-    private val isFullAuthorizationEnabled: () -> Boolean = { false },
-    private val overlayHost: ConfirmationOverlayHost? = null
+    private var activity: Activity? = null,
+    private var isActivityResumed: () -> Boolean = { false },
+    private var isFullAuthorizationEnabled: () -> Boolean = { false },
+    private var overlayHost: ConfirmationOverlayHost? = null
 ) : UserConfirmationDialogPresenter {
     private var active: PendingConfirmation? = null
+    private var density = 1f
+
+    /** Attach the current Activity without replacing an in-flight request. */
+    fun attach(
+        activity: Activity,
+        isResumed: () -> Boolean,
+        isFullAuthorizationEnabled: () -> Boolean,
+        overlayHost: ConfirmationOverlayHost?
+    ) {
+        this.activity = activity
+        this.isActivityResumed = isResumed
+        this.isFullAuthorizationEnabled = isFullAuthorizationEnabled
+        this.overlayHost = overlayHost
+        density = activity.resources.displayMetrics.density
+        if (isResumed()) runOnMain { active?.moveToActivity() }
+    }
+
+    /** Detach a destroyed Activity while keeping an in-flight confirmation. */
+    fun detach(activity: Activity) {
+        runOnMain {
+            if (this.activity !== activity) return@runOnMain
+            active?.moveToOverlay()
+            this.activity = null
+            this.isActivityResumed = { false }
+            this.isFullAuthorizationEnabled = { false }
+        }
+    }
 
     override suspend fun showConfirmationDialog(
         request: UserConfirmationDialogRequest
@@ -87,18 +115,36 @@ class ActivityUserConfirmationDialogPresenter(
         runOnMain { active?.cancelFromLifecycle() }
     }
 
+    /**
+     * Release every host reference when the owning Activity really finishes.
+     * A configuration change uses [detach] so an in-flight request can move to
+     * the overlay; a terminal Activity finish must not retain the old window
+     * or its authorization callbacks.
+     */
+    fun release() {
+        runOnMain {
+            active?.cancelFromLifecycle()
+            active = null
+            activity = null
+            isActivityResumed = { false }
+            isFullAuthorizationEnabled = { false }
+            overlayHost = null
+        }
+    }
+
     private fun createButtonPanel(
         buttons: List<UserConfirmationDialogButton>,
         onSelected: (String) -> Unit
     ): View {
+        val hostActivity = requireNotNull(activity) { "Activity confirmation host is not attached" }
         val isHorizontal = buttons.size <= 2
-        return LinearLayout(activity).apply {
+        return LinearLayout(hostActivity).apply {
             orientation = if (isHorizontal) LinearLayout.HORIZONTAL else LinearLayout.VERTICAL
             gravity = Gravity.END
             setPadding(dp(16), dp(4), dp(16), dp(8))
 
             buttons.forEachIndexed { index, button ->
-                val actionButton = Button(activity).apply {
+                val actionButton = Button(hostActivity).apply {
                     text = button.label
                     isAllCaps = false
                     setOnClickListener { onSelected(button.id) }
@@ -124,11 +170,12 @@ class ActivityUserConfirmationDialogPresenter(
     }
 
     private fun dp(value: Int): Int {
-        return (value * activity.resources.displayMetrics.density + 0.5f).toInt()
+        return (value * density + 0.5f).toInt()
     }
 
     private fun isActivityUsable(): Boolean {
-        return !activity.isFinishing && !activity.isDestroyed
+        val hostActivity = activity ?: return false
+        return !hostActivity.isFinishing && !hostActivity.isDestroyed
     }
 
     private fun isCancellationButton(button: UserConfirmationDialogButton): Boolean {
@@ -139,7 +186,8 @@ class ActivityUserConfirmationDialogPresenter(
         if (Looper.myLooper() == Looper.getMainLooper()) {
             action()
         } else {
-            activity.runOnUiThread(action)
+            activity?.runOnUiThread(action)
+                ?: Handler(Looper.getMainLooper()).post(action)
         }
     }
 
@@ -216,7 +264,10 @@ class ActivityUserConfirmationDialogPresenter(
                 select(buttonId)
             } == true
             overlayVisible = shown
-            if (!shown && !isActivityUsable()) {
+            if (!shown) {
+                // There is no safe visible surface. Resolve explicitly with
+                // the cancellation fallback instead of leaving Agent pending
+                // forever while the Activity is in the background.
                 cancelFromLifecycle()
             }
         }
@@ -224,12 +275,13 @@ class ActivityUserConfirmationDialogPresenter(
         private fun presentActivity() {
             if (completed || !isActivityResumed() || !isActivityUsable()) return
             if (dialog?.isShowing == true) return
+            val hostActivity = activity ?: return
             if (overlayVisible) {
                 overlayHost?.hideConfirmation()
                 overlayVisible = false
             }
 
-            val nextDialog = AlertDialog.Builder(activity)
+            val nextDialog = AlertDialog.Builder(hostActivity)
                 .setTitle(request.title)
                 .setMessage(request.message)
                 .setCancelable(true)

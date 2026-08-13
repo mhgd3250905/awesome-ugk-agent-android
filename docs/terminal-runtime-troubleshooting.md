@@ -153,9 +153,9 @@ process-group 控制，服务只绑定 `127.0.0.1`。
 
 ## 16. demo-app 返回前台像“重启”
 
-**根因**：如果启动器重新创建 `MainActivity`，原实现的 Activity 私有 `AgentSession`、对话视图和权限提示状态会全部重新初始化；这不一定代表 Android 进程真的被杀死。
+**根因**：如果启动器重新创建 `MainActivity`，仅放在 Activity 私有字段中的运行 Job、对话视图和权限提示状态会重新初始化；这不一定代表 Android 进程真的被杀死。
 
-**修复**：当前 `MainActivity` 使用 `singleTask`/`alwaysRetainTaskState`，进程级状态保留完整会话和对话摘要；Activity saved state 保留有界的对话摘要与输入草稿；同一进程的权限提示只弹一次。通过启动器或 HOME 返回时应复用同一个 task/Activity。
+**修复**：当前 `MainActivity` 使用 `singleTask`/`alwaysRetainTaskState`，`DemoActivityState` 保留会话，`DemoAgentRunCoordinator` 保留 Job、运行代次和队列，确认 presenter/悬浮窗也在进程级复用；Activity saved state 只保留有界输入草稿；同一进程的权限提示只弹一次。通过启动器或 HOME 返回时应复用同一个 task/Activity，发生 Activity 重建时只重新绑定观察者。
 
 **验证**：API35 x86_64/4 KB 模拟器上，HOME→`am start -W -n com.ugk.pi.android.testapp/.MainActivity` 后，ActivityRecord 和进程 PID 保持不变，输入草稿 `draft123` 保留；没有出现应用异常。若系统彻底杀死进程，当前只保证 API 配置恢复，完整运行中的 Agent Tool 任务不会后台续跑。
 

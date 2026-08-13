@@ -7,6 +7,7 @@ import com.ugk.pi.android.UserConfirmationDialogRequest
  * cross-app agent overlay.
  */
 data class AgentOverlayStep(
+    val id: String,
     val title: String,
     val statusLabel: String,
     val detail: String? = null,

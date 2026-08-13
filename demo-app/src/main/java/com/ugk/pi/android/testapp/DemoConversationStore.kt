@@ -3,6 +3,7 @@ package com.ugk.pi.android.testapp
 import android.content.Context
 import org.json.JSONArray
 import org.json.JSONObject
+import java.util.concurrent.Executors
 import java.util.UUID
 
 data class DemoStoredMessage(
@@ -25,6 +26,16 @@ data class DemoConversation(
     val messages: MutableList<DemoStoredMessage> = mutableListOf()
 )
 
+internal fun keepNewestDemoConversations(
+    conversations: List<DemoConversation>,
+    limit: Int
+): List<DemoConversation> {
+    require(limit > 0) { "limit must be greater than zero" }
+    return conversations.sortedWith(
+        compareByDescending<DemoConversation> { it.updatedAt }.thenBy { it.createdAt }
+    ).take(limit)
+}
+
 /**
  * Small, local-only conversation store for the demo app.
  *
@@ -33,6 +44,14 @@ data class DemoConversation(
  */
 class DemoConversationStore(context: Context) {
     private val prefs = context.applicationContext.getSharedPreferences(PREFS_NAME, Context.MODE_PRIVATE)
+    private val cacheLock = Any()
+    private val writeExecutor = Executors.newSingleThreadExecutor { runnable ->
+        Thread(runnable, "demo-conversation-store").apply { isDaemon = true }
+    }
+    private val writeLock = Any()
+    private var pendingWrite: List<DemoConversation>? = null
+    private var writeDrainScheduled = false
+    private var cachedConversations: List<DemoConversation>? = null
 
     fun list(): List<DemoConversation> = readAll()
         .sortedWith(compareByDescending<DemoConversation> { it.updatedAt }.thenBy { it.createdAt })
@@ -70,7 +89,9 @@ class DemoConversationStore(context: Context) {
             createdAt = now,
             updatedAt = now
         )
-        val all = (readAll() + conversation).takeLast(MAX_CONVERSATIONS)
+        // Keep the same newest-first ordering used by save(); otherwise the
+        // 31st conversation can evict a recent conversation via takeLast().
+        val all = keepNewestDemoConversations(readAll() + conversation, MAX_CONVERSATIONS)
         writeAll(all)
         setActive(conversation.id)
         return conversation
@@ -78,8 +99,14 @@ class DemoConversationStore(context: Context) {
 
     fun save(conversation: DemoConversation) {
         val normalized = normalize(conversation)
+        // Keep the caller's in-memory object bounded as well as the JSON
+        // representation. Otherwise a long-lived Activity can keep every
+        // tool/result message even though persistence is capped.
+        conversation.title = normalized.title
+        conversation.messages.clear()
+        conversation.messages.addAll(normalized.messages)
         val all = readAll().filterNot { it.id == normalized.id } + normalized
-        writeAll(all.sortedByDescending { it.updatedAt }.take(MAX_CONVERSATIONS))
+        writeAll(keepNewestDemoConversations(all, MAX_CONVERSATIONS))
         setActive(normalized.id)
     }
 
@@ -115,6 +142,16 @@ class DemoConversationStore(context: Context) {
     }
 
     private fun readAll(): List<DemoConversation> {
+        synchronized(cacheLock) {
+            val cached = cachedConversations
+            if (cached != null) return cached.map(::copyConversation)
+            val loaded = readAllFromPreferences()
+            cachedConversations = loaded.map(::copyConversation)
+            return loaded.map(::copyConversation)
+        }
+    }
+
+    private fun readAllFromPreferences(): List<DemoConversation> {
         val raw = prefs.getString(KEY_CONVERSATIONS, null).orEmpty()
         if (raw.isBlank()) return emptyList()
         return runCatching {
@@ -154,8 +191,42 @@ class DemoConversationStore(context: Context) {
     }
 
     private fun writeAll(conversations: List<DemoConversation>) {
+        val snapshot = conversations
+            .take(MAX_CONVERSATIONS)
+            .map(::copyConversation)
+        synchronized(cacheLock) {
+            cachedConversations = snapshot
+        }
+        synchronized(writeLock) {
+            // Keep only the newest snapshot. UI events can save several times
+            // in one frame while a previous JSON write is still pending.
+            pendingWrite = snapshot
+            if (writeDrainScheduled) return
+            writeDrainScheduled = true
+        }
+        writeExecutor.execute {
+            drainPendingWrites()
+        }
+    }
+
+    private fun drainPendingWrites() {
+        while (true) {
+            val snapshot = synchronized(writeLock) {
+                val next = pendingWrite
+                pendingWrite = null
+                if (next == null) {
+                    writeDrainScheduled = false
+                }
+                next
+            } ?: return
+
+            prefs.edit().putString(KEY_CONVERSATIONS, encode(snapshot)).apply()
+        }
+    }
+
+    private fun encode(conversations: List<DemoConversation>): String {
         val root = JSONArray()
-        conversations.take(MAX_CONVERSATIONS).forEach { conversation ->
+        conversations.forEach { conversation ->
             val item = JSONObject()
                 .put("id", conversation.id)
                 .put("title", normalizeTitle(conversation.title))
@@ -173,8 +244,11 @@ class DemoConversationStore(context: Context) {
             item.put("messages", messages)
             root.put(item)
         }
-        prefs.edit().putString(KEY_CONVERSATIONS, root.toString()).apply()
+        return root.toString()
     }
+
+    private fun copyConversation(conversation: DemoConversation): DemoConversation =
+        conversation.copy(messages = conversation.messages.map { it.copy() }.toMutableList())
 
     private fun normalize(conversation: DemoConversation): DemoConversation {
         val messages = conversation.messages

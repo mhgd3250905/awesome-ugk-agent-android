@@ -34,37 +34,31 @@ import com.ugk.pi.android.LLMProvider
 import com.ugk.pi.android.ModelRequest
 import com.ugk.pi.android.ModelResponse
 import com.ugk.pi.terminal.skill.TerminalAgentPlugin
-import kotlinx.coroutines.CancellationException
-import kotlinx.coroutines.CoroutineScope
-import kotlinx.coroutines.Dispatchers
-import kotlinx.coroutines.Job
-import kotlinx.coroutines.launch
-import kotlinx.coroutines.withContext
 import java.text.DateFormat
-import java.util.ArrayDeque
 import java.util.Date
 
 class MainActivity : Activity() {
 
     private val apiStore by lazy { ApiProviderSettingsStore(this) }
     private val authorizationStore by lazy { AgentAuthorizationSettingsStore(this) }
-    private val conversationStore by lazy { DemoConversationStore(this) }
+    private val conversationStore by lazy { DemoActivityState.conversationStore(applicationContext) }
     private var runtime: AgentRuntime? = null
     private var terminalPlugin: TerminalAgentPlugin? = null
     private lateinit var activeConversation: DemoConversation
     private lateinit var session: AgentSession
-    private var runJob: Job? = null
     private var runState: DemoRunState = DemoRunState.initial()
-    private val pendingOverlayMessages = ArrayDeque<String>()
     private var activityResumed = false
+    private val activityToken = Any()
     private var overlayPermissionDialog: AlertDialog? = null
     private val confirmationPresenter by lazy {
-        ActivityUserConfirmationDialogPresenter(
-            activity = this,
-            isActivityResumed = { activityResumed },
-            isFullAuthorizationEnabled = { authorizationStore.isFullAuthorizationEnabled() },
-            overlayHost = floatingWindow
-        )
+        DemoActivityState.confirmationPresenter.also { presenter ->
+            presenter.attach(
+                activity = this,
+                isResumed = { activityResumed },
+                isFullAuthorizationEnabled = { authorizationStore.isFullAuthorizationEnabled() },
+                overlayHost = floatingWindow
+            )
+        }
     }
 
     private lateinit var appBarTitle: TextView
@@ -80,19 +74,12 @@ class MainActivity : Activity() {
     private var assistantMessageView: DemoChatMessageView? = null
     private var lastImeInsetBottom = 0
     private val floatingWindow by lazy {
-        AgentFloatingWindow(applicationContext).apply {
-            onSendMessage = { text -> enqueueOverlayMessage(text) }
-            onStopAgent = { runOnUiThread { stopAgent(clearQueuedMessages = true) } }
-            onOpenApp = {
-                runOnUiThread {
-                    startActivity(
-                        Intent(this@MainActivity, MainActivity::class.java).apply {
-                            addFlags(Intent.FLAG_ACTIVITY_REORDER_TO_FRONT)
-                        }
-                    )
-                }
-            }
-            onHide = { runOnUiThread { hideFloatingWindow() } }
+        DemoActivityState.floatingWindow(applicationContext).apply {
+            onSendMessage = { text -> DemoActivityState.overlaySend?.invoke(text) == true }
+            onStopAgent = { DemoActivityState.overlayStop?.invoke() }
+            onOpenApp = { DemoActivityState.overlayOpenApp?.invoke() }
+            onHide = { DemoActivityState.overlayHide?.invoke() }
+            onDraftChanged = { draft -> DemoActivityState.draft = draft }
         }
     }
 
@@ -102,14 +89,34 @@ class MainActivity : Activity() {
         activeConversation = conversationStore.get(
             DemoActivityState.activeConversationId ?: conversationStore.activeId()
         ) ?: conversationStore.ensureActive()
+        DemoActivityState.activeConversationId = activeConversation.id
         conversationStore.setActive(activeConversation.id)
         session = DemoActivityState.sessionFor(activeConversation.id)
             ?: createSession(activeConversation).also {
                 DemoActivityState.rememberSession(activeConversation.id, it)
             }
         setContentView(buildUi())
+        DemoActivityState.bindOverlayCallbacks(
+            owner = activityToken,
+            // AgentFloatingWindow invokes touch callbacks on the main looper;
+            // return the enqueue result synchronously so a full queue keeps
+            // the user's draft instead of clearing it optimistically.
+            onSend = { text -> enqueueOverlayMessage(text) },
+            onStop = { runOnUiThread { stopAgent(clearQueuedMessages = true) } },
+            onOpenApp = {
+                runOnUiThread {
+                    startActivity(
+                        Intent(this@MainActivity, MainActivity::class.java).apply {
+                            addFlags(Intent.FLAG_ACTIVITY_REORDER_TO_FRONT)
+                        }
+                    )
+                }
+            },
+            onHide = { runOnUiThread { hideFloatingWindow() } }
+        )
         restoreDraft(savedInstanceState)
         rebuildRuntime()
+        attachRunCoordinator()
     }
 
     override fun onNewIntent(intent: Intent?) {
@@ -129,6 +136,10 @@ class MainActivity : Activity() {
         activityResumed = true
         confirmationPresenter.onActivityResumed()
         updateCapabilityBanner()
+        if (::inputField.isInitialized && inputField.text.toString() != DemoActivityState.draft) {
+            inputField.setText(DemoActivityState.draft)
+            inputField.setSelection(inputField.length())
+        }
         renderRunState()
         // The main chat is the primary surface. The overlay is only a
         // background-run summary, so keep it hidden while this Activity is
@@ -144,13 +155,21 @@ class MainActivity : Activity() {
     }
 
     override fun onDestroy() {
-        runJob?.cancel()
-        terminalPlugin?.cancelAll()
-        pendingOverlayMessages.clear()
-        confirmationPresenter.cancelPending()
+        val finishing = isFinishing && !isChangingConfigurations
+        if (finishing) {
+            DemoActivityState.runCoordinator.stop()
+            DemoActivityState.runCoordinator.clearQueue()
+            DemoActivityState.runCoordinator.detach(activityToken)
+            terminalPlugin?.cancelAll()
+            confirmationPresenter.release()
+        } else {
+            DemoActivityState.runCoordinator.detach(activityToken)
+            confirmationPresenter.detach(this)
+        }
         DemoActivityState.rememberSession(activeConversation.id, session)
         super.onDestroy()
-        hideFloatingWindow()
+        DemoActivityState.clearOverlayCallbacks(activityToken)
+        if (finishing) hideFloatingWindow()
     }
 
     private fun hideFloatingWindow() {
@@ -213,6 +232,13 @@ class MainActivity : Activity() {
                 )
             }
         }
+    }
+
+    private fun showInlineNotice(message: String) {
+        if (!::statusBanner.isInitialized) return
+        statusBanner.text = message
+        statusBanner.setTextColor(Ui.Warning)
+        statusBanner.visibility = View.VISIBLE
     }
 
     private fun buildUi(): View {
@@ -354,6 +380,8 @@ class MainActivity : Activity() {
         inputField.addTextChangedListener(object : TextWatcher {
             override fun beforeTextChanged(text: CharSequence?, start: Int, count: Int, after: Int) = Unit
             override fun onTextChanged(text: CharSequence?, start: Int, before: Int, count: Int) {
+                DemoActivityState.draft = text?.toString().orEmpty()
+                floatingWindow.setComposerDraft(DemoActivityState.draft)
                 updateComposerState()
             }
             override fun afterTextChanged(editable: Editable?) = Unit
@@ -546,27 +574,49 @@ class MainActivity : Activity() {
         }
         val text = inputField.text.toString().trim()
         if (text.isBlank()) return
-        inputField.setText("")
-        maybeOfferOverlayPermission()
-        runAgent(text)
+        if (DemoActivityState.runCoordinator.isRunning()) {
+            if (DemoActivityState.runCoordinator.enqueue(text)) {
+                inputField.setText("")
+                DemoActivityState.draft = ""
+                floatingWindow.addLog("已排队：${text.take(48)}")
+                renderRunState()
+            } else {
+                showInlineNotice("消息队列已满，请稍后再试")
+            }
+            return
+        }
+        // A missing API configuration is handled by the placeholder runtime;
+        // it must not unexpectedly trigger a second, unrelated permission
+        // prompt before the user has configured a runnable provider.
+        if (apiStore.activeConfig() != null) {
+            maybeOfferOverlayPermission()
+        }
+        if (runAgent(text)) {
+            DemoActivityState.draft = ""
+            inputField.setText("")
+        }
     }
 
-    private fun enqueueOverlayMessage(text: String) {
+    private fun enqueueOverlayMessage(text: String): Boolean {
         val message = text.trim()
-        if (message.isBlank()) return
+        if (message.isBlank()) return false
 
-        if (runState.isBusy || runJob?.isActive == true) {
-            pendingOverlayMessages.addLast(message)
+        if (runState.isBusy || DemoActivityState.runCoordinator.isRunning()) {
+            if (!DemoActivityState.runCoordinator.enqueue(message)) {
+                floatingWindow.addLog("消息队列已满，请稍后再试")
+                return false
+            }
             floatingWindow.addLog("已排队：${message.take(48)}")
             renderRunState()
+            return true
         } else {
-            runAgent(message)
+            return runAgent(message)
         }
     }
 
     private fun startNextQueuedOverlayMessage() {
-        if (runState.isBusy || pendingOverlayMessages.isEmpty()) return
-        val next = pendingOverlayMessages.removeFirst()
+        if (runState.isBusy || DemoActivityState.runCoordinator.isRunning()) return
+        val next = DemoActivityState.runCoordinator.removeNextQueued() ?: return
         floatingWindow.addLog("开始处理排队消息")
         runAgent(next)
     }
@@ -599,11 +649,11 @@ class MainActivity : Activity() {
             }
     }
 
-    private fun runAgent(text: String) {
-        if (runState.isBusy) return
-        val currentRuntime = runtime ?: return
+    private fun runAgent(text: String): Boolean {
+        if (runState.isBusy || DemoActivityState.runCoordinator.isRunning()) return false
+        val currentRuntime = runtime ?: return false
         val message = text.trim()
-        if (message.isBlank()) return
+        if (message.isBlank()) return false
 
         if (activeConversation.title == "新对话") {
             activeConversation.title = conversationStore.suggestedTitle(message)
@@ -617,47 +667,65 @@ class MainActivity : Activity() {
         assistantMessageView = null
         addChatMessage(DemoChatMessageRole.USER, message)
         addProcessCard()
-        runState = DemoRunState.initial()
-        renderRunState()
+        DemoActivityState.activeConversationId = activeConversation.id
 
         floatingWindow.clear()
         floatingWindow.setSending(true)
         floatingWindow.setStatus("思考中")
         floatingWindow.addLog("开始任务")
 
-        runJob = CoroutineScope(Dispatchers.Main).launch {
-            try {
-                withContext(Dispatchers.Default) {
-                    currentRuntime.run(session, message).collect { event ->
-                        withContext(Dispatchers.Main.immediate) {
-                            handleAgentEvent(event)
-                        }
-                    }
-                }
-            } catch (cancelled: CancellationException) {
-                withContext(Dispatchers.Main.immediate) {
-                    if (runState.isBusy) {
-                        runState = runState.cancel()
-                        renderRunState()
-                    }
-                }
-            } catch (error: Throwable) {
-                withContext(Dispatchers.Main.immediate) {
-                    handleAgentEvent(AgentEvent.Failed(error.message ?: "运行时发生未知错误"))
-                }
-            } finally {
-                withContext(Dispatchers.Main.immediate) {
-                    updateComposerState()
-                    floatingWindow.setSending(false)
-                    floatingWindow.setStatus(runState.statusLabel)
-                    startNextQueuedOverlayMessage()
+        DemoActivityState.runCoordinator.start(
+            runtime = currentRuntime,
+            session = session,
+            conversationId = activeConversation.id,
+            message = message
+        )
+        runState = DemoActivityState.runCoordinator.snapshot().state
+        renderRunState()
+        return true
+    }
+
+    private fun attachRunCoordinator() {
+        val snapshot = DemoActivityState.runCoordinator.attach(
+            owner = activityToken,
+            onEvent = { event ->
+                runOnUiThread { handleAgentEvent(event) }
+            },
+            onFinished = {
+                runOnUiThread { finishAgentRun() }
+            }
+        )
+        runState = snapshot.state
+        DemoActivityState.runCoordinator
+            .consumePendingOutcome(activeConversation.id)
+            ?.event
+            ?.let { event ->
+                when (event) {
+                    is AgentEvent.Completed -> persistAssistantMessage(event.content)
+                    is AgentEvent.Failed -> persistAssistantMessage("任务未完成：${event.message}")
+                    else -> Unit
                 }
             }
+        // rebuildRuntime() renders once before the coordinator is attached.
+        // Render again from the restored snapshot so terminal runs also place
+        // their process card between the latest user message and its answer.
+        renderConversation()
+        if (!snapshot.isRunning) {
+            floatingWindow.setSending(false)
+            startNextQueuedOverlayMessage()
         }
     }
 
+    private fun finishAgentRun() {
+        runState = DemoActivityState.runCoordinator.snapshot().state
+        updateComposerState()
+        floatingWindow.setSending(false)
+        floatingWindow.setStatus(runState.statusLabel)
+        startNextQueuedOverlayMessage()
+    }
+
     private fun handleAgentEvent(event: AgentEvent) {
-        runState = runState.reduce(event)
+        runState = DemoActivityState.runCoordinator.snapshot().state
         when (event) {
             is AgentEvent.ToolStarted -> {
                 floatingWindow.setStatus(runState.statusLabel)
@@ -673,6 +741,7 @@ class MainActivity : Activity() {
             }
             is AgentEvent.Completed -> {
                 persistAssistantMessage(event.content)
+                DemoActivityState.runCoordinator.acknowledgeOutcome()
                 floatingWindow.setStatus("已完成")
                 floatingWindow.addLog("回答已完成")
             }
@@ -680,11 +749,13 @@ class MainActivity : Activity() {
                 if (event.message.isNotBlank()) {
                     persistAssistantMessage("任务未完成：${event.message}")
                 }
+                DemoActivityState.runCoordinator.acknowledgeOutcome()
                 floatingWindow.setStatus("失败")
                 floatingWindow.addLog("失败：${event.message}")
             }
             else -> Unit
         }
+        runState = DemoActivityState.runCoordinator.snapshot().state
         renderRunState()
     }
 
@@ -712,15 +783,26 @@ class MainActivity : Activity() {
             topMargin = dp(2)
             bottomMargin = dp(2)
         })
+        trimVisibleChatMessages()
         scrollToEnd()
         return view
+    }
+
+    private fun trimVisibleChatMessages() {
+        val messageViews = (0 until messageContainer.childCount)
+            .map { messageContainer.getChildAt(it) }
+            .filterIsInstance<DemoChatMessageView>()
+        val removeCount = messageViews.size - MAX_VISIBLE_CHAT_MESSAGES
+        if (removeCount <= 0) return
+        messageViews.take(removeCount).forEach { messageContainer.removeView(it) }
     }
 
     private fun addProcessCard() {
         processCard?.let { messageContainer.removeView(it) }
         val card = DemoChatProcessCardView(this).apply {
             setOnExpandedChangeListener { expanded ->
-                runState = runState.setDetailsExpanded(expanded)
+                DemoActivityState.runCoordinator.setDetailsExpanded(expanded)
+                runState = DemoActivityState.runCoordinator.snapshot().state
             }
             setOnStepExpandedChangeListener { _, expanded ->
                 if (expanded) scrollToEnd()
@@ -788,6 +870,7 @@ class MainActivity : Activity() {
                     latestMessageRole = activeConversation.messages.lastOrNull()?.role,
                     steps = state.steps.map { step ->
                         AgentOverlayStep(
+                            id = step.id,
                             title = step.title,
                             statusLabel = step.status.label,
                             detail = step.detailLabel,
@@ -795,7 +878,7 @@ class MainActivity : Activity() {
                         )
                     },
                     isBusy = state.isBusy,
-                    queuedMessages = pendingOverlayMessages.size
+                    queuedMessages = DemoActivityState.runCoordinator.snapshot().queuedMessages
                 )
             )
             processCard?.bind(
@@ -818,7 +901,7 @@ class MainActivity : Activity() {
                     latestMessage = activeConversation.messages.lastOrNull()?.content,
                     latestMessageRole = activeConversation.messages.lastOrNull()?.role,
                     isBusy = state.isBusy,
-                    queuedMessages = pendingOverlayMessages.size
+                    queuedMessages = DemoActivityState.runCoordinator.snapshot().queuedMessages
                 )
             )
         }
@@ -840,16 +923,22 @@ class MainActivity : Activity() {
             if (busy) Ui.Danger else Ui.Mint,
             22
         )
-        sendButton.alpha = if (!busy && inputField.text.isNullOrBlank()) 0.55f else 1f
+        val hasText = !inputField.text.isNullOrBlank()
+        // While busy this button is the stop action; while idle it is only
+        // actionable when there is a non-blank message.
+        // A cancelled Job may still be draining; text can already be queued
+        // during that short window, so do not disable a valid send action.
+        val actionable = busy || hasText
+        sendButton.isEnabled = actionable
+        sendButton.alpha = if (actionable) 1f else 0.55f
     }
 
     private fun stopAgent(clearQueuedMessages: Boolean = true) {
         confirmationPresenter.cancelPending()
-        if (!runState.isBusy) return
-        if (clearQueuedMessages) pendingOverlayMessages.clear()
+        if (!DemoActivityState.runCoordinator.isRunning() && !runState.isBusy) return
+        if (clearQueuedMessages) DemoActivityState.runCoordinator.clearQueue()
         terminalPlugin?.cancelAll()
-        runJob?.cancel()
-        runState = runState.cancel()
+        runState = DemoActivityState.runCoordinator.stop().state
         renderRunState()
         floatingWindow.setSending(false)
         floatingWindow.setStatus("已停止")
@@ -863,15 +952,21 @@ class MainActivity : Activity() {
         if (activeConversation.messages.none { it.role == "user" || it.role == "assistant" }) {
             renderEmptyState()
         } else {
-            activeConversation.messages.forEach { message ->
+            val processIndex = activeConversation.messages
+                .indexOfLast { it.role == "user" }
+            val hasProcess = runState.isBusy || runState.steps.isNotEmpty()
+            activeConversation.messages.forEachIndexed { index, message ->
                 when (message.role) {
                     "user" -> addChatMessage(DemoChatMessageRole.USER, message.content)
                     "assistant" -> addChatMessage(DemoChatMessageRole.ASSISTANT, message.content)
                 }
+                if (hasProcess && index == processIndex) addProcessCard()
             }
         }
         updateAppBar()
-        if (runState.isBusy) addProcessCard()
+        if ((runState.isBusy || runState.steps.isNotEmpty()) && processCard == null) {
+            addProcessCard()
+        }
         renderRunState()
         scrollToEnd()
     }
@@ -945,9 +1040,6 @@ class MainActivity : Activity() {
         val draft = if (::inputField.isInitialized) inputField.text?.toString().orEmpty() else ""
         DemoActivityState.draft = draft
         outState.putString(KEY_DRAFT, draft)
-        val entries = DemoActivityState.transcript.takeLast(MAX_SAVED_TRANSCRIPT_ENTRIES)
-        outState.putStringArrayList(KEY_TRANSCRIPT_ROLES, ArrayList(entries.map { it.role }))
-        outState.putStringArrayList(KEY_TRANSCRIPT_TEXTS, ArrayList(entries.map { it.text }))
         super.onSaveInstanceState(outState)
     }
 
@@ -971,28 +1063,33 @@ class MainActivity : Activity() {
     }
 
     private fun selectConversation(id: String) {
-        if (runState.isBusy) stopAgent()
+        if (runState.isBusy || DemoActivityState.runCoordinator.isRunning()) stopAgent()
         val conversation = conversationStore.get(id) ?: return
         activeConversation = conversation
         conversationStore.setActive(conversation.id)
+        DemoActivityState.activeConversationId = conversation.id
+        DemoActivityState.runCoordinator.resetForConversation(conversation.id)
         session = DemoActivityState.sessionFor(conversation.id)
             ?: createSession(conversation).also {
                 DemoActivityState.rememberSession(conversation.id, it)
             }
-        DemoActivityState.activeConversationId = conversation.id
-        runState = DemoRunState.initial()
+        runState = DemoActivityState.runCoordinator.snapshot().state
+        floatingWindow.clear()
         syncTranscript()
         renderConversation()
         updateCapabilityBanner()
     }
 
     private fun createNewConversation() {
-        if (runState.isBusy) stopAgent()
+        if (runState.isBusy || DemoActivityState.runCoordinator.isRunning()) stopAgent()
         val conversation = conversationStore.create()
         activeConversation = conversation
+        DemoActivityState.activeConversationId = conversation.id
+        DemoActivityState.runCoordinator.resetForConversation(conversation.id)
         session = createSession(conversation)
         DemoActivityState.rememberSession(conversation.id, session)
-        runState = DemoRunState.initial()
+        runState = DemoActivityState.runCoordinator.snapshot().state
+        floatingWindow.clear()
         syncTranscript()
         renderConversation()
     }
@@ -1171,9 +1268,7 @@ class MainActivity : Activity() {
 
     private companion object {
         const val KEY_DRAFT = "demo_draft"
-        const val KEY_TRANSCRIPT_ROLES = "demo_transcript_roles"
-        const val KEY_TRANSCRIPT_TEXTS = "demo_transcript_texts"
-        const val MAX_SAVED_TRANSCRIPT_ENTRIES = 40
+        const val MAX_VISIBLE_CHAT_MESSAGES = 100
     }
 
     private val accessibilityScreenSkill = AndroidSkill(

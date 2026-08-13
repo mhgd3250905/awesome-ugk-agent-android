@@ -116,9 +116,9 @@
 
 - 日期：2026-08-13
 - 背景：返回前台时可能发生 Activity 重建或启动器重复启动；原实现把 `AgentSession`、对话 UI 和权限提示状态全部放在 Activity 实例中，导致测试看起来像“重启”。
-- 决策：`demo-app` 的 `MainActivity` 使用 `singleTask` 和 `alwaysRetainTaskState`；Agent 会话放在不持有 Activity/View 引用的进程级状态中；对话摘要和输入草稿通过有界 `onSaveInstanceState` 恢复；权限提示在同一进程中只首次显示。Activity 真正销毁时仍取消正在运行的 Agent/确认对话，避免旧 UI 泄漏。
+- 决策：`demo-app` 的 `MainActivity` 使用 `singleTask` 和 `alwaysRetainTaskState`；Agent 会话、运行协调器、悬浮窗和确认 presenter 放在不持有 Activity/View 引用的进程级状态中，Activity 重建时重新绑定 UI；对话草稿通过有界 `onSaveInstanceState` 恢复，权限提示在同一进程中只首次显示。Activity 真正结束时才取消正在运行的 Agent/确认对话，配置或权限导致的重建不打断运行。
 - 原因：普通切后台/启动器返回应复用现有 task；Activity 重建时保留测试上下文；同时避免把完整、可能很大的 Tool 输出塞进 Binder saved-state。
-- 影响：进程被系统彻底杀死且没有可用 saved state 时，完整 Agent tool history 不保证恢复；API 配置继续由 SharedPreferences 保留。该决策针对 demo 测试体验，不把 Activity 生命周期语义扩展为 SDK Runtime 的后台服务保证。
+- 影响：进程被系统彻底杀死且没有可用 saved state 时，正在运行的 Agent tool history 和 Job 仍不保证恢复；API 配置继续由 SharedPreferences 保留。该决策针对 demo 测试体验，不把 Activity 生命周期语义扩展为 SDK Runtime 的后台服务保证。
 
 ## D-017：长驻本地 HTTP 服务使用专用 Runtime Tool
 

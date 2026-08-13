@@ -357,8 +357,11 @@ object DemoRunStateReducer {
     }
 
     private fun onFailed(state: DemoRunState, message: String): DemoRunState {
-        val summary = DemoRunText.summarize(message)
-        val detail = summary ?: DemoRunStatus.FAILED.defaultDetail
+        val summary = DemoRunText.fullText(message)
+        val detail = DemoRunText.summarize(
+            message,
+            maxLength = DemoRunText.MAX_DETAIL_LENGTH
+        ) ?: DemoRunStatus.FAILED.defaultDetail
         val step = DemoRunStep(
             id = OUTCOME_STEP_ID,
             kind = DemoRunStepKind.OUTCOME,
