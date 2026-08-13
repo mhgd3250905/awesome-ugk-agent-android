@@ -46,6 +46,20 @@ class AndroidAppIntentFactoryTest {
     }
 
     @Test
+    fun onlyAllowsHttpAndHttpsForOpenUrl() {
+        assertEquals(
+            "http://127.0.0.1:8787/weather.html",
+            AndroidAppIntentFactory.specFor(
+                "open_url",
+                mapOf("url" to "http://127.0.0.1:8787/weather.html")
+            )?.dataUri
+        )
+        assertNull(AndroidAppIntentFactory.intentFor("open_url", mapOf("url" to "file:///data/data/app.html")))
+        assertNull(AndroidAppIntentFactory.intentFor("open_url", mapOf("url" to "javascript:alert(1)")))
+        assertNull(AndroidAppIntentFactory.intentFor("open_url", mapOf("url" to "https://user:secret@example.com")))
+    }
+
+    @Test
     fun exposesWhitelistedTargets() {
         val expectedTargets = setOf(
             "camera_capture",

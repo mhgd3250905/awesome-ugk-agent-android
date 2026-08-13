@@ -1,0 +1,16 @@
+<manifest xmlns:android="http://schemas.android.com/apk/res/android">
+    <!--
+      curl is an intentionally packaged network-capable CLI. This normal
+      Android permission is merged into every host that includes this runtime;
+      the agent-facing tool therefore defaults to explicit user confirmation.
+    -->
+    <uses-permission android:name="android.permission.INTERNET" />
+
+    <!--
+      ProcessBuilder needs an actual executable path in nativeLibraryDir.
+      This asks consuming APKs to install JNI payloads as files rather than
+      leaving them only mapped inside the APK. The verification apps enforce
+      the matching Gradle packaging behavior as well.
+    -->
+    <application android:extractNativeLibs="true" />
+</manifest>

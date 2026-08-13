@@ -14,7 +14,8 @@ class AgentRuntime(
     private val skillProvider: AndroidSkillProvider = EmptyAndroidSkillProvider,
     private val skillResolver: AndroidSkillResolver = KeywordAndroidSkillResolver(),
     private val skillPromptBuilder: AndroidSkillPromptBuilder = AndroidSkillPromptBuilder(),
-    private val timeContextProvider: AgentTimeContextProvider = SystemAgentTimeContextProvider
+    private val timeContextProvider: AgentTimeContextProvider = SystemAgentTimeContextProvider,
+    private val agentInstructions: List<String> = emptyList()
 ) {
     class Builder {
         private var llmProvider: LLMProvider? = null
@@ -24,6 +25,7 @@ class AgentRuntime(
         private var skillPromptBuilder: AndroidSkillPromptBuilder = AndroidSkillPromptBuilder()
         private var timeContextProvider: AgentTimeContextProvider = SystemAgentTimeContextProvider
         private val skills = mutableListOf<AndroidSkill>()
+        private val agentInstructions = mutableListOf<String>()
 
         fun llmProvider(llmProvider: LLMProvider): Builder {
             this.llmProvider = llmProvider
@@ -61,10 +63,21 @@ class AgentRuntime(
             return this
         }
 
+        /**
+         * Adds a global system-level contract for the runtime Agent without
+         * mutating the conversation history. Plugin-provided instructions are
+         * added automatically by [register].
+         */
+        fun agentInstructions(instructions: String): Builder {
+            agentInstructions += instructions
+            return this
+        }
+
         fun register(plugin: AgentCapabilityPlugin): Builder {
             require(plugin.id.isNotBlank()) { "Plugin id must not be blank" }
             plugin.tools().forEach { toolRegistry.register(it) }
             skills += plugin.skills()
+            agentInstructions += plugin.agentInstructions()
             return this
         }
 
@@ -76,7 +89,11 @@ class AgentRuntime(
                 skillProvider = StaticAndroidSkillProvider(skills.toList()),
                 skillResolver = skillResolver,
                 skillPromptBuilder = skillPromptBuilder,
-                timeContextProvider = timeContextProvider
+                timeContextProvider = timeContextProvider,
+                agentInstructions = agentInstructions
+                    .map(String::trim)
+                    .filter(String::isNotBlank)
+                    .distinct()
             )
         }
     }
@@ -236,10 +253,20 @@ class AgentRuntime(
         activeSkillMessage: AgentMessage.System?,
         transientSystemMessage: AgentMessage.System? = null
     ): List<AgentMessage> {
+        val runtimeAgentMessages = agentInstructions
+            .asSequence()
+            .map(String::trim)
+            .filter(String::isNotBlank)
+            .distinct()
+            .map { AgentMessage.System(it) }
+            .toList()
         val systemMessages = sessionMessages.filterIsInstance<AgentMessage.System>()
         val nonSystemMessages = sessionMessages.filterNot { it is AgentMessage.System }
         val requestMessages =
-            systemMessages + listOfNotNull(activeSkillMessage, transientSystemMessage) + nonSystemMessages
+            runtimeAgentMessages +
+                systemMessages +
+                listOfNotNull(activeSkillMessage, transientSystemMessage) +
+                nonSystemMessages
         return requestMessages.withUserTimePrefixes()
     }
 

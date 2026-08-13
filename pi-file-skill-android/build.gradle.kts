@@ -6,10 +6,10 @@ plugins {
 
 android {
     namespace = "com.ugk.pi.file.skill"
-    compileSdk = 34
+    compileSdk = 36
 
     defaultConfig {
-        minSdk = 23
+        minSdk = 24
         consumerProguardFiles("consumer-rules.pro")
     }
 

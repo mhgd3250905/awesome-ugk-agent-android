@@ -84,10 +84,18 @@ object ApiProviderSettingsJson {
 }
 
 class ApiProviderSettingsStore(context: Context) {
-    private val prefs = context.getSharedPreferences("api_provider_settings", Context.MODE_PRIVATE)
+    private val appContext = context.applicationContext
+    private val prefs = appContext.getSharedPreferences("api_provider_settings", Context.MODE_PRIVATE)
 
     fun load(): ApiProviderSettingsState {
-        if (!prefs.contains(KEY)) return ApiProviderSettingsState.empty()
+        if (!prefs.contains(KEY)) {
+            val defaults = loadDebugDefaults()
+            if (defaults != null) {
+                save(defaults)
+                return defaults
+            }
+            return ApiProviderSettingsState.empty()
+        }
         return ApiProviderSettingsJson.decode(prefs.getString(KEY, null))
     }
 
@@ -112,6 +120,21 @@ class ApiProviderSettingsStore(context: Context) {
 
     private fun save(state: ApiProviderSettingsState) {
         prefs.edit().putString(KEY, ApiProviderSettingsJson.encode(state)).apply()
+    }
+
+    private fun loadDebugDefaults(): ApiProviderSettingsState? {
+        val id = appContext.getString(R.string.ugk_default_api_provider_id).trim()
+        val baseUrl = appContext.getString(R.string.ugk_default_api_base_url).trim()
+        val apiKey = appContext.getString(R.string.ugk_default_api_key).trim()
+        val model = appContext.getString(R.string.ugk_default_api_model).trim()
+        if (id.isBlank() || baseUrl.isBlank() || apiKey.isBlank() || model.isBlank()) return null
+        val config = ApiProviderConfig(
+            id = id,
+            baseUrl = baseUrl,
+            apiKey = apiKey,
+            model = model
+        )
+        return ApiProviderSettingsState(activeId = id, configs = listOf(config))
     }
 
     private companion object {

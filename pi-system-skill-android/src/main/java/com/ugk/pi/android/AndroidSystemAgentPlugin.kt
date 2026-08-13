@@ -24,7 +24,8 @@ class AndroidSystemAgentPlugin(
     override fun skills(): List<AndroidSkill> {
         return listOf(
             AndroidSystemSkills.appSettingsInspection(),
-            AndroidSystemSkills.permissionSettingsControl()
+            AndroidSystemSkills.permissionSettingsControl(),
+            AndroidSystemSkills.appFacingIntentControl()
         )
     }
 }

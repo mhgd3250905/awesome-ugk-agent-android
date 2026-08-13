@@ -10,21 +10,57 @@ Android Agent Runtime SDK — 通用 AI Agent 工具循环框架，附带无障�
 :pi-schedule-skill-android   — 定时任务 skill
 :pi-system-skill-android     — 系统设置 / 权限 / Intent skill
 :demo-app                    — 无障碍屏幕操控 demo（包名 com.ugk.pi.android.testapp）
+:ugk-terminal-runtime-android — 无 UI 原生终端 Runtime 基础设施
+:pi-terminal-skill-android  — Bash Agent Tool（默认逐次用户确认）
+:terminal-probe-demo-a/b     — Runtime 可重定位验证 app（不同 applicationId）
 ```
 
 依赖方向：demo-app -> ugk-pi-android, pi-*
 
+## 文档事实源
+
+Terminal Runtime 的当前目标、状态和验证以 `docs/README.md` 为入口，按以下顺序阅读：
+
+1. `docs/terminal-runtime-baseline.md`
+2. `docs/terminal-runtime-development-plan.md`
+3. `docs/terminal-runtime-validation.md`
+4. `docs/terminal-runtime-architecture.md`
+5. `docs/terminal-runtime-decisions.md`
+
+`docs/archive/` 只保存历史记录，不作为当前状态依据。需要改变 v1 scope、打包方式、权限/安全边界或 Gate 退出条件时，先更新 `docs/terminal-runtime-decisions.md`。
+
 ## 构建命令
 
-```bash
-# 构建 demo
-./gradlew :demo-app:assembleDebug --console=plain
+本机 `demo-app` 的 Debug 签名和默认 API 配置由被 Git 忽略的 `local.properties` 固定：签名使用
+`E:\Android\.android\debug.keystore`，API 配置只从 `E:\AII\deepseek-202608.txt` 读取。API 内容不得复制进源码、文档或提交；Release 默认不嵌入 API 配置。
+
+```powershell
+# 构建原有无障碍 demo
+.\gradlew.bat :demo-app:assembleDebug --console=plain
 
 # 跑全部单元测试
-./gradlew :ugk-pi-android:testDebugUnitTest :pi-file-skill-android:testDebugUnitTest :pi-schedule-skill-android:testDebugUnitTest :pi-system-skill-android:testDebugUnitTest --console=plain
+.\gradlew.bat `
+  :ugk-pi-android:testDebugUnitTest `
+  :pi-file-skill-android:testDebugUnitTest `
+  :pi-schedule-skill-android:testDebugUnitTest `
+  :pi-system-skill-android:testDebugUnitTest `
+  :ugk-terminal-runtime-android:testDebugUnitTest `
+  :pi-terminal-skill-android:testDebugUnitTest `
+  --console=plain
+
+# 终端 Runtime 的双 applicationId 仪器测试（设备在线后执行）
+.\gradlew.bat `
+  :terminal-probe-demo-a:connectedDebugAndroidTest `
+  :terminal-probe-demo-b:connectedDebugAndroidTest `
+  --console=plain
+
+# Runtime 静态/打包验收
+.\scripts\terminal-runtime\verify-runtime.ps1 `
+  -CheckPackages `
+  -NdkRoot 'E:\Android\SDK\ndk\28.2.13676358'
 
 # 发布到本地 Maven（供外部项目消费）
-./gradlew :ugk-pi-android:publishReleasePublicationToMavenLocal
+.\gradlew.bat :ugk-pi-android:publishReleasePublicationToMavenLocal --console=plain
 ```
 
 外部项目通过 mavenLocal 消费：
@@ -34,17 +70,26 @@ implementation("com.ugk.pi:ugk-pi-android:0.1.0")
 
 ## 技术栈
 
-Kotlin 1.8.22, AGP 8.3.2, Java 17, compileSdk 34, minSdk 23, Gradle 8.4
+Kotlin 2.2.21, AGP 8.11.1, Java 17, compileSdk/targetSdk 36, minSdk 24, Gradle 8.13,
+NDK 28.2.13676358
 Kotlin Serialization（非 Gson/Moshi）
 JUnit 4 + kotlinx-coroutines-test
+
+v1 Terminal Core Profile：Bash、curl、OpenSSL、SQLite、CPython 3.14.6；Node.js、Git、OpenSSH、jq 不属于 v1。
 
 ## SDK 架构
 
 - `AgentRuntime` 运行循环：用户消息 -> LLM -> ToolCall -> AgentTool -> ToolResult -> LLM -> 最终回答
-- `AgentCapabilityPlugin` 是工具+技能的注册入口（`tools()` + `skills()`）
+- `AgentCapabilityPlugin` 是工具+技能+运行时全局指令的注册入口（`tools()` + `skills()` + `agentInstructions()`）
 - `AndroidSkill` 是只读上下文包，不创建工具、不授权；skill method 仅在同名 tool 已注册时才注入
 - `AnthropicMessagesProvider` / `OpenAiChatCompletionsProvider` 支持 baseUrl 自定义
 - 高影响工具通过 `UserConfirmationRequiredTool` 包装，必须先调用 `show_user_confirmation_dialog`
+
+## 两类同名 `AGENTS.md`（必须区分）
+
+- 根目录 `AGENTS.md`：开发协作规范，只给 Codex/仓库贡献者使用，不进入 APK/AAR，也不作为运行时 Agent 的环境事实。
+- SDK runtime `AGENTS.md`：位于 `pi-terminal-skill-android/src/main/assets/ugk/AGENTS.md`，随终端 skill 打包进宿主 APK；`TerminalAgentPlugin` 注册时通过 `agentInstructions()` 自动注入 `AgentRuntime` 的每次 `ModelRequest`，作为 SDK 内 Agent 的全局环境契约。
+- 两个文件都必须保留文件名 `AGENTS.md`，但作用域、内容和生命周期完全不同。修改终端能力、命令映射或运行时限制时，必须同步检查 SDK runtime 文件及其验证记录；不能把根目录开发规范复制给模型。
 
 ## demo-app
 

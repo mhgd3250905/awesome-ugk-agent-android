@@ -6,6 +6,7 @@ import android.graphics.Color
 import android.graphics.PixelFormat
 import android.graphics.Typeface
 import android.os.Build
+import android.provider.Settings
 import android.text.InputType
 import android.view.Gravity
 import android.view.MotionEvent
@@ -64,11 +65,13 @@ class AgentFloatingWindow(private val context: Context) {
         else @Suppress("DEPRECATION") WindowManager.LayoutParams.TYPE_PHONE
 
     fun show() {
+        if (!Settings.canDrawOverlays(context)) return
         if (expandedView != null || collapsedView != null) return
         showCollapsed()
     }
 
     fun showExpanded() {
+        if (!Settings.canDrawOverlays(context)) return
         if (expandedView != null) return
         hideCollapsed()
         val view = buildExpandedView()

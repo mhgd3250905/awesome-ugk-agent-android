@@ -1,16 +1,19 @@
 package com.ugk.pi.android.testapp
 
 import android.app.AlertDialog
+import android.content.ComponentName
 import android.content.Intent
 import android.net.Uri
 import android.provider.Settings
 import android.app.Activity
 import android.graphics.Color
 import android.graphics.Typeface
+import android.os.Build
 import android.os.Bundle
 import android.util.TypedValue
 import android.view.Gravity
 import android.view.View
+import android.view.WindowInsets
 import android.widget.EditText
 import android.widget.ImageView
 import android.widget.LinearLayout
@@ -22,12 +25,14 @@ import com.ugk.pi.android.AgentEvent
 import com.ugk.pi.android.AgentMessage
 import com.ugk.pi.android.AgentRuntime
 import com.ugk.pi.android.AgentSession
+import com.ugk.pi.android.AndroidAutomationAgentPlugin
 import com.ugk.pi.android.AndroidSkill
 import com.ugk.pi.android.AndroidSkillMethod
 import com.ugk.pi.android.AnthropicMessagesProvider
 import com.ugk.pi.android.LLMProvider
 import com.ugk.pi.android.ModelRequest
 import com.ugk.pi.android.ModelResponse
+import com.ugk.pi.terminal.skill.TerminalAgentPlugin
 import kotlinx.coroutines.CancellationException
 import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.Dispatchers
@@ -41,6 +46,7 @@ class MainActivity : Activity() {
     private var runtime: AgentRuntime? = null
     private var session = createSession()
     private var runJob: Job? = null
+    private val confirmationPresenter = ActivityUserConfirmationDialogPresenter(this)
 
     private lateinit var messageContainer: LinearLayout
     private lateinit var messageScrollView: ScrollView
@@ -57,13 +63,25 @@ class MainActivity : Activity() {
 
     override fun onCreate(savedInstanceState: Bundle?) {
         super.onCreate(savedInstanceState)
+        session = restoreSession()
         setContentView(buildUi())
+        restoreDraft(savedInstanceState)
+        restoreTranscript(savedInstanceState)
         rebuildRuntime()
-        checkAccessibility()
-        checkOverlayPermission()
+        if (!DemoActivityState.accessibilityPromptShown) {
+            checkAccessibility()
+        }
+        if (!DemoActivityState.overlayPromptShown) {
+            checkOverlayPermission()
+        }
         if (Settings.canDrawOverlays(this)) {
             floatingWindow.show()
         }
+    }
+
+    override fun onNewIntent(intent: Intent?) {
+        super.onNewIntent(intent)
+        setIntent(intent)
     }
 
     override fun onResume() {
@@ -77,17 +95,28 @@ class MainActivity : Activity() {
 
     override fun onPause() {
         super.onPause()
-        if (runJob?.isActive == true) {
+        // A background Agent run must not crash the host when the user has
+        // declined the SYSTEM_ALERT_WINDOW permission. The Activity itself
+        // remains the safe fallback while the run continues.
+        if (shouldShowFloatingWindowOnPause(
+                agentRunActive = runJob?.isActive == true,
+                overlayPermissionGranted = Settings.canDrawOverlays(this)
+            )
+        ) {
             floatingWindow.show()
         }
     }
 
     override fun onDestroy() {
+        runJob?.cancel()
+        confirmationPresenter.cancelPending()
+        DemoActivityState.session = session
         super.onDestroy()
         floatingWindow.hide()
     }
 
     private fun checkAccessibility() {
+        DemoActivityState.accessibilityPromptShown = true
         if (!isAccessibilityEnabled()) {
             AlertDialog.Builder(this)
                 .setTitle("需要开启无障碍服务")
@@ -120,6 +149,7 @@ class MainActivity : Activity() {
     }
 
     private fun checkOverlayPermission() {
+        DemoActivityState.overlayPromptShown = true
         if (!Settings.canDrawOverlays(this)) {
             AlertDialog.Builder(this)
                 .setTitle("需要悬浮窗权限")
@@ -229,8 +259,46 @@ class MainActivity : Activity() {
         root.addView(messageScrollView, LinearLayout.LayoutParams(LinearLayout.LayoutParams.MATCH_PARENT, 0, 1f))
         root.addView(progressBar, LinearLayout.LayoutParams(LinearLayout.LayoutParams.MATCH_PARENT, LinearLayout.LayoutParams.WRAP_CONTENT))
         root.addView(inputBar, LinearLayout.LayoutParams(LinearLayout.LayoutParams.MATCH_PARENT, LinearLayout.LayoutParams.WRAP_CONTENT))
+        installSystemBarInsets(root)
         return root
     }
+
+    @Suppress("DEPRECATION")
+    private fun installSystemBarInsets(root: View) {
+        val initialLeft = root.paddingLeft
+        val initialTop = root.paddingTop
+        val initialRight = root.paddingRight
+        val initialBottom = root.paddingBottom
+
+        root.setOnApplyWindowInsetsListener { view, insets ->
+            val systemInsets = if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.R) {
+                val current = insets.getInsets(WindowInsets.Type.statusBars() or WindowInsets.Type.navigationBars())
+                InsetsSnapshot(current.left, current.top, current.right, current.bottom)
+            } else {
+                InsetsSnapshot(
+                    insets.systemWindowInsetLeft,
+                    insets.systemWindowInsetTop,
+                    insets.systemWindowInsetRight,
+                    insets.systemWindowInsetBottom
+                )
+            }
+            view.setPadding(
+                initialLeft + systemInsets.left,
+                initialTop + systemInsets.top,
+                initialRight + systemInsets.right,
+                initialBottom + systemInsets.bottom
+            )
+            insets
+        }
+        root.requestApplyInsets()
+    }
+
+    private data class InsetsSnapshot(
+        val left: Int,
+        val top: Int,
+        val right: Int,
+        val bottom: Int
+    )
 
     private fun openSettings() {
         ApiSettingsDialog(this, store) { config ->
@@ -251,18 +319,30 @@ class MainActivity : Activity() {
         }
         runtime = AgentRuntime.Builder()
             .llmProvider(provider)
+            .register(
+                AndroidAutomationAgentPlugin(
+                    context = applicationContext,
+                    confirmationPresenter = confirmationPresenter,
+                    accessibilityServiceComponent = ComponentName(
+                        this,
+                        AgentAccessibilityService::class.java
+                    ),
+                    accessibilityStateProvider = AgentAccessibilityService.runtimeStateProvider
+                )
+            )
+            .register(TerminalAgentPlugin(applicationContext))
             .register(object : AgentCapabilityPlugin {
                 override val id = "accessibility-screen"
-                override fun tools() = listOf(ScreenReadUiTreeTool(), ScreenPerformActionTool(), ScreenGlobalActionTool(), ScreenLaunchAppTool(), ScreenGestureTool(), ScreenPressKeyTool())
+                override fun tools() = listOf(ScreenReadUiTreeTool(), ScreenPerformActionTool(), ScreenGlobalActionTool(), ScreenGestureTool(), ScreenPressKeyTool())
                 override fun skills() = listOf(accessibilityScreenSkill)
             })
             .build()
-        session = createSession()
         messageContainer.removeAllViews()
         providerLabel.text = config?.displayName() ?: "未配置 API 源"
-        if (config == null) {
+        if (DemoActivityState.transcript.isEmpty() && config == null) {
             addStatusMessage("请先点击右上角齿轮图标配置 API 源。")
         }
+        renderTranscript()
     }
 
     private fun sendMessage() {
@@ -274,6 +354,7 @@ class MainActivity : Activity() {
 
     private fun runAgent(text: String) {
         val currentRuntime = runtime ?: return
+        DemoActivityState.transcript += DemoTranscriptEntry("user", text)
         addBubble(text, isUser = true)
 
         runJob?.cancel()
@@ -319,6 +400,7 @@ class MainActivity : Activity() {
                             } else {
                                 addBubble(event.content, isUser = false)
                             }
+                            DemoActivityState.transcript += DemoTranscriptEntry("assistant", event.content)
                             floatingWindow.setStatus("完成")
                             floatingWindow.addLog("回答: ${event.content.take(80)}")
                         }
@@ -389,6 +471,49 @@ class MainActivity : Activity() {
         }
     }
 
+    override fun onSaveInstanceState(outState: Bundle) {
+        DemoActivityState.session = session
+        val draft = if (::inputField.isInitialized) inputField.text?.toString().orEmpty() else ""
+        outState.putString(KEY_DRAFT, draft)
+        val entries = DemoActivityState.transcript.takeLast(MAX_SAVED_TRANSCRIPT_ENTRIES)
+        outState.putStringArrayList(KEY_TRANSCRIPT_ROLES, ArrayList(entries.map { it.role }))
+        outState.putStringArrayList(KEY_TRANSCRIPT_TEXTS, ArrayList(entries.map { it.text }))
+        super.onSaveInstanceState(outState)
+    }
+
+    private fun restoreSession(): AgentSession {
+        // The process-scoped session is the preferred path. Android normally
+        // keeps the process alive while the user switches apps, and this
+        // preserves the full tool history without putting large tool output
+        // into the Activity saved-state Binder transaction.
+        DemoActivityState.session?.let { return it }
+        return createSession().also { DemoActivityState.session = it }
+    }
+
+    private fun restoreDraft(savedInstanceState: Bundle?) {
+        savedInstanceState?.getString(KEY_DRAFT)?.let(inputField::setText)
+    }
+
+    private fun restoreTranscript(savedInstanceState: Bundle?) {
+        val roles = savedInstanceState?.getStringArrayList(KEY_TRANSCRIPT_ROLES)
+        val texts = savedInstanceState?.getStringArrayList(KEY_TRANSCRIPT_TEXTS)
+        if (roles != null && texts != null && roles.size == texts.size) {
+            DemoActivityState.transcript.clear()
+            roles.zip(texts).forEach { (role, text) ->
+                DemoActivityState.transcript += DemoTranscriptEntry(role, text)
+            }
+        }
+    }
+
+    private fun renderTranscript() {
+        DemoActivityState.transcript.forEach { entry ->
+            when (entry.role) {
+                "user" -> addBubble(entry.text, isUser = true)
+                "assistant" -> addBubble(entry.text, isUser = false)
+            }
+        }
+    }
+
     private fun createSession(): AgentSession = AgentSession(
         id = "test-session",
         messages = mutableListOf(
@@ -404,6 +529,13 @@ class MainActivity : Activity() {
         }
     }
 
+    private companion object {
+        const val KEY_DRAFT = "demo_draft"
+        const val KEY_TRANSCRIPT_ROLES = "demo_transcript_roles"
+        const val KEY_TRANSCRIPT_TEXTS = "demo_transcript_texts"
+        const val MAX_SAVED_TRANSCRIPT_ENTRIES = 40
+    }
+
     private val accessibilityScreenSkill = AndroidSkill(
         id = "accessibility-screen-reader",
         description = "Screen reading and UI interaction via accessibility service. Use to read the current screen, find elements, click buttons, type text, scroll lists.",
@@ -413,12 +545,17 @@ class MainActivity : Activity() {
             "屏幕", "界面", "点击", "按钮", "滚动", "输入", "页面", "操作"
         ),
         instructions = """
-            You can see and interact with the Android screen via accessibility tools.
+            You are operating inside a normal Android host application. You can see and interact with other Android apps only through the host AccessibilityService and the registered Android tools.
+
+            **Before cross-app UI work:**
+            - Call get_android_accessibility_status first.
+            - Continue to screen_read_ui_tree only when readyForScreenAutomation=true.
+            - If enabledByUser=false, call open_android_accessibility_settings, tell the user to enable the service manually, and wait for a new status check.
 
             **Launching apps:**
-            - Use screen_launch_app with the package name to open an app directly. This is the PREFERRED way to open apps.
-            - Common package names: com.tencent.mm (WeChat/微信), com.android.settings (Settings), com.android.chrome (Chrome), com.tencent.mobileqq (QQ), com.ss.android.ugc.aweme (抖音), com.android.dialer (Phone).
-            - If you don't know the package name, you can read the home screen first to find the app icon.
+            - Use find_android_app with the human app name first; do not guess package names or rely on a hardcoded package list.
+            - If find_android_app returns multiple candidates, ask the user to disambiguate.
+            - Use launch_android_app with the selected exact packageName. Opening an app does not require AccessibilityService; screen reading and clicking afterwards does.
 
             **Reading the screen:**
             - Use screen_read_ui_tree to get visible UI elements with nodeId, text, type, bounds.
@@ -445,8 +582,8 @@ class MainActivity : Activity() {
             - To click a specific spot: use tap with estimated coordinates.
 
             **Strategy for apps like WeChat:**
-            1. screen_launch_app to open the app.
-            2. screen_read_ui_tree — if nodeCount is very low (0-20), the app blocks UI tree.
+            1. find_android_app, then launch_android_app to open the app.
+            2. get_android_accessibility_status, then screen_read_ui_tree — if nodeCount is very low (0-20), the app may block UI tree.
             3. Switch to gesture mode: use swipe_up/swipe_down to scroll, tap to click by coordinates.
             4. After each gesture, screen_read_ui_tree again — systemui elements may give clues about current screen.
             5. Use swipe_up at x=540, y=1200 to scroll down the chat list or contacts list.
@@ -465,6 +602,7 @@ class MainActivity : Activity() {
             - Typical flow: screen_read_ui_tree -> screen_perform_action(set_text) -> screen_press_key(enter) -> screen_read_ui_tree to verify.
 
             Important:
+            - Do not use terminal_bash_execute, am, pm, or screen icon searching to launch another app.
             - Always try screen_read_ui_tree first. If it returns enough data, use screen_perform_action.
             - If screen_read_ui_tree returns very few nodes, switch to screen_gesture.
             - After any gesture or action, re-read the screen to check the result.
@@ -479,10 +617,28 @@ class MainActivity : Activity() {
                 resultSemantics = "success=true means gesture was dispatched. Check the screen afterwards."
             ),
             AndroidSkillMethod(
-                toolName = "screen_launch_app",
-                purpose = "Launches an app by package name. Use to open apps directly.",
-                whenToUse = "When user wants to open an app (e.g. 'open WeChat', 'open Settings'). Use this instead of searching for app icons on screen.",
-                resultSemantics = "success means the app launch intent was sent. Wait a moment then read the UI tree to verify."
+                toolName = "find_android_app",
+                purpose = "Finds launchable app candidates by human-visible name or package name.",
+                whenToUse = "Before launching an app when the user did not provide an exact package name.",
+                resultSemantics = "count=0 means no match; ambiguous=true means ask the user to choose."
+            ),
+            AndroidSkillMethod(
+                toolName = "launch_android_app",
+                purpose = "Launches an installed app by exact package name through Android's launcher Intent.",
+                whenToUse = "After find_android_app returns a selected packageName.",
+                resultSemantics = "launched=true means Android accepted the request. Check get_android_accessibility_status and read the UI to verify the next step."
+            ),
+            AndroidSkillMethod(
+                toolName = "get_android_accessibility_status",
+                purpose = "Checks whether cross-app screen automation is currently ready.",
+                whenToUse = "Before screen_read_ui_tree or any screen action in another app.",
+                resultSemantics = "readyForScreenAutomation=true is required."
+            ),
+            AndroidSkillMethod(
+                toolName = "open_android_accessibility_settings",
+                purpose = "Opens Android Accessibility settings for the user to enable the host service.",
+                whenToUse = "When get_android_accessibility_status reports enabledByUser=false.",
+                resultSemantics = "userMustEnableManually=true means wait for the user and check status again."
             ),
             AndroidSkillMethod(
                 toolName = "screen_read_ui_tree",
@@ -511,3 +667,8 @@ class MainActivity : Activity() {
         )
     )
 }
+
+internal fun shouldShowFloatingWindowOnPause(
+    agentRunActive: Boolean,
+    overlayPermissionGranted: Boolean
+): Boolean = agentRunActive && overlayPermissionGranted

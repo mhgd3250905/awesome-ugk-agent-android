@@ -6,6 +6,25 @@ import org.junit.Test
 
 class AndroidSystemSkillsTest {
     @Test
+    fun androidAutomationControlExplainsTheCrossAppWorkflow() {
+        val skill = AndroidSystemSkills.androidAutomationControl()
+
+        assertEquals("android-app-automation", skill.id)
+        assertTrue(skill.triggers.contains("无障碍"))
+        assertEquals(
+            setOf(
+                "find_android_app",
+                "launch_android_app",
+                "get_android_accessibility_status",
+                "open_android_accessibility_settings"
+            ),
+            skill.methods.map { it.toolName }.toSet()
+        )
+        assertTrue(skill.instructions.contains("readyForScreenAutomation=true"))
+        assertTrue(skill.instructions.contains("guess a package name"))
+    }
+
+    @Test
     fun permissionSettingsControlSkillExposesPermissionAndSettingsMethods() {
         val skill = AndroidSystemSkills.permissionSettingsControl()
 
@@ -18,14 +37,25 @@ class AndroidSystemSkillsTest {
                 "get_android_permission_status",
                 "request_android_runtime_permissions",
                 "show_user_confirmation_dialog",
-                "open_android_settings_page",
-                "launch_android_app_intent"
+                "open_android_settings_page"
             ),
             skill.methods.map { it.toolName }.toSet()
         )
-        assertTrue(skill.instructions.contains("open_url"))
-        assertTrue(skill.instructions.contains("share_text"))
-        assertTrue(skill.instructions.contains("dial_phone"))
         assertTrue(skill.instructions.contains("show_user_confirmation_dialog"))
+    }
+
+    @Test
+    fun appFacingIntentControlExplainsNativeUrlLaunch() {
+        val skill = AndroidSystemSkills.appFacingIntentControl()
+
+        assertEquals("app-facing-intent-control", skill.id)
+        assertTrue(skill.triggers.contains("浏览器"))
+        assertEquals(
+            setOf("show_user_confirmation_dialog", "launch_android_app_intent"),
+            skill.methods.map { it.toolName }.toSet()
+        )
+        assertTrue(skill.instructions.contains("native Intent resolver"))
+        assertTrue(skill.instructions.contains("Do not use terminal_bash_execute"))
+        assertTrue(skill.instructions.contains("open_url"))
     }
 }

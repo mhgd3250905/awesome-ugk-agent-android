@@ -1,0 +1,313 @@
+{
+  "schemaVersion": 4,
+  "profile": "bash-python-sqlite-https-v1-core",
+  "generatedOn": "2026-08-13",
+  "targetApi": 24,
+  "ndkVersion": "28.2.13676358",
+  "forbiddenStrings": [
+    "D:/Git",
+    "E:/AII",
+    "D:\\Git",
+    "E:\\AII",
+    "com.termux",
+    "com.ugk.runtime.demo.a",
+    "com.example.runtime.demo.b"
+  ],
+  "components": [
+    {
+      "name": "GNU Bash",
+      "version": "5.3.15",
+      "license": "GPL-3.0-or-later",
+      "source": {
+        "url": "https://mirrors.kernel.org/gnu/bash/bash-5.3.tar.gz",
+        "sha256": "0d5cd86965f869a26cf64f4b71be7b96f90a3ba8b3d74e27e8e9d9d5550f31ba"
+      },
+      "upstreamPatches": {
+        "baseUrl": "https://mirrors.kernel.org/gnu/bash/bash-5.3-patches/",
+        "sha256": {
+          "bash53-001": "1f608434364af86b9b45c8b0ea3fb3b165fb830d27697e6cdfc7ac17dee3287f",
+          "bash53-002": "e385548a00130765ec7938a56fbdca52447ab41fabc95a25f19ade527e282001",
+          "bash53-003": "f245d9c7dc3f5a20d84b53d249334747940936f09dc97e1dcb89fc3ab37d60ed",
+          "bash53-004": "9591d245045529f32f0812f94180b9d9ce9023f5a765c039b852e5dfc99747d0",
+          "bash53-005": "cca1ef52dbbf433bc98e33269b64b2c814028efe2538be1e2c9a377da90bc99d",
+          "bash53-006": "29119addefed8eff91ae37fd51822c31780ee30d4a28376e96002706c995ff10",
+          "bash53-007": "c0976bbfffa1453c7cfdd62058f206a318568ff2d690f5d4fa048793fa3eb299",
+          "bash53-008": "097cd723cbfb8907674ac32214063a3fd85282657ec5b4e544d2c0f719653fb4",
+          "bash53-009": "eee30fe78a4b0cb2fe20e010e00308899cfc613e0774ebb3c8557a1552f24f8c",
+          "bash53-010": "cf76f1cce2ea300c18bff9f002d21f280cc931acd17c28518110b93fe6e72569",
+          "bash53-011": "0298df8f5ea2a31d3be43ed7d269c5b3c7c342dd5b570bea7f64d66dcbbe7531",
+          "bash53-012": "d71379b39bebaedaf123414414e77fb458a0a43b9ad3116594c6df7ca6754573",
+          "bash53-013": "042f9cda967e24bf4211944697441e93d06ff42b4b998629a98a1b249279f200",
+          "bash53-014": "bd4360b401d38507e358783dcad8536a99c6789f0d3a5bd0cfb8c4a34144696c",
+          "bash53-015": "55b79ceee2fc27f6767eed697e939a7eb2fe2a28c01556bd75f18d581014f46e"
+        }
+      }
+    },
+    {
+      "name": "SQLite",
+      "version": "3.53.4",
+      "license": "Public Domain",
+      "source": {
+        "url": "https://www.sqlite.org/2026/sqlite-src-3530400.zip",
+        "sha256": "d18fa15aec74d8c17e1463f861095adc01b5ad190256acb4f91d22f0368d232b"
+      },
+      "build": {
+        "target": "sqlite3 CLI",
+        "loadExtension": "disabled via SQLITE_OMIT_LOAD_EXTENSION"
+      }
+    },
+    {
+      "name": "OpenSSL",
+      "version": "3.6.3",
+      "license": "Apache-2.0",
+      "source": {
+        "url": "https://github.com/openssl/openssl/releases/download/openssl-3.6.3/openssl-3.6.3.tar.gz",
+        "sha256": "243a86649cf6f23eeb6a2ff2456e09e5d77dd9018a54d3d96b0c6bdd6ba6c7f1"
+      },
+      "build": {
+        "target": "static openssl CLI",
+        "excluded": "shared libraries, tests, modules, legacy provider, engines, DSO support, SSL3"
+      }
+    },
+    {
+      "name": "curl",
+      "version": "8.21.0",
+      "license": "curl license (MIT-like)",
+      "source": {
+        "url": "https://github.com/curl/curl/releases/download/curl-8_21_0/curl-8.21.0.tar.xz",
+        "sha256": "aa1b66a70eace83dc624508745646c08ae561de512ab403adffb93ac87fc72e6"
+      },
+      "build": {
+        "protocols": ["file", "http", "https"],
+        "excluded": "SSH, FTP, LDAP, mail, HTTP/2, HTTP/3, HSTS, Alt-Svc, WebSocket, libpsl, brotli, zstd"
+      }
+    },
+    {
+      "name": "Mozilla CA Certificate Bundle",
+      "version": "2026-07-16",
+      "license": "MPL-2.0",
+      "source": {
+        "url": "https://curl.se/ca/cacert-2026-07-16.pem",
+        "sha256": "3ff344e30b9b1ed2971044eabb438a08f2e2245ddb5f8ab1a3ad8b63ab4eaf91"
+      }
+    },
+    {
+      "name": "CPython Android embeddable distribution",
+      "version": "3.14.6",
+      "license": "PSF-2.0",
+      "source": {
+        "releasePage": "https://www.python.org/downloads/release/python-3146/",
+        "packages": [
+          {
+            "abi": "arm64-v8a",
+            "url": "https://www.python.org/ftp/python/3.14.6/python-3.14.6-aarch64-linux-android.tar.gz",
+            "sha256": "38bbe77d3167b5cd554e03b1021324926f09f3825202b065951dd7638e9c37e5"
+          },
+          {
+            "abi": "x86_64",
+            "url": "https://www.python.org/ftp/python/3.14.6/python-3.14.6-x86_64-linux-android.tar.gz",
+            "sha256": "e04eb26607627e68d148f89de793372f54a345c91b13628567f24abcdd3bfa3e"
+          }
+        ]
+      },
+      "build": {
+        "target": "embedded libpython launcher plus CPython production extension modules",
+        "excluded": "CPython test extensions, test, idlelib, tkinter, ensurepip, pydoc_data",
+        "extensionPackaging": "Android extracts only lib*.so into nativeLibraryDir; extensions are stored as libugk_pyext_<original> and mapped by bundled sitecustomize.py"
+      }
+    }
+  ],
+  "pythonRuntime": {
+    "version": "3.14.6",
+    "extensionFilePrefix": "libugk_pyext_",
+    "nativeLibraries": [
+      {
+        "abi": "arm64-v8a",
+        "path": "src/main/jniLibs/arm64-v8a/libpython3.14.so",
+        "sizeBytes": 5821368,
+        "sha256": "45ebdbf5a70a63c87d1d4aab2c82fdf20f9bc7035dee53a77c4f74ffd9e38008",
+        "requiredDynamicDependencies": ["libc.so", "libdl.so", "liblog.so", "libm.so"]
+      },
+      {
+        "abi": "arm64-v8a",
+        "path": "src/main/jniLibs/arm64-v8a/libcrypto_python.so",
+        "sizeBytes": 4537384,
+        "sha256": "a0dd60d620cd61bac7306a8293bcb82103971a4dcfc8c11fd55be3653beb42c4",
+        "requiredDynamicDependencies": ["libc.so", "libdl.so", "libm.so"]
+      },
+      {
+        "abi": "arm64-v8a",
+        "path": "src/main/jniLibs/arm64-v8a/libssl_python.so",
+        "sizeBytes": 955984,
+        "sha256": "123743cc94922308a44a5a7d98854ca51fc708529d73f48ac1a380d7b7f04a2f",
+        "requiredDynamicDependencies": ["libc.so", "libcrypto_python.so", "libdl.so", "libm.so"]
+      },
+      {
+        "abi": "arm64-v8a",
+        "path": "src/main/jniLibs/arm64-v8a/libsqlite3_python.so",
+        "sizeBytes": 886520,
+        "sha256": "d704ad0ffce0085be5876489bb1413428ca46b853f164c6e5cd584a2069f2920",
+        "requiredDynamicDependencies": ["libc.so", "libdl.so", "libm.so", "libz.so"]
+      },
+      {
+        "abi": "x86_64",
+        "path": "src/main/jniLibs/x86_64/libpython3.14.so",
+        "sizeBytes": 5708640,
+        "sha256": "49b24c424edb383bba848ca2002704401fe8146cb41a7066e2755de5beaafb5a",
+        "requiredDynamicDependencies": ["libc.so", "libdl.so", "liblog.so", "libm.so"]
+      },
+      {
+        "abi": "x86_64",
+        "path": "src/main/jniLibs/x86_64/libcrypto_python.so",
+        "sizeBytes": 4632464,
+        "sha256": "05b4c975c215dba4de9d8ef786c99226c92c157557a04e4c42615b559cdd70f7",
+        "requiredDynamicDependencies": ["libc.so", "libdl.so", "libm.so"]
+      },
+      {
+        "abi": "x86_64",
+        "path": "src/main/jniLibs/x86_64/libssl_python.so",
+        "sizeBytes": 1004240,
+        "sha256": "92006373633f9ade63b0450a95f8ee32adf920206f9b0edbfab143097837591c",
+        "requiredDynamicDependencies": ["libc.so", "libcrypto_python.so", "libdl.so", "libm.so"]
+      },
+      {
+        "abi": "x86_64",
+        "path": "src/main/jniLibs/x86_64/libsqlite3_python.so",
+        "sizeBytes": 873744,
+        "sha256": "cefc03cb01ba315f116fc7ac156cca81740696ef4bfa5ceaab9deb691ef3dfb0",
+        "requiredDynamicDependencies": ["libc.so", "libdl.so", "libm.so", "libz.so"]
+      }
+    ],
+    "extensionSets": [
+      {
+        "abi": "arm64-v8a",
+        "directory": "src/main/jniLibs/arm64-v8a",
+        "fileCount": 54,
+        "sizeBytes": 6733808,
+        "treeSha256": "99cc3fe5472954def68099f3af5c278d8bd72e1b302660d9ed86a34a83b795eb",
+        "allowedDynamicDependencies": ["libc.so", "libcrypto_python.so", "libdl.so", "libm.so", "libpython3.14.so", "libsqlite3_python.so", "libssl_python.so", "libz.so"]
+      },
+      {
+        "abi": "x86_64",
+        "directory": "src/main/jniLibs/x86_64",
+        "fileCount": 54,
+        "sizeBytes": 7086816,
+        "treeSha256": "40a0e42ab73719f53b0945370c60b129136fb1d5c7067a06090ddae039f1d779",
+        "allowedDynamicDependencies": ["libc.so", "libcrypto_python.so", "libdl.so", "libm.so", "libpython3.14.so", "libsqlite3_python.so", "libssl_python.so", "libz.so"]
+      }
+    ],
+    "nativePayloadNormalization": {
+      "scriptPath": "scripts/terminal-runtime/normalize-python-sqlite-rpath.ps1",
+      "target": "libsqlite3_python.so",
+      "expectedInputRunpath": "/usr/local/lib",
+      "operation": "patchelf --remove-rpath",
+      "tool": {
+        "version": "0.14.3",
+        "package": "Debian 12 bookworm patchelf=0.14.3-1+b1",
+        "packageSha256": "0364b90e81faabbb9569076063952c7bcbf07f83d954a2f2602a163d65be60e6",
+        "binarySha256": "7be0ed7d5865a78c581108a748fbe6a02be99b8fefc338cd8bee6a055040d251",
+        "dockerImage": "node@sha256:7af03b14a13c8cdd38e45058fd957bf00a72bbe17feac43b1c15a689c029c732"
+      }
+    },
+    "standardLibrary": {
+      "manifestPath": "src/main/assets/ugk-terminal-runtime/python/3.14.6/manifest.sha256",
+      "archivePath": "src/main/assets/ugk-terminal-runtime/python/3.14.6/stdlib.zip",
+      "manifestEntryCount": 613,
+      "requiredEntries": [
+        "lib/python3.14/LICENSE.txt",
+        "lib/python3.14/encodings/__init__.py",
+        "lib/python3.14/hashlib.py",
+        "lib/python3.14/sitecustomize.py",
+        "lib/python3.14/sqlite3/__init__.py",
+        "lib/python3.14/ssl.py",
+        "lib/python3.14/subprocess.py"
+      ]
+    }
+  },
+  "artifacts": [
+    {
+      "command": "bash",
+      "abi": "arm64-v8a",
+      "path": "src/main/jniLibs/arm64-v8a/libugk_bash.so",
+      "sizeBytes": 1253152,
+      "sha256": "c3df9e565d3d06020811b68a301d06a0d3eb7990976b03ac8027c08d9ea979e2",
+      "requiredDynamicDependencies": ["libc.so", "libdl.so", "libm.so"]
+    },
+    {
+      "command": "bash",
+      "abi": "x86_64",
+      "path": "src/main/jniLibs/x86_64/libugk_bash.so",
+      "sizeBytes": 1248216,
+      "sha256": "98e7c1e05c4d1ec4b3d2c78981b2f226c2ba554b1df05e4a7dd14f1f2d54f4ca",
+      "requiredDynamicDependencies": ["libc.so", "libdl.so", "libm.so"]
+    },
+    {
+      "command": "curl",
+      "abi": "arm64-v8a",
+      "path": "src/main/jniLibs/arm64-v8a/libugk_curl.so",
+      "sizeBytes": 6477280,
+      "sha256": "edce5d66cc49d6b257f8d515528378c7f5042d749f7f3ef7ab278558f3160436",
+      "requiredDynamicDependencies": ["libc.so", "libdl.so", "libz.so"]
+    },
+    {
+      "command": "curl",
+      "abi": "x86_64",
+      "path": "src/main/jniLibs/x86_64/libugk_curl.so",
+      "sizeBytes": 6783616,
+      "sha256": "f656d793bb8a67b55d862901e64e899efb5baab19eb388811cdbc59625220c75",
+      "requiredDynamicDependencies": ["libc.so", "libdl.so", "libz.so"]
+    },
+    {
+      "command": "openssl",
+      "abi": "arm64-v8a",
+      "path": "src/main/jniLibs/arm64-v8a/libugk_openssl.so",
+      "sizeBytes": 7002952,
+      "sha256": "61d3a59ea2517ba8a641bba33ac581626f8226a6e441f664b4e3bcd728d07bc6",
+      "requiredDynamicDependencies": ["libc.so", "libdl.so"]
+    },
+    {
+      "command": "openssl",
+      "abi": "x86_64",
+      "path": "src/main/jniLibs/x86_64/libugk_openssl.so",
+      "sizeBytes": 7319328,
+      "sha256": "356bc007643c33616cccf00370d478b21065bd877ac4ce5df7ded9f37bba8346",
+      "requiredDynamicDependencies": ["libc.so", "libdl.so"]
+    },
+    {
+      "command": "sqlite3",
+      "abi": "arm64-v8a",
+      "path": "src/main/jniLibs/arm64-v8a/libugk_sqlite3.so",
+      "sizeBytes": 1767768,
+      "sha256": "6d7516286d7e3b065b754087d96b1c70d755d6cad925d862d1a0f383dc0c5979",
+      "requiredDynamicDependencies": ["libc.so", "libdl.so", "libm.so", "libz.so"]
+    },
+    {
+      "command": "sqlite3",
+      "abi": "x86_64",
+      "path": "src/main/jniLibs/x86_64/libugk_sqlite3.so",
+      "sizeBytes": 1812144,
+      "sha256": "9efcb95a2af957d474de10f55926a2a876c4a3024f30e4cd5a4473b4374249c2",
+      "requiredDynamicDependencies": ["libc.so", "libdl.so", "libm.so", "libz.so"]
+    }
+  ],
+  "dataArtifacts": [
+    {
+      "name": "Mozilla CA Certificate Bundle",
+      "path": "src/main/assets/ugk-terminal-runtime/cert.pem",
+      "sizeBytes": 186446,
+      "sha256": "3ff344e30b9b1ed2971044eabb438a08f2e2245ddb5f8ab1a3ad8b63ab4eaf91"
+    },
+    {
+      "name": "CPython 3.14.6 standard-library manifest",
+      "path": "src/main/assets/ugk-terminal-runtime/python/3.14.6/manifest.sha256",
+      "sizeBytes": 62794,
+      "sha256": "f992d1b4d45c37d7e9a065248f6bd06d0c78e3936668a62cbdbb7986a5360e49"
+    },
+    {
+      "name": "CPython 3.14.6 standard-library archive",
+      "path": "src/main/assets/ugk-terminal-runtime/python/3.14.6/stdlib.zip",
+      "sizeBytes": 2833155,
+      "sha256": "db3621438dd7064887f60c77c3af025ab8f751bdd53937353c2031837f08a17f"
+    }
+  ]
+}

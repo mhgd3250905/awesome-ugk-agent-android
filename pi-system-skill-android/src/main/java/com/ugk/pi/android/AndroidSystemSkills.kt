@@ -1,6 +1,69 @@
 package com.ugk.pi.android
 
 object AndroidSystemSkills {
+    fun androidAutomationControl(): AndroidSkill {
+        return AndroidSkill(
+            id = "android-app-automation",
+            description = "Plan and execute cross-app Android tasks using PackageManager discovery, Android launch intents, AccessibilityService state, and host screen tools.",
+            triggers = listOf(
+                "launch app",
+                "open app",
+                "find app",
+                "click in app",
+                "tap in app",
+                "control app",
+                "accessibility service",
+                "启动应用",
+                "打开应用",
+                "查找应用",
+                "点击应用",
+                "操作应用",
+                "无障碍",
+                "读屏"
+            ),
+            instructions = """
+                This Android-Skill describes the supported cross-app automation workflow.
+                The Agent runs inside a normal Android host app. It is not Android Shell, root, or a full Linux distribution.
+
+                Use find_android_app with the user's human-visible app name before launching an app. Treat more than one candidate as ambiguous and ask the user to choose; never guess a package name.
+                Use launch_android_app with the exact packageName from find_android_app when the task is to open an installed app. This launch does not require AccessibilityService.
+                For a user-visible URL, use launch_android_app_intent with target open_url. Do not use terminal_bash_execute, am, pm, or screen icon searching for app launch.
+
+                Before reading or operating another app's UI, call get_android_accessibility_status. Continue only when readyForScreenAutomation=true.
+                If the service is disabled, call open_android_accessibility_settings, explain that the user must enable the host service manually, and wait for the user to return before checking status again. Android does not allow the Agent to grant this permission silently.
+                Once ready, call screen_read_ui_tree before choosing a node. Use screen_perform_action for node actions and screen_gesture only when the UI tree cannot expose the target. After every launch, click, text entry, scroll, or gesture, read the screen again and verify the result.
+
+                A successful launch or gesture only means Android accepted the request. It does not prove that the target screen or action completed.
+            """.trimIndent(),
+            methods = listOf(
+                AndroidSkillMethod(
+                    toolName = "find_android_app",
+                    purpose = "Resolves a human app name or partial package name to launchable package candidates.",
+                    whenToUse = "Use before launching an app when the user did not provide an exact package name.",
+                    resultSemantics = "count=0 means no launchable app matched; ambiguous=true means ask the user to disambiguate."
+                ),
+                AndroidSkillMethod(
+                    toolName = "launch_android_app",
+                    purpose = "Launches an installed app by exact package name through its launcher Activity.",
+                    whenToUse = "Use after find_android_app returns a selected packageName.",
+                    resultSemantics = "launched=true means Android accepted the launch request; read the screen to verify the target app."
+                ),
+                AndroidSkillMethod(
+                    toolName = "get_android_accessibility_status",
+                    purpose = "Checks whether the host AccessibilityService is enabled and connected for cross-app screen automation.",
+                    whenToUse = "Use before screen_read_ui_tree or any cross-app screen action.",
+                    resultSemantics = "readyForScreenAutomation=true is required before using host screen tools."
+                ),
+                AndroidSkillMethod(
+                    toolName = "open_android_accessibility_settings",
+                    purpose = "Opens Android Accessibility settings for the user to enable the host service.",
+                    whenToUse = "Use only when get_android_accessibility_status reports enabledByUser=false.",
+                    resultSemantics = "userMustEnableManually=true means the Agent must wait for the user and check status again."
+                )
+            )
+        )
+    }
+
     fun appSettingsInspection(): AndroidSkill {
         return AndroidSkill(
             id = "app-settings-inspection",
@@ -104,25 +167,10 @@ object AndroidSystemSkills {
                 - overlay: special app access for draw-over-other-apps.
                 - exact_alarm: special app access for exact alarms on supported Android versions.
 
-                Common app-facing intents:
-                - camera_capture: launch camera photo capture after CAMERA is granted.
-                - video_capture: launch camera video capture after CAMERA is granted.
-                - pick_image: open a system/gallery picker for images.
-                - record_audio: launch a system audio recorder when the user asks to record sound.
-                - dial_phone: open the dialer with phone_number; this does not place a direct call.
-                - send_sms: open SMS compose with phone_number and optional message.
-                - send_email: open email compose with to, subject, and body.
-                - open_url: open a web URL with url.
-                - open_map: open a map with geo_uri or query.
-                - share_text: open Android share sheet with text.
-                - web_search: launch web search with query.
-                - open_app_market: open an app marketplace details page with package_name.
-
                 Prefer get_android_permission_status before requesting or opening settings.
                 Before requesting sensitive permissions, opening settings pages, launching external app-facing intents, or triggering actions that may leave this app, call show_user_confirmation_dialog with clear title/message and explicit buttons.
                 Continue only when the returned selectedButtonId corresponds to a confirming choice.
                 Use request_android_runtime_permissions only for normal runtime permissions that Android can prompt for.
-                Use launch_android_app_intent for whitelisted app-facing actions such as camera capture, media picking, dialer, SMS, email, URL, map, sharing, search, and app marketplace.
                 Do not use settings-page tools for app-facing actions.
                 Use open_android_settings_page when the required action is a whitelisted system page, system switch, app-specific settings page, or special app access page.
                 If a method returns unavailable or failed, explain the fallback manually and do not claim the setting changed.
@@ -151,12 +199,64 @@ object AndroidSystemSkills {
                     purpose = "Opens a controlled Android settings page such as app details, app permissions, notifications, battery optimization, Bluetooth, location, overlay, or exact alarm.",
                     whenToUse = "Use when a runtime prompt is unavailable, the user must change a system switch, or permission recovery requires Settings.",
                     resultSemantics = "opened=true only means Android accepted the settings Intent; the user still has to change the setting manually."
+                )
+            )
+        )
+    }
+
+    fun appFacingIntentControl(): AndroidSkill {
+        return AndroidSkill(
+            id = "app-facing-intent-control",
+            description = "Use Android's native Intent resolver for user-visible app actions such as opening a URL, camera, dialer, map, share sheet, or media picker.",
+            triggers = listOf(
+                "open url",
+                "open website",
+                "open link",
+                "open browser",
+                "launch app",
+                "camera",
+                "dial",
+                "call",
+                "sms",
+                "email",
+                "map",
+                "share",
+                "web search",
+                "网页",
+                "网站",
+                "链接",
+                "浏览器",
+                "打开网址",
+                "启动应用",
+                "拍照",
+                "拨号",
+                "短信",
+                "邮件",
+                "地图",
+                "分享"
+            ),
+            instructions = """
+                This Android-Skill maps user-visible app actions to the prebuilt launch_android_app_intent tool.
+                It calls Android's native Intent resolver; it is not a terminal command and it does not require Termux or accessibility access.
+
+                For a website or link, use target open_url with parameters.url. Do not use terminal_bash_execute, am, pm, or shell commands to launch Android apps or to infer whether a browser is installed. The terminal runs inside the host app's private runtime and is not Android Shell.
+
+                Supported targets include camera_capture, video_capture, pick_image, record_audio, dial_phone, send_sms, send_email, open_url, open_map, share_text, web_search, and open_app_market.
+                Before any user-visible external action, call show_user_confirmation_dialog with a clear description and continue only after a confirming selectedButtonId.
+                launched=true means Android accepted and dispatched the Intent; it does not prove that the target app completed its UI action. If the tool returns no_handler or launch_failed, report that exact limitation and do not claim the action happened.
+            """.trimIndent(),
+            methods = listOf(
+                AndroidSkillMethod(
+                    toolName = "show_user_confirmation_dialog",
+                    purpose = "Shows a parameterized confirmation dialog before a user-visible external Intent.",
+                    whenToUse = "Use before opening a URL, launching an external app, sharing, messaging, dialing, recording, or using camera/media pickers.",
+                    resultSemantics = "selectedButtonId records the user's choice; it does not itself launch anything."
                 ),
                 AndroidSkillMethod(
                     toolName = "launch_android_app_intent",
-                    purpose = "Launches a controlled Android app-facing Intent for common actions such as camera, media picker, recorder, dialer, SMS, email, URL, map, share, search, or app marketplace.",
-                    whenToUse = "Use when the user wants to perform a common Android app action rather than inspect or change a system setting.",
-                    resultSemantics = "launched=true only means Android accepted the Intent; returned activity results and content capture are outside this demo tool."
+                    purpose = "Dispatches a whitelisted Android app-facing Intent such as open_url, camera_capture, dial_phone, open_map, or share_text.",
+                    whenToUse = "Use instead of terminal commands whenever the user asks to open or hand data to an Android application.",
+                    resultSemantics = "launched=true means the Intent was dispatched; resolvedPackage identifies the selected Android handler when available."
                 )
             )
         )

@@ -1,11 +1,13 @@
 package com.ugk.pi.android
 
 import android.app.SearchManager
+import android.content.ActivityNotFoundException
 import android.content.Context
 import android.content.Intent
 import android.net.Uri
 import android.provider.MediaStore
 import kotlinx.serialization.json.JsonObject
+import kotlinx.serialization.json.JsonElement
 import kotlinx.serialization.json.JsonPrimitive
 import kotlinx.serialization.json.buildJsonObject
 import kotlinx.serialization.json.contentOrNull
@@ -17,10 +19,21 @@ import kotlinx.serialization.json.putJsonObject
 
 class AndroidAppIntentTool(
     private val context: Context,
-    override val name: String = "launch_android_app_intent"
+    override val name: String = "launch_android_app_intent",
+    /**
+     * Optional resolver used by hosts that need a preflight package lookup.
+     * The production default is intentionally null: Android's activity
+     * resolver is the source of truth when startActivity is called. A
+     * PackageManager query can be hidden by Android 11+ package visibility
+     * rules even though the same Intent is launchable.
+     */
+    private val resolveActivity: ((Intent) -> String?)? = null,
+    private val startActivity: (Intent) -> Unit = { intent ->
+        context.startActivity(intent)
+    }
 ) : AgentTool {
     override val description: String =
-        "Launches a whitelisted Android app-facing intent such as camera capture."
+        "Dispatches a whitelisted Android app-facing Intent such as open_url, camera capture, dialer, map, or sharing; it does not use the terminal."
 
     override val inputSchema: JsonObject = buildJsonObject {
         put("type", "object")
@@ -51,39 +64,79 @@ class AndroidAppIntentTool(
         call: ToolCall,
         context: ToolExecutionContext
     ): ToolResult {
-        val target = call.input["target"]?.jsonPrimitive?.contentOrNull.orEmpty()
+        val target = (call.input["target"] as? JsonPrimitive)?.contentOrNull.orEmpty()
         val parameters = call.input["parameters"]
             ?.jsonObject
-            ?.mapValues { it.value.jsonPrimitive.contentOrNull.orEmpty() }
+            ?.stringParameters()
             ?: call.input
                 .filterKeys { it != "target" }
-                .mapValues { it.value.jsonPrimitive.contentOrNull.orEmpty() }
+                .stringParameters()
         val intent = AndroidAppIntentFactory.intentFor(target, parameters) ?: return ToolResult(
             toolCallId = call.id,
             name = name,
-            content = "Unsupported Android app intent target or missing parameters: $target",
+            content = buildJsonObject {
+                put("error", "invalid_target_or_parameters")
+                put("target", target)
+            }.toString(),
             isError = true
         )
 
+        val resolvedPackage = resolveActivity?.invoke(intent)
+        if (resolveActivity != null && resolvedPackage == null) {
+            return ToolResult(
+                toolCallId = call.id,
+                name = name,
+                content = buildJsonObject {
+                    put("error", "no_handler")
+                    put("target", target)
+                    put("message", "No Android activity can handle this app intent on the current device.")
+                }.toString(),
+                isError = true
+            )
+        }
+
         return try {
             intent.addFlags(Intent.FLAG_ACTIVITY_NEW_TASK)
-            this.context.startActivity(intent)
+            startActivity(intent)
             ToolResult(
                 toolCallId = call.id,
                 name = name,
                 content = buildJsonObject {
                     put("target", target)
                     put("launched", true)
+                    put("action", intent.action.orEmpty())
+                    resolvedPackage?.let { put("resolvedPackage", it) }
                 }.toString()
+            )
+        } catch (error: ActivityNotFoundException) {
+            ToolResult(
+                toolCallId = call.id,
+                name = name,
+                content = buildJsonObject {
+                    put("error", "no_handler")
+                    put("target", target)
+                    put("message", error.message ?: "No Android activity can handle this app intent.")
+                }.toString(),
+                isError = true
             )
         } catch (error: RuntimeException) {
             ToolResult(
                 toolCallId = call.id,
                 name = name,
-                content = error.message ?: error::class.java.name,
+                content = buildJsonObject {
+                    put("error", "launch_failed")
+                    put("target", target)
+                    put("message", error.message ?: error::class.java.name)
+                }.toString(),
                 isError = true
             )
         }
+    }
+
+    private fun Map<String, JsonElement>.stringParameters(): Map<String, String> {
+        return mapNotNull { (key, value) ->
+            (value as? JsonPrimitive)?.contentOrNull?.let { key to it }
+        }.toMap()
     }
 }
 
@@ -146,7 +199,7 @@ object AndroidAppIntentFactory {
                 )
             }
 
-            "open_url" -> parameters["url"]?.takeIf { it.isNotBlank() }?.let { url ->
+            "open_url" -> parameters["url"]?.let(::safeWebUrl)?.let { url ->
                 AndroidAppIntentSpec(
                     action = Intent.ACTION_VIEW,
                     dataUri = url
@@ -154,8 +207,8 @@ object AndroidAppIntentFactory {
             }
 
             "open_map" -> {
-                val geoUri = parameters["geo_uri"]
-                    ?: parameters["query"]?.takeIf { it.isNotBlank() }?.let { query ->
+                val geoUri = parameters["geo_uri"]?.let(::safeGeoUri)
+                    ?: parameters["query"]?.takeIf { it.isNotBlank() && it.isSafeText() }?.let { query ->
                         "geo:0,0?q=${Uri.encode(query)}"
                     }
                 geoUri?.let {
@@ -181,7 +234,9 @@ object AndroidAppIntentFactory {
                 )
             }
 
-            "open_app_market" -> parameters["package_name"]?.takeIf { it.isNotBlank() }?.let { packageName ->
+            "open_app_market" -> parameters["package_name"]
+                ?.takeIf { packageNamePattern.matches(it) }
+                ?.let { packageName ->
                 AndroidAppIntentSpec(
                     action = Intent.ACTION_VIEW,
                     dataUri = "market://details?id=$packageName"
@@ -190,6 +245,28 @@ object AndroidAppIntentFactory {
 
             else -> null
         }
+    }
+
+    private val packageNamePattern = Regex("[A-Za-z][A-Za-z0-9_]*(\\.[A-Za-z][A-Za-z0-9_]*)+")
+
+    private fun safeWebUrl(value: String): String? {
+        val url = value.trim()
+        if (!url.isSafeText()) return null
+        val uri = runCatching { java.net.URI(url) }.getOrNull() ?: return null
+        if (uri.scheme?.lowercase() !in setOf("http", "https")) return null
+        if (uri.host.isNullOrBlank() || uri.userInfo != null) return null
+        return url
+    }
+
+    private fun safeGeoUri(value: String): String? {
+        val trimmed = value.trim()
+        val uri = runCatching { Uri.parse(trimmed) }.getOrNull() ?: return null
+        if (!trimmed.isSafeText() || uri.scheme?.lowercase() != "geo") return null
+        return trimmed
+    }
+
+    private fun String.isSafeText(): Boolean {
+        return isNotBlank() && none { it.isWhitespace() || it.isISOControl() }
     }
 }
 

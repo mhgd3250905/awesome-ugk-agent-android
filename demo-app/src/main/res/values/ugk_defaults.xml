@@ -1,0 +1,8 @@
+<?xml version="1.0" encoding="utf-8"?>
+<resources>
+    <!-- Release and clean builds intentionally have no embedded API config. -->
+    <string name="ugk_default_api_provider_id" translatable="false"></string>
+    <string name="ugk_default_api_base_url" translatable="false"></string>
+    <string name="ugk_default_api_key" translatable="false"></string>
+    <string name="ugk_default_api_model" translatable="false"></string>
+</resources>
