@@ -2,8 +2,11 @@ package com.ugk.pi.android.testapp
 
 import android.annotation.SuppressLint
 import android.content.Context
+import android.graphics.Canvas
 import android.graphics.Color
+import android.graphics.Paint
 import android.graphics.PixelFormat
+import android.graphics.RectF
 import android.graphics.Typeface
 import android.os.Build
 import android.provider.Settings
@@ -294,10 +297,29 @@ class AgentFloatingWindow(private val context: Context) : ConfirmationOverlayHos
         }
         val contentRoot = LinearLayout(context).apply {
             orientation = LinearLayout.VERTICAL
-            // Reserve the bottom corner for the resize handle so it never
-            // competes with the composer or its send/stop buttons.
-            setPadding(dp(8), dp(8), dp(8), dp(32))
+            // The resize affordance is a transparent overlay on the corner,
+            // so it does not reserve a visible block in the content layout.
+            setPadding(dp(8), dp(8), dp(8), dp(8))
         }
+
+        // Keep the resize layer underneath the content. Child controls such
+        // as the composer/send button must win hit testing in the overlap;
+        // the handle receives touches only from the exposed rounded corner.
+        val resizeHandle = ResizeCornerHandle(context).apply {
+            contentDescription = "从右下角拖动调整 Agent 悬浮窗大小"
+            isClickable = true
+            isFocusable = true
+        }
+        root.addView(resizeHandle, FrameLayout.LayoutParams(
+            dp(32),
+            dp(32),
+            Gravity.END or Gravity.BOTTOM
+        ).apply {
+            marginEnd = 0
+            bottomMargin = 0
+        })
+        setupResize(resizeHandle, root)
+
         root.addView(contentRoot, FrameLayout.LayoutParams(
             FrameLayout.LayoutParams.MATCH_PARENT,
             FrameLayout.LayoutParams.MATCH_PARENT
@@ -396,27 +418,6 @@ class AgentFloatingWindow(private val context: Context) : ConfirmationOverlayHos
             LinearLayout.LayoutParams.MATCH_PARENT,
             LinearLayout.LayoutParams.WRAP_CONTENT
         ).apply { topMargin = dp(6) })
-
-        val resizeHandle = TextView(context).apply {
-            text = "↘"
-            textSize = 17f
-            setTextColor(Ui.MintDark)
-            gravity = Gravity.CENTER
-            setPadding(dp(2), dp(2), dp(1), dp(1))
-            background = Ui.rounded(context, Ui.SurfaceSoft, 8, Ui.Outline)
-            contentDescription = "调整 Agent 悬浮窗大小"
-            isClickable = true
-            isFocusable = true
-        }
-        root.addView(resizeHandle, FrameLayout.LayoutParams(
-            dp(28),
-            dp(28),
-            Gravity.END or Gravity.BOTTOM
-        ).apply {
-            marginEnd = dp(4)
-            bottomMargin = dp(4)
-        })
-        setupResize(resizeHandle, root)
 
         return root
     }
@@ -787,6 +788,38 @@ class AgentFloatingWindow(private val context: Context) : ConfirmationOverlayHos
             setPadding(dp(26), dp(3), dp(2), 0)
             if (selectable) setTextIsSelectable(true)
         })
+    }
+
+    /**
+     * A transparent touch target that strengthens the panel's existing
+     * rounded bottom-right corner instead of adding an icon or a tile.
+     */
+    private inner class ResizeCornerHandle(context: Context) : View(context) {
+        private val cornerPaint = Paint(Paint.ANTI_ALIAS_FLAG).apply {
+            style = Paint.Style.STROKE
+            color = Ui.MintDark
+            strokeCap = Paint.Cap.ROUND
+        }
+
+        override fun onDraw(canvas: Canvas) {
+            super.onDraw(canvas)
+            val stroke = dp(4).toFloat()
+            val radius = dp(14).toFloat()
+            val inset = dp(1).toFloat()
+            cornerPaint.strokeWidth = stroke
+            canvas.drawArc(
+                RectF(
+                    width - radius * 2 - inset,
+                    height - radius * 2 - inset,
+                    width - inset,
+                    height - inset
+                ),
+                0f,
+                90f,
+                false,
+                cornerPaint
+            )
+        }
     }
 
     @SuppressLint("ClickableViewAccessibility")
