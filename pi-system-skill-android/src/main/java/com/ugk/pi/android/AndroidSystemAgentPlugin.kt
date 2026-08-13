@@ -5,7 +5,8 @@ import android.app.Activity
 class AndroidSystemAgentPlugin(
     private val activity: Activity,
     private val permissionRequester: AndroidRuntimePermissionRequester,
-    private val confirmationPresenter: UserConfirmationDialogPresenter
+    private val confirmationPresenter: UserConfirmationDialogPresenter,
+    private val shouldBypassConfirmation: () -> Boolean = { false }
 ) : AgentCapabilityPlugin {
     override val id: String = "android-system"
 
@@ -15,9 +16,18 @@ class AndroidSystemAgentPlugin(
             AppEnvironmentInfoTool(appContext),
             AndroidPermissionStatusTool(activity),
             UserConfirmationDialogTool(confirmationPresenter),
-            UserConfirmationRequiredTool(AndroidRuntimePermissionRequestTool(activity, permissionRequester)),
-            UserConfirmationRequiredTool(AndroidAppIntentTool(appContext)),
-            UserConfirmationRequiredTool(AndroidSystemPageTool(appContext))
+            UserConfirmationRequiredTool(
+                AndroidRuntimePermissionRequestTool(activity, permissionRequester),
+                shouldBypassConfirmation = shouldBypassConfirmation
+            ),
+            UserConfirmationRequiredTool(
+                AndroidAppIntentTool(appContext),
+                shouldBypassConfirmation = shouldBypassConfirmation
+            ),
+            UserConfirmationRequiredTool(
+                AndroidSystemPageTool(appContext),
+                shouldBypassConfirmation = shouldBypassConfirmation
+            )
         )
     }
 

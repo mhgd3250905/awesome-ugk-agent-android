@@ -9,6 +9,7 @@ import android.view.View
 import android.widget.Button
 import android.widget.EditText
 import android.widget.LinearLayout
+import android.widget.Switch
 import android.widget.TextView
 import kotlinx.serialization.json.Json
 import kotlinx.serialization.json.JsonObject
@@ -177,7 +178,8 @@ fun Context.dp(value: Int): Int = (value * resources.displayMetrics.density).toI
 class ApiSettingsDialog(
     private val activity: android.app.Activity,
     private val store: ApiProviderSettingsStore,
-    private val onChanged: (ApiProviderConfig?) -> Unit
+    private val onChanged: (ApiProviderConfig?) -> Unit,
+    private val authorizationStore: AgentAuthorizationSettingsStore? = null
 ) {
     private var selectedConfigId: String? = null
 
@@ -200,9 +202,29 @@ class ApiSettingsDialog(
             setPadding(0, activity.dp(8), 0, 0)
         }
 
+        val fullAuthorizationSwitch = authorizationStore?.let { authorization ->
+            Switch(activity).apply {
+                text = "全授权模式"
+                textSize = 15f
+                setTextColor(Ui.TextPrimary)
+                isChecked = authorization.isFullAuthorizationEnabled()
+                contentDescription = "开启后跳过 Agent 高影响操作确认"
+            }
+        }
+        val authorizationHint = authorizationStore?.let {
+            TextView(activity).apply {
+                text = "开启后，Agent 的高影响操作不再弹出确认。仅建议在受控测试设备使用。"
+                textSize = 12f
+                setTextColor(Ui.Warning)
+                setPadding(activity.dp(4), 0, activity.dp(4), 0)
+            }
+        }
+
         root.addView(urlInput, fieldLayoutParams())
         root.addView(modelInput, fieldLayoutParams())
         root.addView(keyInput, fieldLayoutParams())
+        fullAuthorizationSwitch?.let { root.addView(it, switchLayoutParams()) }
+        authorizationHint?.let { root.addView(it, hintLayoutParams()) }
         root.addView(errorText)
 
         val state = store.load()
@@ -244,6 +266,9 @@ class ApiSettingsDialog(
                     model = model
                 )
                 store.upsertAndActivate(config)
+                authorizationStore?.setFullAuthorizationEnabled(
+                    fullAuthorizationSwitch?.isChecked == true
+                )
                 onChanged(config)
                 dialog.dismiss()
             }
@@ -270,4 +295,14 @@ class ApiSettingsDialog(
     private fun fieldLayoutParams(): LinearLayout.LayoutParams = LinearLayout.LayoutParams(
         LinearLayout.LayoutParams.MATCH_PARENT, activity.dp(48)
     ).apply { topMargin = activity.dp(8) }
+
+    private fun switchLayoutParams(): LinearLayout.LayoutParams = LinearLayout.LayoutParams(
+        LinearLayout.LayoutParams.MATCH_PARENT,
+        LinearLayout.LayoutParams.WRAP_CONTENT
+    ).apply { topMargin = activity.dp(12) }
+
+    private fun hintLayoutParams(): LinearLayout.LayoutParams = LinearLayout.LayoutParams(
+        LinearLayout.LayoutParams.MATCH_PARENT,
+        LinearLayout.LayoutParams.WRAP_CONTENT
+    ).apply { topMargin = activity.dp(2) }
 }

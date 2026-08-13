@@ -47,6 +47,7 @@ import java.util.Date
 class MainActivity : Activity() {
 
     private val apiStore by lazy { ApiProviderSettingsStore(this) }
+    private val authorizationStore by lazy { AgentAuthorizationSettingsStore(this) }
     private val conversationStore by lazy { DemoConversationStore(this) }
     private var runtime: AgentRuntime? = null
     private var terminalPlugin: TerminalAgentPlugin? = null
@@ -57,7 +58,14 @@ class MainActivity : Activity() {
     private val pendingOverlayMessages = ArrayDeque<String>()
     private var activityResumed = false
     private var overlayPermissionDialog: AlertDialog? = null
-    private val confirmationPresenter = ActivityUserConfirmationDialogPresenter(this)
+    private val confirmationPresenter by lazy {
+        ActivityUserConfirmationDialogPresenter(
+            activity = this,
+            isActivityResumed = { activityResumed },
+            isFullAuthorizationEnabled = { authorizationStore.isFullAuthorizationEnabled() },
+            overlayHost = floatingWindow
+        )
+    }
 
     private lateinit var appBarTitle: TextView
     private lateinit var messageContainer: LinearLayout
@@ -67,6 +75,7 @@ class MainActivity : Activity() {
     private lateinit var providerLabel: TextView
     private lateinit var runStatusLabel: TextView
     private lateinit var statusBanner: TextView
+    private lateinit var composerHint: TextView
     private var processCard: DemoChatProcessCardView? = null
     private var assistantMessageView: DemoChatMessageView? = null
     private var lastImeInsetBottom = 0
@@ -118,6 +127,7 @@ class MainActivity : Activity() {
     override fun onResume() {
         super.onResume()
         activityResumed = true
+        confirmationPresenter.onActivityResumed()
         updateCapabilityBanner()
         renderRunState()
         // The main chat is the primary surface. The overlay is only a
@@ -130,6 +140,7 @@ class MainActivity : Activity() {
         activityResumed = false
         super.onPause()
         showFloatingWindowIfNeeded()
+        confirmationPresenter.onActivityPaused()
     }
 
     override fun onDestroy() {
@@ -172,12 +183,21 @@ class MainActivity : Activity() {
         val config = apiStore.activeConfig()
         val message = when {
             config == null -> "还没有配置 API 源，点击这里打开设置"
+            authorizationStore.isFullAuthorizationEnabled() ->
+                "全授权模式已开启：高影响操作不会弹出确认"
             !isAccessibilityEnabled() -> "无障碍服务未开启，跨 App 读屏和操作暂不可用"
             !Settings.canDrawOverlays(this) -> "悬浮窗未授权，切换到其他 App 时不会显示任务摘要"
             else -> ""
         }
         statusBanner.text = message
         statusBanner.visibility = if (message.isBlank()) View.GONE else View.VISIBLE
+        if (::composerHint.isInitialized) {
+            composerHint.text = if (authorizationStore.isFullAuthorizationEnabled()) {
+                "全授权模式已开启，高影响操作不会弹出确认"
+            } else {
+                "Agent 会按需调用工具，重要操作会先请求确认"
+            }
+        }
         statusBanner.setTextColor(
             if (config == null || !isAccessibilityEnabled()) Ui.Warning else Ui.TextSecondary
         )
@@ -359,7 +379,7 @@ class MainActivity : Activity() {
                 marginStart = dp(4)
             })
         }
-        val composerHint = TextView(this).apply {
+        composerHint = TextView(this).apply {
             text = "Agent 会按需调用工具，重要操作会先请求确认"
             textSize = 11f
             setTextColor(Ui.TextMuted)
@@ -460,9 +480,12 @@ class MainActivity : Activity() {
     )
 
     private fun openSettings() {
-        ApiSettingsDialog(this, apiStore) {
-            rebuildRuntime()
-        }.show()
+        ApiSettingsDialog(
+            activity = this,
+            store = apiStore,
+            onChanged = { rebuildRuntime() },
+            authorizationStore = authorizationStore
+        ).show()
     }
 
     private fun rebuildRuntime() {
@@ -477,7 +500,10 @@ class MainActivity : Activity() {
             PlaceholderProvider
         }
         terminalPlugin?.cancelAll()
-        val nextTerminalPlugin = TerminalAgentPlugin(applicationContext)
+        val nextTerminalPlugin = TerminalAgentPlugin(
+            context = applicationContext,
+            shouldBypassConfirmation = { authorizationStore.isFullAuthorizationEnabled() }
+        )
         terminalPlugin = nextTerminalPlugin
         runtime = AgentRuntime.Builder()
             .llmProvider(provider)
@@ -489,7 +515,10 @@ class MainActivity : Activity() {
                         this,
                         AgentAccessibilityService::class.java
                     ),
-                    accessibilityStateProvider = AgentAccessibilityService.runtimeStateProvider
+                    accessibilityStateProvider = AgentAccessibilityService.runtimeStateProvider,
+                    shouldBypassConfirmation = {
+                        authorizationStore.isFullAuthorizationEnabled()
+                    }
                 )
             )
             .register(nextTerminalPlugin)
@@ -815,6 +844,7 @@ class MainActivity : Activity() {
     }
 
     private fun stopAgent(clearQueuedMessages: Boolean = true) {
+        confirmationPresenter.cancelPending()
         if (!runState.isBusy) return
         if (clearQueuedMessages) pendingOverlayMessages.clear()
         terminalPlugin?.cancelAll()

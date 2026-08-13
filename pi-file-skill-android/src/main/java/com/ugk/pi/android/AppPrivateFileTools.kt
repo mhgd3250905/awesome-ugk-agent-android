@@ -43,14 +43,18 @@ fun appPrivateFileTools(
 class AppFileAgentPlugin(
     private val rootDir: File,
     private val maxFileBytes: Long = DEFAULT_MAX_FILE_BYTES,
-    private val requireDeleteConfirmation: Boolean = true
+    private val requireDeleteConfirmation: Boolean = true,
+    private val shouldBypassConfirmation: () -> Boolean = { false }
 ) : AgentCapabilityPlugin {
     override val id: String = "app-private-files"
 
     override fun tools(): List<AgentTool> {
         return appPrivateFileTools(rootDir, maxFileBytes).map { tool ->
             if (requireDeleteConfirmation && tool.name == "app_file_delete") {
-                UserConfirmationRequiredTool(tool)
+                UserConfirmationRequiredTool(
+                    tool,
+                    shouldBypassConfirmation = shouldBypassConfirmation
+                )
             } else {
                 tool
             }

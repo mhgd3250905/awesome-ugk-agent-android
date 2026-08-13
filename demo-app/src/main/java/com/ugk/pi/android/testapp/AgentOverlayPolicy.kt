@@ -1,5 +1,7 @@
 package com.ugk.pi.android.testapp
 
+import com.ugk.pi.android.UserConfirmationDialogRequest
+
 /**
  * A concise process item that can be rendered by the in-app chat or the
  * cross-app agent overlay.
@@ -10,6 +12,24 @@ data class AgentOverlayStep(
     val detail: String? = null,
     val resultSummary: String? = null,
 )
+
+data class AgentOverlayConfirmationButton(
+    val id: String,
+    val label: String
+)
+
+data class AgentOverlayConfirmation(
+    val title: String,
+    val message: String,
+    val buttons: List<AgentOverlayConfirmationButton>
+)
+
+fun UserConfirmationDialogRequest.toOverlayConfirmation(): AgentOverlayConfirmation =
+    AgentOverlayConfirmation(
+        title = title,
+        message = message,
+        buttons = buttons.map { AgentOverlayConfirmationButton(it.id, it.label) }
+    )
 
 /**
  * The renderable state of the agent overlay.
@@ -24,6 +44,7 @@ data class AgentOverlaySnapshot(
     val latestMessage: String? = null,
     val latestMessageRole: String? = null,
     val steps: List<AgentOverlayStep> = emptyList(),
+    val pendingConfirmation: AgentOverlayConfirmation? = null,
     val isBusy: Boolean = false,
     val queuedMessages: Int = 0,
 )

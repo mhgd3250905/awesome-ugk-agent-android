@@ -21,6 +21,7 @@ import android.widget.FrameLayout
 import android.widget.LinearLayout
 import android.widget.ScrollView
 import android.widget.TextView
+import com.ugk.pi.android.UserConfirmationDialogRequest
 import java.util.ArrayDeque
 import java.util.LinkedHashSet
 
@@ -31,7 +32,7 @@ import java.util.LinkedHashSet
  * execution remains owned by MainActivity, while this class exposes only
  * snapshots and user intents through callbacks.
  */
-class AgentFloatingWindow(private val context: Context) {
+class AgentFloatingWindow(private val context: Context) : ConfirmationOverlayHost {
 
     private val windowManager = context.getSystemService(Context.WINDOW_SERVICE) as WindowManager
     private val overlayType: Int
@@ -60,6 +61,8 @@ class AgentFloatingWindow(private val context: Context) {
     )
     private val legacyLogs = ArrayDeque<String>()
     private val expandedStepKeys = LinkedHashSet<String>()
+    private var pendingConfirmation: AgentOverlayConfirmation? = null
+    private var confirmationResult: ((String) -> Unit)? = null
     private var expandedX = dp(16)
     private var expandedY = dp(160)
     private var collapsedX = dp(16)
@@ -133,9 +136,34 @@ class AgentFloatingWindow(private val context: Context) {
 
     fun isShowing(): Boolean = expandedView != null || collapsedView != null
 
+    override fun showConfirmation(
+        request: UserConfirmationDialogRequest,
+        onResult: (String) -> Unit
+    ): Boolean {
+        if (!Settings.canDrawOverlays(context)) return false
+        confirmationResult = onResult
+        pendingConfirmation = request.toOverlayConfirmation()
+        snapshot = snapshot.copy(pendingConfirmation = pendingConfirmation)
+        if (expandedView == null) showExpanded()
+        renderSnapshot()
+        return expandedView != null
+    }
+
+    override fun hideConfirmation() {
+        pendingConfirmation = null
+        confirmationResult = null
+        snapshot = snapshot.copy(pendingConfirmation = null)
+        renderSnapshot()
+    }
+
     /** Render a stable, complete snapshot without imposing a text length cap. */
     fun bindSnapshot(value: AgentOverlaySnapshot) {
-        snapshot = value.copy(steps = value.steps.toList())
+        val confirmation = pendingConfirmation ?: value.pendingConfirmation
+        pendingConfirmation = confirmation
+        snapshot = value.copy(
+            steps = value.steps.toList(),
+            pendingConfirmation = confirmation
+        )
         expandedStepKeys.retainAll(snapshot.steps.indices.map(::stepKey).toSet())
         renderSnapshot()
     }
@@ -158,6 +186,8 @@ class AgentFloatingWindow(private val context: Context) {
     fun clear() {
         legacyLogs.clear()
         expandedStepKeys.clear()
+        pendingConfirmation = null
+        confirmationResult = null
         snapshot = snapshot.copy(
             statusLabel = "Agent 就绪",
             statusDetail = null,
@@ -165,7 +195,8 @@ class AgentFloatingWindow(private val context: Context) {
             latestMessageRole = null,
             steps = emptyList(),
             isBusy = false,
-            queuedMessages = 0
+            queuedMessages = 0,
+            pendingConfirmation = null
         )
         renderSnapshot()
     }
@@ -524,6 +555,10 @@ class AgentFloatingWindow(private val context: Context) {
             addText(container, detail, 12f, Ui.TextSecondary, Ui.SurfaceSoft, dp(10))
         }
 
+        snapshot.pendingConfirmation?.let { confirmation ->
+            addConfirmation(container, confirmation)
+        }
+
         snapshot.latestMessage?.takeIf { it.isNotBlank() }?.let { message ->
             val role = if (snapshot.latestMessageRole == "assistant") "Agent" else "你"
             addSectionLabel(container, role)
@@ -564,7 +599,86 @@ class AgentFloatingWindow(private val context: Context) {
                 dp(8)
             )
         }
-        scrollView?.post { scrollView?.fullScroll(View.FOCUS_DOWN) }
+        scrollView?.post {
+            if (snapshot.pendingConfirmation != null) {
+                scrollView?.scrollTo(0, 0)
+            } else {
+                scrollView?.fullScroll(View.FOCUS_DOWN)
+            }
+        }
+    }
+
+    private fun addConfirmation(
+        container: LinearLayout,
+        confirmation: AgentOverlayConfirmation
+    ) {
+        val card = LinearLayout(context).apply {
+            orientation = LinearLayout.VERTICAL
+            background = Ui.rounded(context, Ui.SurfaceSoft, 12, Ui.Warning)
+            setPadding(dp(10), dp(10), dp(10), dp(8))
+            contentDescription = "需要确认：${confirmation.title}"
+        }
+        card.addView(TextView(context).apply {
+            text = "需要你的确认"
+            textSize = 11f
+            setTypeface(null, Typeface.BOLD)
+            setTextColor(Ui.Warning)
+        })
+        card.addView(TextView(context).apply {
+            text = confirmation.title
+            textSize = 14f
+            setTypeface(null, Typeface.BOLD)
+            setTextColor(Ui.TextPrimary)
+            setPadding(0, dp(4), 0, dp(4))
+        })
+        card.addView(TextView(context).apply {
+            text = confirmation.message
+            textSize = 12f
+            setTextColor(Ui.TextPrimary)
+            setTextIsSelectable(true)
+            setPadding(0, 0, 0, dp(8))
+        })
+
+        val buttonRow = LinearLayout(context).apply {
+            orientation = if (confirmation.buttons.size <= 2) {
+                LinearLayout.HORIZONTAL
+            } else {
+                LinearLayout.VERTICAL
+            }
+            gravity = Gravity.END
+        }
+        confirmation.buttons.forEachIndexed { index, button ->
+            val action = actionButton(button.label, "确认：${button.label}") {
+                selectConfirmation(button.id)
+            }
+            val params = if (confirmation.buttons.size <= 2) {
+                LinearLayout.LayoutParams(0, dp(40), 1f)
+            } else {
+                LinearLayout.LayoutParams(
+                    LinearLayout.LayoutParams.MATCH_PARENT,
+                    dp(40)
+                )
+            }
+            if (index > 0) {
+                if (confirmation.buttons.size <= 2) params.marginStart = dp(4)
+                else params.topMargin = dp(4)
+            }
+            buttonRow.addView(action, params)
+        }
+        card.addView(buttonRow)
+        container.addView(card, LinearLayout.LayoutParams(
+            LinearLayout.LayoutParams.MATCH_PARENT,
+            LinearLayout.LayoutParams.WRAP_CONTENT
+        ).apply { bottomMargin = dp(6) })
+    }
+
+    private fun selectConfirmation(buttonId: String) {
+        val callback = confirmationResult
+        confirmationResult = null
+        pendingConfirmation = null
+        snapshot = snapshot.copy(pendingConfirmation = null)
+        renderSnapshot()
+        callback?.invoke(buttonId)
     }
 
     private fun addSectionLabel(container: LinearLayout, text: String) {

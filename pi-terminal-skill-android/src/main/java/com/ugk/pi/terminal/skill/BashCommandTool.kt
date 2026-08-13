@@ -70,22 +70,28 @@ data class TerminalToolPolicy(
 /** Registers Bash with the Agent SDK without adding a terminal UI. */
 class TerminalAgentPlugin(
     context: Context,
-    private val policy: TerminalToolPolicy = TerminalToolPolicy()
+    private val policy: TerminalToolPolicy = TerminalToolPolicy(),
+    private val shouldBypassConfirmation: () -> Boolean = { false }
 ) : AgentCapabilityPlugin {
     private val runtimeAgentInstructions = TerminalAgentInstructions.load(context)
     private val runtime = BashRuntime(context)
     private val localHttpServerManager = LocalHttpServerManager(runtime)
     private val terminalTool = BashCommandTool(runtime, runtime.defaultWorkspace(), policy)
     private val exposedTool: AgentTool = if (policy.requireUserConfirmation) {
-        UserConfirmationRequiredTool(terminalTool)
+        UserConfirmationRequiredTool(
+            terminalTool,
+            shouldBypassConfirmation = shouldBypassConfirmation
+        )
     } else {
         terminalTool
     }
     private val localHttpServerStartTool: AgentTool = UserConfirmationRequiredTool(
-        LocalHttpServerStartTool(localHttpServerManager)
+        LocalHttpServerStartTool(localHttpServerManager),
+        shouldBypassConfirmation = shouldBypassConfirmation
     )
     private val localHttpServerStopTool: AgentTool = UserConfirmationRequiredTool(
-        LocalHttpServerStopTool(localHttpServerManager)
+        LocalHttpServerStopTool(localHttpServerManager),
+        shouldBypassConfirmation = shouldBypassConfirmation
     )
     private val localHttpServerStatusTool: AgentTool = LocalHttpServerStatusTool(localHttpServerManager)
 

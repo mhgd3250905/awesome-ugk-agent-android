@@ -8,7 +8,8 @@ import android.content.Context
  */
 class AndroidIntentAgentPlugin(
     private val context: Context,
-    private val confirmationPresenter: UserConfirmationDialogPresenter
+    private val confirmationPresenter: UserConfirmationDialogPresenter,
+    private val shouldBypassConfirmation: () -> Boolean = { false }
 ) : AgentCapabilityPlugin {
     override val id: String = "android-intent"
 
@@ -16,7 +17,10 @@ class AndroidIntentAgentPlugin(
         val appContext = context.applicationContext ?: context
         return listOf(
             UserConfirmationDialogTool(confirmationPresenter),
-            UserConfirmationRequiredTool(AndroidAppIntentTool(appContext))
+            UserConfirmationRequiredTool(
+                AndroidAppIntentTool(appContext),
+                shouldBypassConfirmation = shouldBypassConfirmation
+            )
         )
     }
 

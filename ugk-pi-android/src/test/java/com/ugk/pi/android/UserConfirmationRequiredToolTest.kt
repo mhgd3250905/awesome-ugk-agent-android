@@ -24,6 +24,24 @@ class UserConfirmationRequiredToolTest {
     }
 
     @Test
+    fun executesDelegateWhenConfirmationBypassIsEnabled() = runBlocking {
+        val delegate = RecordingTool()
+        val tool = UserConfirmationRequiredTool(
+            delegate,
+            shouldBypassConfirmation = { true }
+        )
+
+        val result = tool.execute(
+            ToolCall("intent-1", tool.name, JsonObject(emptyMap())),
+            ToolExecutionContext(sessionId = "s1")
+        )
+
+        assertFalse(result.isError)
+        assertEquals("executed", result.content)
+        assertTrue(delegate.executed)
+    }
+
+    @Test
     fun executesDelegateWhenPreviousToolResultConfirmed() = runBlocking {
         val delegate = RecordingTool()
         val tool = UserConfirmationRequiredTool(delegate)

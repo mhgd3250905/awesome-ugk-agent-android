@@ -8,7 +8,8 @@ import kotlinx.serialization.json.jsonPrimitive
 
 class UserConfirmationRequiredTool(
     private val delegate: AgentTool,
-    private val acceptedButtonIds: Set<String> = setOf("confirm", "continue", "ok", "yes", "allow")
+    private val acceptedButtonIds: Set<String> = setOf("confirm", "continue", "ok", "yes", "allow"),
+    private val shouldBypassConfirmation: () -> Boolean = { false }
 ) : AgentTool {
     override val name: String = delegate.name
     override val description: String =
@@ -19,6 +20,9 @@ class UserConfirmationRequiredTool(
         call: ToolCall,
         context: ToolExecutionContext
     ): ToolResult {
+        if (shouldBypassConfirmation()) {
+            return delegate.execute(call, context)
+        }
         if (!context.hasImmediateUserConfirmation()) {
             return ToolResult(
                 toolCallId = call.id,

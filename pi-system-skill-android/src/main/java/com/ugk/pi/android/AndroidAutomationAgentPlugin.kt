@@ -15,7 +15,8 @@ class AndroidAutomationAgentPlugin(
     context: Context,
     private val confirmationPresenter: UserConfirmationDialogPresenter,
     private val accessibilityServiceComponent: ComponentName,
-    private val accessibilityStateProvider: AndroidAccessibilityServiceStateProvider
+    private val accessibilityStateProvider: AndroidAccessibilityServiceStateProvider,
+    private val shouldBypassConfirmation: () -> Boolean = { false }
 ) : AgentCapabilityPlugin {
     private val appContext = context.applicationContext ?: context
 
@@ -29,9 +30,18 @@ class AndroidAutomationAgentPlugin(
             stateProvider = accessibilityStateProvider
         ),
         UserConfirmationDialogTool(confirmationPresenter),
-        UserConfirmationRequiredTool(AndroidLaunchAppTool(appContext)),
-        UserConfirmationRequiredTool(AndroidAppIntentTool(appContext)),
-        UserConfirmationRequiredTool(AndroidAccessibilitySettingsTool(appContext))
+        UserConfirmationRequiredTool(
+            AndroidLaunchAppTool(appContext),
+            shouldBypassConfirmation = shouldBypassConfirmation
+        ),
+        UserConfirmationRequiredTool(
+            AndroidAppIntentTool(appContext),
+            shouldBypassConfirmation = shouldBypassConfirmation
+        ),
+        UserConfirmationRequiredTool(
+            AndroidAccessibilitySettingsTool(appContext),
+            shouldBypassConfirmation = shouldBypassConfirmation
+        )
     )
 
     override fun skills(): List<AndroidSkill> = listOf(
