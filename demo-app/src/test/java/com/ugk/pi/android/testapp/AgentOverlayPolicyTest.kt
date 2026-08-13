@@ -10,14 +10,12 @@ class AgentOverlayPolicyTest {
     fun foregroundNeverShowsOverlay() {
         assertFalse(
             AgentOverlayPolicy.shouldShowOnPause(
-                agentRunActive = true,
                 overlayPermissionGranted = true,
                 activityResumed = true,
             ),
         )
         assertFalse(
             AgentOverlayPolicy.shouldShowOnPause(
-                agentRunActive = false,
                 overlayPermissionGranted = false,
                 activityResumed = true,
             ),
@@ -25,10 +23,9 @@ class AgentOverlayPolicyTest {
     }
 
     @Test
-    fun backgroundRunningAuthorizedShowsOverlay() {
+    fun backgroundAuthorizedShowsOverlayEvenWhenIdle() {
         assertTrue(
             AgentOverlayPolicy.shouldShowOnPause(
-                agentRunActive = true,
                 overlayPermissionGranted = true,
                 activityResumed = false,
             ),
@@ -36,19 +33,17 @@ class AgentOverlayPolicyTest {
     }
 
     @Test
-    fun missingPermissionOrInactiveRunHidesOverlay() {
+    fun missingPermissionOrForegroundActivityHidesOverlay() {
         assertFalse(
             AgentOverlayPolicy.shouldShowOnPause(
-                agentRunActive = true,
                 overlayPermissionGranted = false,
                 activityResumed = false,
             ),
         )
         assertFalse(
             AgentOverlayPolicy.shouldShowOnPause(
-                agentRunActive = false,
                 overlayPermissionGranted = true,
-                activityResumed = false,
+                activityResumed = true,
             ),
         )
     }

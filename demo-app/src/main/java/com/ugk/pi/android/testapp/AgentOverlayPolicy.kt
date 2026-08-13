@@ -34,14 +34,17 @@ data class AgentOverlaySnapshot(
 object AgentOverlayPolicy {
 
     /**
-     * Returns true only while the activity is not foreground, an agent run is
-     * active, and the system overlay permission has been granted.
+     * Returns true while the host activity is in the background and the
+     * system overlay permission has been granted.
+     *
+     * The overlay is intentionally not tied to an active Agent run. An idle
+     * capsule is still useful as a cross-app entry point for starting a new
+     * message, and it makes the background behavior predictable.
      */
     fun shouldShowOnPause(
-        agentRunActive: Boolean,
         overlayPermissionGranted: Boolean,
         activityResumed: Boolean,
-    ): Boolean = !activityResumed && agentRunActive && overlayPermissionGranted
+    ): Boolean = !activityResumed && overlayPermissionGranted
 
     /**
      * Returns true when a running agent needs a non-blocking permission prompt.

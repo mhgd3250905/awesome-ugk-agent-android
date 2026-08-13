@@ -147,11 +147,9 @@ class MainActivity : Activity() {
     }
 
     private fun showFloatingWindowIfNeeded() {
-        // A background Agent run must not crash the host when the user has
-        // declined the SYSTEM_ALERT_WINDOW permission. The Activity itself
-        // remains the safe fallback while the run continues.
+        // The overlay is a background entry point even when no Agent run is
+        // active. Without permission, the Activity remains the safe fallback.
         if (AgentOverlayPolicy.shouldShowOnPause(
-                agentRunActive = runJob?.isActive == true || runState.isBusy,
                 overlayPermissionGranted = Settings.canDrawOverlays(this),
                 activityResumed = false
             )
@@ -1281,10 +1279,8 @@ class MainActivity : Activity() {
 }
 
 internal fun shouldShowFloatingWindowOnPause(
-    agentRunActive: Boolean,
     overlayPermissionGranted: Boolean
 ): Boolean = AgentOverlayPolicy.shouldShowOnPause(
-    agentRunActive = agentRunActive,
     overlayPermissionGranted = overlayPermissionGranted,
     activityResumed = false
 )

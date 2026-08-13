@@ -9,9 +9,8 @@ import org.junit.runner.RunWith
 @RunWith(AndroidJUnit4::class)
 class MainActivityLifecyclePolicyInstrumentedTest {
     @Test
-    fun backgroundFloatingWindowRequiresActiveRunAndOverlayPermission() {
-        assertFalse(shouldShowFloatingWindowOnPause(agentRunActive = true, overlayPermissionGranted = false))
-        assertFalse(shouldShowFloatingWindowOnPause(agentRunActive = false, overlayPermissionGranted = true))
-        assertTrue(shouldShowFloatingWindowOnPause(agentRunActive = true, overlayPermissionGranted = true))
+    fun backgroundFloatingWindowRequiresOverlayPermissionNotActiveRun() {
+        assertFalse(shouldShowFloatingWindowOnPause(overlayPermissionGranted = false))
+        assertTrue(shouldShowFloatingWindowOnPause(overlayPermissionGranted = true))
     }
 }

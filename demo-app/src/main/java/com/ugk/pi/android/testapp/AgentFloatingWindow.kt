@@ -427,7 +427,18 @@ class AgentFloatingWindow(private val context: Context) {
             )
         }
         if (container.childCount == 0) {
-            addText(container, "等待 Agent 状态更新", 12f, Ui.TextSecondary, null, dp(8))
+            addText(
+                container,
+                if (snapshot.isBusy) {
+                    "等待 Agent 状态更新"
+                } else {
+                    "当前没有运行中的任务\n可以直接在这里发送消息"
+                },
+                12f,
+                Ui.TextSecondary,
+                null,
+                dp(8)
+            )
         }
         scrollView?.post { scrollView?.fullScroll(View.FOCUS_DOWN) }
     }
