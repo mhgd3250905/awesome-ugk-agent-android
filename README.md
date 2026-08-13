@@ -13,6 +13,7 @@ Android Agent Runtime SDK：提供通用 Agent 工具循环、Android Skill，�
 - v1 不支持、不打包、不宣称 Node.js、Git、OpenSSH、jq。
 - Runtime 无 UI，不要求安装 Termux 或第二个 App；它与宿主共享 Android UID，不是安全沙箱。
 - `pi-system-skill-android` 提供白名单 Android 原生 Intent Tool；打开网页、相机、拨号、地图、分享等动作不通过终端执行。
+- `demo-app` 当前开发版本为 `0.2.0`（`versionCode 2`）；聊天过程、会话管理和跨 App 悬浮窗的当前验收以 [`docs/demo-app-ui-redesign.md`](docs/demo-app-ui-redesign.md) 为准。
 
 ## 模块
 
@@ -48,7 +49,9 @@ $env:JAVA_HOME = 'E:\Android\Android Studio\jbr'
 - [`docs/terminal-runtime-validation.md`](docs/terminal-runtime-validation.md)：验证矩阵和命令；
 - [`docs/terminal-runtime-troubleshooting.md`](docs/terminal-runtime-troubleshooting.md)：踩坑与修复；
 - [`docs/terminal-runtime-decisions.md`](docs/terminal-runtime-decisions.md)：正式决策；
-- [`docs/terminal-runtime-release-checklist.md`](docs/terminal-runtime-release-checklist.md)：发布清单。
+- [`docs/terminal-runtime-release-checklist.md`](docs/terminal-runtime-release-checklist.md)：发布清单；
+- [`docs/demo-app-ui-redesign.md`](docs/demo-app-ui-redesign.md)：demo-app 聊天、过程、输入和悬浮窗的当前交互基线与验收记录；
+- [`docs/demo-app-version-ledger.md`](docs/demo-app-version-ledger.md)：demo-app 版本、变更和验收台账。
 
 历史过程记录保存在 [`docs/archive/`](docs/archive/) 中，不作为当前状态依据。
 

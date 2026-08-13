@@ -99,7 +99,7 @@ v1 Terminal Core Profile：Bash、curl、OpenSSL、SQLite、CPython 3.14.6；Nod
 |------|------|
 | `MainActivity.kt` | 主界面：对话 UI + AgentRuntime 构建 + skill instructions |
 | `AgentAccessibilityService.kt` | 无障碍服务，静态 `instance` 给 Tool 使用 |
-| `AgentFloatingWindow.kt` | 可拖动悬浮窗，Agent 运行时叠加在任意 app 上 |
+| `AgentFloatingWindow.kt` | 可拖动、缩放的跨 App 悬浮窗；按过程到最终回答的时间线展示 Agent 状态 |
 | `ScreenReadUiTreeTool.kt` | 读 UI 树（跳过自身 overlay，最多 200 node） |
 | `ScreenPerformActionTool.kt` | nodeId 粒度操作：click/scroll/set_text |
 | `ScreenLaunchAppTool.kt` | 按 package name 启动 app |
