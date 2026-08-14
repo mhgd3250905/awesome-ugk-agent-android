@@ -97,6 +97,21 @@ signature 不能直接作为人工维护的稳定 API 数量；Kotlin 编译器�
 - `0.1.0` 是当前开发阶段用于本地/临时 consumer 验证的坐标，不是正式发布承诺；不能据此推断 API、ABI、运行时行为或升级兼容性。
 - Core SDK 版本与 Demo `0.2.1 / versionCode 3` 分开管理，本步骤不因 inventory 结果提升任何版本。
 
+### 轻量版本策略（当前持续开发阶段）
+
+- SDK 版本唯一事实源是 `ugk-pi-android/build.gradle.kts` 的 `MavenPublication.version`；当前 `0.1.0` 只是开发期消费坐标。
+- `scripts/sdk/verify-core-consumer.ps1` 中的 `ArtifactVersion` 是验收参数，不是第二个版本源；未来准备候选版本时，必须在同一提交同步更新 publication、脚本默认值和文档。
+- 内部修复、测试、文档和架构整理不 bump；准备对外候选版本时，向后兼容的稳定性/安全修复使用 patch，新增公开能力或 `0.x` 阶段的有意破坏性调整使用 minor，并提供迁移说明。
+- 只有完成稳定公共 API 分层、正式分发和兼容性承诺后，才考虑 `1.0.0`；`1.x` 之后的破坏性 API 调整才使用 major。
+- Demo 只维护自己的 `demo-app/build.gradle.kts` 中的 `versionCode/versionName`：SDK 内部修复不自动触发 Demo bump，只有 Demo 可安装交付物或用户可感知行为变化时才提升 Demo 版本。
+- `ugk-terminal-runtime` 的原生依赖/CMake 版本和 Demo 版本均不属于 Core SDK publication 版本。
+
+### 正式发布的触发条件与当前边界
+
+当前只要求 Release AAR、POM/Module Metadata、临时隔离 Maven consumer、Core 单元测试和必要的 API surface inventory 通过；不建立永久 consumer、远程仓库、签名体系或强制 API/ABI baseline。
+
+只有同时出现真实长期外部 consumer 或正式分发承诺、完成稳定 API 分层、确定兼容承诺并具备至少一个旧版本升级回归场景时，才把 API/ABI baseline 提升为 release-candidate gate。该 gate 只阻断候选发布，不阻断日常 Debug 开发；Core API gate 也不混入 Terminal Runtime 的 ELF/page-size gate。
+
 ### 基线决策
 
 当前阶段采用“只记录、暂不强制”的 API/ABI 基线策略。原因是 Core 的公开面仍在快速收敛，且目前只有

@@ -326,3 +326,20 @@ git diff --check
 - 不引入 Coordinator、TicketStore、runId 或新的生产 API；不改变 ticket 字段、有效期、bypass 和 delegate 执行逻辑。
 
 验证结果：Core 定向单元测试、Core/Demo 单元测试、Demo AndroidTest 编译均通过；修复后 Demo 真机 `connectedDebugAndroidTest` 14/14 通过；当前 Debug APK 已重新安装并启动。独立子线程审核确认该方案属于 v1 有界修复，不需要提前引入 Runtime sequence API。
+
+## SDK-OPT-010：SDK 版本与外部发布边界收口
+
+状态：已审查，文档收口完成并提交
+
+审查结论：
+- SDK publication 版本唯一事实源是 `ugk-pi-android/build.gradle.kts`；当前 `0.1.0` 仍是开发期消费坐标，不因本轮架构整改提升版本。
+- `verify-core-consumer.ps1` 的 `ArtifactVersion` 只是验收参数；未来 bump 时必须和 publication、文档在同一提交更新，不能演变为第二个版本源。
+- SDK 与 Demo 独立维护：SDK 内部修复不自动触发 `demo-app` 的 `versionCode/versionName` 变化；Demo 只有在可安装交付物或用户可感知行为变化时才递增。
+- 当前只保留 Release AAR/POM/Module Metadata、临时 Maven consumer、Core 单测和必要 inventory 作为消费门槛；暂不引入远程仓库、签名、BOM、统一版本目录、永久 consumer、API/ABI baseline 或多模块同步版本。
+- API/ABI baseline 仅在真实长期外部 consumer/正式分发、稳定 API 分层、兼容承诺和至少一个升级回归场景同时具备后，作为 release-candidate gate 引入，不阻断日常 Debug 开发，也不与 Terminal Runtime 原生 Gate 混合。
+
+版本变化规则：内部修复/测试/文档/架构整理不 bump；正式候选中的向后兼容修复使用 patch；新增公开能力或 `0.x` 阶段有意破坏性调整使用 minor；完成稳定公共 API、正式分发和兼容承诺后才考虑 `1.0.0`。
+
+实现范围：仅更新 `docs/sdk-core-consumer-contract.md`、`docs/README.md` 和本台账；不修改 `build.gradle.kts`、版本号、验收脚本、生产 API 或发布基础设施。
+
+验证结果：全模块单元测试、`:ugk-pi-android:bundleReleaseAar`、`scripts/sdk/verify-core-consumer.ps1` 和 `git diff --check` 通过；本步不产生版本 bump。
