@@ -92,3 +92,18 @@
 审核边界：本步没有解决同一 Plugin 实例被多个 Runtime 共享时的所有权治理，没有把 Runtime
 关闭自动绑定到每个 `Flow` 的取消，也没有解决跨 Activity 重建时进程级 Coordinator 与旧 Runtime
 的所有权迁移；这些保留为后续架构议题，不在当前稳定迭代扩大范围。
+
+## SDK-OPT-003：ScreenAutomationBackend 演进接缝
+
+状态：已审查，延后实施；无代码提交
+
+审查结论：该方向架构上成立，但当前不适合直接落地。
+
+延后原因：
+
+- `ScreenReadUiTreeTool` 和 `ScreenPerformActionTool` 已包含工作树中尚未提交的稳定性修复。
+- 当前最小 Backend 接缝仍需要同时改动两个 Tool 和 `MainActivity`，无法在本轮可靠地区分新改动与既有用户改动。
+- 当前只有一个 Demo 宿主，尚未出现必须独立消费 Screen 能力的第二个真实宿主。
+- 子线程试做的新增接口、Demo adapter、测试和接入 hunk 已全部撤销，未进入提交或版本发布。
+
+后续触发条件：Screen Tool 当前行为先稳定，或出现第二个真实宿主/外部独立消费需求后，再以“先接口、后逐个 Tool 迁移”的顺序重新实施。重新启动前必须先建立可恢复的差异边界，并单独验证 UI 树 JSON、节点回收、动作错误和确认流程。
