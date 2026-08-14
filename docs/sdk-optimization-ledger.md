@@ -247,3 +247,22 @@ SessionStore 重构、事件关联改造或跨 Runtime 的 Plugin 所有权治�
 接收结论：接收本步骤的“事实审查 + 轻量只读检查”结果，不接收当前阶段强制 API/ABI baseline。
 后续触发条件是出现正式外部 consumer、正式分发承诺、完成公共 API 分层，或需要验证一次跨版本
 兼容性时，再把 baseline 提升为发布 gate。
+
+## SDK-OPT-008：高影响操作确认票据协议设计
+
+状态：协议设计已固化，主线程审查通过；尚未进入生产代码实现
+
+目标：在不引入半成品跨模块代码的前提下，先解决当前确认机制只校验最近
+`selectedButtonId`、无法绑定目标 Tool 和输入的问题，为下一步一次性实现提供明确契约。
+
+设计结论：
+- 确认请求必须携带 `target.toolName` 和完整 `target.input`；确认发生时目标 Tool 通常尚未执行，不能靠后续 Tool 调用推断授权对象。
+- 确认结果保留 `selectedButtonId`，新增带 `version/sessionId/toolName/inputFingerprint/nonce/issuedAtEpochMillis/expiresAtEpochMillis` 的 ticket。
+- `inputFingerprint` 使用版本化 canonical JSON + SHA-256；对象键排序、数组顺序、数字规范化和无法规范化时的拒绝语义已固定。
+- 受保护 Tool 默认要求同一 Session、同一 Tool、同一输入摘要、未过期且紧邻的确认结果；缺字段、拒绝、过期、错配和重复使用均 fail-closed。
+- v1 的一次性语义依赖 Runtime 工具结果顺序；跨进程或排队确认若未来需要持久化防重放，必须另行引入共享 TicketStore 和协议版本。
+- `shouldBypassConfirmation` 仍是宿主显式 full authorization 旁路，不生成或伪造 ticket。
+
+兼容边界：旧的 `selectedButtonId` 结果可以保留给非受保护确认调用；受保护 Tool 默认拒绝无 target/ticket 的旧结果。旧构造函数可在迁移期保留，但不能据此执行受保护操作。
+
+本步只新增协议文档，不修改 Core、System、Terminal、Demo、runtime AGENTS 或版本配置。下一步实现必须覆盖 Core 单测、System/Terminal Tool 测试、Demo instrumentation 和真机确认/取消/过期/重试场景；如果实现需要 Runtime Coordinator、持久化 TicketStore 或新的 runId，必须先拆出独立决策。
