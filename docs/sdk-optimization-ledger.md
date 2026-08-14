@@ -181,3 +181,30 @@ AgentSession '<sessionId>' is already running.
 
 审核边界：本步只解决同一 `AgentSession` 的运行互斥和释放，不引入 `runId`、`RunHandle`、
 SessionStore 重构、事件关联改造或跨 Runtime 的 Plugin 所有权治理。
+
+## SDK-OPT-006：Core 外部消费者边界验收
+
+状态：已实现，主线程审查通过并提交
+
+目标：以最小、可复现的方式证明 `:ugk-pi-android` 可以独立生成 Release publication，并被一个只声明 Core artifact 的外部 Android consumer 编译和打包；不新增永久 consumer module，不改生产 Core API。
+
+实现范围：
+- 新增 `scripts/sdk/verify-core-consumer.ps1`，在 `build/sdk-core-consumer/<随机目录>` 下临时生成 Maven repository 和最小 Android library consumer，脚本结束后默认清理。
+- 脚本执行 `generatePomFileForReleasePublication`、`bundleReleaseAar`、`publishReleasePublicationToMavenLocal`，但通过临时 `maven.repo.local` 隔离全局 `mavenLocal()`。
+- 校验 publication 坐标、AAR 必要条目、无 native `.so`，以及 POM/Gradle Module Metadata 的完整依赖集合。
+- 外部 consumer 仅声明 `com.ugk.pi:ugk-pi-android:0.1.0`，引用 `AgentRuntime`、`AgentSession` 和 `LLMProvider`，执行 `:consumer:assembleDebug`。
+- 新增 `docs/sdk-core-consumer-contract.md`，记录当前坐标、依赖边界、验收命令和未覆盖风险。
+
+当前已验证依赖：`kotlinx-coroutines-core:1.7.3`、`kotlinx-serialization-json:1.4.0`、`kotlin-stdlib:2.2.21`；未发现 Demo、Terminal 或其它 `pi-*` 模块依赖。
+
+验证命令：
+```powershell
+.\scripts\sdk\verify-core-consumer.ps1
+```
+
+结果：通过。临时 publication、POM/Module Metadata/AAR 校验通过，外部 consumer `:consumer:assembleDebug` 通过；脚本修正 fixture 的 Java/Kotlin JVM target 后无生产代码变更。脚本执行期间首次发现并修复了 fixture 自身的 JVM target 配置问题，不能算 Core 缺陷。
+
+边界与未覆盖项：
+- 不建立永久消费者模块，不升 Demo 或 Maven 版本，不承诺 `0.1.0` 为正式发布版本。
+- 未建立 API/ABI baseline、远程仓库发布、签名校验和多 AGP/Kotlin 兼容矩阵。
+- 未验证真实第三方业务端到端运行；本步证明的是 artifact、依赖图和最小 Android 编译消费边界。
