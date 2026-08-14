@@ -266,3 +266,17 @@ SessionStore 重构、事件关联改造或跨 Runtime 的 Plugin 所有权治�
 兼容边界：旧的 `selectedButtonId` 结果可以保留给非受保护确认调用；受保护 Tool 默认拒绝无 target/ticket 的旧结果。旧构造函数可在迁移期保留，但不能据此执行受保护操作。
 
 本步只新增协议文档，不修改 Core、System、Terminal、Demo、runtime AGENTS 或版本配置。下一步实现必须覆盖 Core 单测、System/Terminal Tool 测试、Demo instrumentation 和真机确认/取消/过期/重试场景；如果实现需要 Runtime Coordinator、持久化 TicketStore 或新的 runId，必须先拆出独立决策。
+
+## SDK-OPT-009A：Core-only 绑定确认票据
+
+状态：已实现，主线程审查通过并提交
+
+实现范围：
+- Core 增加 `UserConfirmationTarget`、`UserConfirmationTicket` 和共享的 `canonical-json-v1` SHA-256 输入摘要实现。
+- `UserConfirmationDialogTool` 从 `ToolExecutionContext.sessionId` 和确认请求 target 生成 120 秒、至少 128 bit nonce 的 ticket；旧请求缺少 target 时仍可返回普通选择结果，但不生成受保护 ticket。
+- `UserConfirmationRequiredTool` 默认 fail-closed，校验最后一条 confirmation ToolResult、允许按钮、ticket version/session/tool/input fingerprint、nonce 和时间窗口；显式 `shouldBypassConfirmation` 仍可旁路。
+- 未引入 TicketStore、Coordinator、runId、System/Terminal/Demo 代码或版本变更；v1 一次性语义依赖 Runtime 的紧邻 ToolResult 顺序。
+
+新增回归覆盖：同目标成功、对象键顺序稳定、数组顺序敏感、数字/布尔/null 规范化、Tool/Session/输入错配、过期、拒绝按钮、缺失/非法 ticket、目标缺失、一次性复用和 bypass。
+
+验证结果：confirmation 定向测试、`:ugk-pi-android:testDebugUnitTest` 和 `git diff --check` 均通过。本步不执行真机测试，因为没有改变 Android 宿主或实际 Tool 实现；真机验收留给 009C。
