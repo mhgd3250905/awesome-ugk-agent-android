@@ -5,6 +5,7 @@ import kotlinx.coroutines.runBlocking
 import kotlinx.serialization.json.JsonObject
 import org.junit.Assert.assertEquals
 import org.junit.Assert.assertTrue
+import org.junit.Assert.fail
 import org.junit.Test
 
 class AgentCapabilityPluginTest {
@@ -27,8 +28,26 @@ class AgentCapabilityPluginTest {
         )
     }
 
-    private class TestPlugin : AgentCapabilityPlugin {
+    @Test
+    fun builderFailsFastWhenPluginsRegisterDuplicateToolNames() {
+        val builder = AgentRuntime.Builder()
+            .llmProvider(RecordingProvider())
+            .register(TestPlugin())
+
+        val error = try {
+            builder.register(TestPlugin(id = "second-plugin"))
+            fail("Expected duplicate plugin Tool registration to fail")
+            error("unreachable")
+        } catch (error: IllegalArgumentException) {
+            error
+        }
+
+        assertEquals("Tool name already registered: 'plugin_probe'", error.message)
+    }
+
+    private class TestPlugin(
         override val id: String = "test-plugin"
+    ) : AgentCapabilityPlugin {
 
         override fun tools(): List<AgentTool> = listOf(ProbeTool())
 

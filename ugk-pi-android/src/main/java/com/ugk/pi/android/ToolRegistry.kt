@@ -5,6 +5,9 @@ class ToolRegistry {
 
     fun register(tool: AgentTool): ToolRegistry {
         require(tool.name.isNotBlank()) { "Tool name must not be blank" }
+        require(tool.name !in tools) {
+            "Tool name already registered: '${tool.name}'"
+        }
         tools[tool.name] = tool
         return this
     }

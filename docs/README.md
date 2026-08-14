@@ -38,6 +38,7 @@
 | [terminal-runtime-release-checklist.md](terminal-runtime-release-checklist.md) | 发布前必须逐项关闭的技术、许可证和接入检查 |
 | [demo-app-ui-redesign.md](demo-app-ui-redesign.md) | demo-app 聊天、过程、输入和跨 App 悬浮窗的当前交互基线 |
 | [demo-app-version-ledger.md](demo-app-version-ledger.md) | demo-app 版本、变更范围和验收台账 |
+| [sdk-optimization-ledger.md](sdk-optimization-ledger.md) | SDK 架构优化步骤、验证结果和版本影响台账 |
 
 ## 快速阅读顺序
 
