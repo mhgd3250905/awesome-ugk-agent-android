@@ -73,9 +73,20 @@ class ScreenPerformActionTool(
             )
 
         val ownPackage = service.packageName
-        val pathParts = nodeId.split(".")
-        val rootIdx = pathParts.firstOrNull()?.toIntOrNull() ?: 0
-        val childPath = pathParts.drop(1).joinToString(".")
+        val parsedPath = parseScreenNodePath(nodeId)
+        if (parsedPath == null) {
+            // A malformed or missing nodeId must never fall back to window 0:
+            // the model would act on an unrelated node while believing it
+            // targeted the one it read.
+            return ToolResult(
+                toolCallId = call.id,
+                name = name,
+                content = "Invalid nodeId '$nodeId'. Use a nodeId exactly as returned by screen_read_ui_tree, e.g. '0.1.2'.",
+                isError = true
+            )
+        }
+        val rootIdx = parsedPath.rootIndex
+        val childPath = parsedPath.childIndices.joinToString(".")
 
         Log.d(TAG, "execute: nodeId=$nodeId action=$action rootIdx=$rootIdx childPath=$childPath")
 
@@ -114,7 +125,7 @@ class ScreenPerformActionTool(
         Log.d(TAG, "execute: targetRoot.pkg=${targetRoot.packageName}")
 
         try {
-            val node = if (childPath.isEmpty()) targetRoot else findNodeByPath(targetRoot, childPath)
+            val node = if (childPath.isEmpty()) targetRoot else findNodeByPath(targetRoot, parsedPath.childIndices)
             try {
                 if (node == null) {
                     Log.e(TAG, "execute: node not found for path=$childPath in root with ${targetRoot.childCount} children")
@@ -165,19 +176,13 @@ class ScreenPerformActionTool(
         }
     }
 
-    private fun findNodeByPath(root: AccessibilityNodeInfo, path: String): AccessibilityNodeInfo? {
-        // Every segment must be a plain child index. Silently dropping an
-        // invalid segment would resolve a different node than the caller
-        // asked for, so a malformed path resolves to nothing.
-        val indices = path.split(".").map { segment ->
-            segment.toIntOrNull() ?: return null
-        }
-        if (indices.isEmpty()) return null
+    private fun findNodeByPath(root: AccessibilityNodeInfo, path: List<Int>): AccessibilityNodeInfo? {
+        if (path.isEmpty()) return null
 
         var current: AccessibilityNodeInfo = root
         var ownsCurrent = false
         try {
-            for (idx in indices) {
+            for (idx in path) {
                 val child = current.getChild(idx) ?: return null
                 if (ownsCurrent) {
                     current.recycle()
@@ -193,4 +198,25 @@ class ScreenPerformActionTool(
             }
         }
     }
+}
+
+/** Strictly parsed form of a screen_read_ui_tree nodeId such as "0.1.2". */
+internal data class ScreenNodePath(
+    val rootIndex: Int,
+    val childIndices: List<Int>
+)
+
+/**
+ * Parses a nodeId into its window index and child indices. Every segment
+ * must be a non-negative decimal integer; malformed paths (including blank
+ * input) resolve to nothing so they can never silently target another node.
+ */
+internal fun parseScreenNodePath(nodeId: String): ScreenNodePath? {
+    val trimmed = nodeId.trim()
+    if (trimmed.isEmpty()) return null
+    val segments = trimmed.split(".")
+    if (segments.any { segment -> segment.toIntOrNull() == null }) return null
+    val indices = segments.map { it.toInt() }
+    if (indices.any { it < 0 }) return null
+    return ScreenNodePath(rootIndex = indices.first(), childIndices = indices.drop(1))
 }

@@ -264,8 +264,11 @@ object AndroidAppIntentFactory {
 
     private fun safeGeoUri(value: String): String? {
         val trimmed = value.trim()
-        val uri = runCatching { Uri.parse(trimmed) }.getOrNull() ?: return null
-        if (!trimmed.isSafeText() || uri.scheme?.lowercase() != "geo") return null
+        // Pure-JVM scheme check: android.net.Uri is not available in JVM unit
+        // tests, and runCatching around it would silently reject every geo URI
+        // there.
+        if (!trimmed.isSafeText()) return null
+        if (!trimmed.lowercase().startsWith("geo:")) return null
         return trimmed
     }
 
@@ -302,7 +305,13 @@ object AndroidAppIntentFactory {
             EMAIL_RECIPIENT.matches(this)
     }
 
-    private val DIAL_CHARACTER = Regex("[0-9+()\\-.,\\s]+")
+    /**
+     * Dial input grammar: digits, DTMF '*', global-number '+', visual
+     * separators and a literal space. Only these characters may enter a
+     * tel:/smsto: URI unencoded; '#', '?', '&', ':' and control characters
+     * are structural or invalid in URIs and are rejected.
+     */
+    private val DIAL_CHARACTER = Regex("[0-9+*()\\-., ]+")
     private val EMAIL_RECIPIENT = Regex("[A-Za-z0-9._%+\\-]+@[A-Za-z0-9.\\-]+")
 
     /**
@@ -323,7 +332,7 @@ object AndroidAppIntentFactory {
             if (isUnreserved) {
                 output.append(code.toChar())
             } else {
-                output.append('%').append("%02X".format(code))
+                output.append('%').append(String.format(java.util.Locale.ROOT, "%02X", code))
             }
         }
         return output.toString()
