@@ -208,3 +208,42 @@ SessionStore 重构、事件关联改造或跨 Runtime 的 Plugin 所有权治�
 - 不建立永久消费者模块，不升 Demo 或 Maven 版本，不承诺 `0.1.0` 为正式发布版本。
 - 未建立 API/ABI baseline、远程仓库发布、签名校验和多 AGP/Kotlin 兼容矩阵。
 - 未验证真实第三方业务端到端运行；本步证明的是 artifact、依赖图和最小 Android 编译消费边界。
+
+## SDK-OPT-007：Core API/ABI 稳定性与版本策略审查
+
+状态：已审查，延期强制 baseline；轻量只读 inventory 已实现并验证通过
+
+目标：确认 `:ugk-pi-android` 当前 Release AAR 的实际 public API/ABI 规模、publication/version 约束，
+并判断当前是否适合引入强制 API/ABI compatibility gate。
+
+事实审查结果：
+- Release AAR 的 `classes.jar` 包含 74 个 class 文件、44 个顶层 class 文件。
+- `javap -public` 发现 60 个 public type declarations；排除 `AgentRuntimeKt` 和 `*DefaultImpls` 后，
+  当前源码消费者可见类型按审查口径为 57 个。
+- `javap -public` 发现 519 个 public member signature；其中包含 Kotlin data class、默认参数、
+  `componentN`、`copy$default` 和 `access$` 等编译器生成成员，不能直接当作人工稳定 API 数量。
+- 主要公开面覆盖 Runtime/Session/Event/Message、Tool/Plugin、Provider/HTTP、AndroidSkill/SessionStore、
+  以及 UserConfirmation 类型，尚未完成稳定 API 分层。
+- `ugk-pi-android/build.gradle.kts` 当前只配置 release publication，坐标为
+  `com.ugk.pi:ugk-pi-android:0.1.0`；没有 API/ABI 插件、baseline、远程发布或签名约束。
+
+实现范围：
+- 新增 `scripts/sdk/inspect-core-api-surface.ps1`，读取已有 Release AAR，临时提取 `classes.jar`，
+  使用 JDK `jar`/`javap` 输出可复现的 class/type/member inventory。
+- 脚本默认仅清理自己在 `build/sdk-api-surface/<随机目录>` 下创建的临时目录，可用 `-KeepWorkDir`
+  保留现场；不写生产源码、publication 配置或永久 consumer module。
+- 文档明确 `0.1.0` 是开发阶段验证坐标，不是正式发布承诺；Core 版本与 Demo `0.2.1 / versionCode 3`
+  分开管理。
+
+验证命令与结果：
+```powershell
+.\gradlew.bat :ugk-pi-android:bundleReleaseAar --console=plain
+.\scripts\sdk\inspect-core-api-surface.ps1
+```
+
+结果：AAR 构建通过；inventory 脚本通过并输出上述统计；未引入 API/ABI 插件、baseline 文件、
+永久 consumer、生产依赖或版本变化。
+
+接收结论：接收本步骤的“事实审查 + 轻量只读检查”结果，不接收当前阶段强制 API/ABI baseline。
+后续触发条件是出现正式外部 consumer、正式分发承诺、完成公共 API 分层，或需要验证一次跨版本
+兼容性时，再把 baseline 提升为发布 gate。
