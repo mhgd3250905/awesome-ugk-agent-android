@@ -5,6 +5,7 @@ import com.ugk.pi.android.AgentTool
 import com.ugk.pi.android.ToolCall
 import com.ugk.pi.android.ToolExecutionContext
 import com.ugk.pi.android.ToolResult
+import kotlinx.coroutines.delay
 import kotlinx.serialization.json.JsonObject
 import kotlinx.serialization.json.buildJsonObject
 import kotlinx.serialization.json.contentOrNull
@@ -67,7 +68,9 @@ class ScreenLaunchAppTool(
             } else {
                 launchIntent.addFlags(android.content.Intent.FLAG_ACTIVITY_NEW_TASK)
                 service.startActivity(launchIntent)
-                Thread.sleep(1500)
+                // delay keeps the wait cooperative: a cancelled run stops
+                // here instead of blocking a shared worker thread.
+                delay(1500)
                 Log.d(TAG, "execute: launched $packageName ok")
                 ToolResult(
                     toolCallId = call.id,

@@ -56,9 +56,6 @@ class ScreenReadUiTreeTool(
         fun serializeNode(node: AccessibilityNodeInfo, depth: Int, path: String) {
             if (nodeCount >= maxNodes || depth > maxDepth) return
             val nodePkg = node.packageName?.toString()
-            if (depth == 0 && nodePkg != null && nodePkg != ownPackage) {
-                detectedPackage = nodePkg
-            }
             if (nodePkg == ownPackage) {
                 for (i in 0 until node.childCount) {
                     node.getChild(i)?.let { child ->
@@ -122,16 +119,26 @@ class ScreenReadUiTreeTool(
         try {
             if (allWindows.isNotEmpty()) {
                 var rootIdx = 0
+                var activePackage: String? = null
                 for (win in allWindows) {
                     val root = win.root ?: continue
                     val winPkg = root.packageName?.toString()
                     Log.d(TAG, "execute: win[$rootIdx].pkg=$winPkg childCount=${root.childCount}")
                     if (winPkg == ownPackage) continue
+                    // Report the package of the window the user is actually
+                    // interacting with, not whichever non-own window the
+                    // iteration saw last (status bar, IME, dialogs).
+                    if (win.isActive && winPkg != null) {
+                        activePackage = winPkg
+                    }
                     if (detectedPackage == "unknown") {
                         detectedPackage = winPkg ?: "unknown"
                     }
                     serializeNode(root, 0, "$rootIdx")
                     rootIdx++
+                }
+                if (activePackage != null) {
+                    detectedPackage = activePackage
                 }
             } else {
                 Log.w(TAG, "execute: no windows, using rootInActiveWindow fallback")

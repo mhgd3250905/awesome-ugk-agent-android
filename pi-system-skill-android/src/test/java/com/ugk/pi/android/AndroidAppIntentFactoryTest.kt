@@ -78,4 +78,55 @@ class AndroidAppIntentFactoryTest {
 
         assertTrue(AndroidAppIntentFactory.supportedTargets.containsAll(expectedTargets))
     }
+
+    @Test
+    fun openMapAcceptsMultiWordQueries() {
+        val spec = AndroidAppIntentFactory.specFor("open_map", mapOf("query" to "coffee shop"))
+
+        assertEquals(Intent.ACTION_VIEW, spec?.action)
+        assertEquals("geo:0,0?q=coffee%20shop", spec?.dataUri)
+    }
+
+    @Test
+    fun openMapEncodesNonAsciiQueries() {
+        assertEquals(
+            "geo:0,0?q=%E5%8C%97%E4%BA%AC%E7%81%AB%E8%BD%A6%E7%AB%99",
+            AndroidAppIntentFactory.specFor("open_map", mapOf("query" to "北京火车站"))?.dataUri
+        )
+    }
+
+    @Test
+    fun openMapRejectsControlCharactersInQuery() {
+        assertNull(AndroidAppIntentFactory.specFor("open_map", mapOf("query" to "caf\u0000e")))
+        assertNull(AndroidAppIntentFactory.specFor("open_map", mapOf("query" to "   ")))
+    }
+
+    @Test
+    fun dialPhoneRejectsUriRestructuringInput() {
+        assertEquals(
+            "tel:+1 (555) 123-4567",
+            AndroidAppIntentFactory.specFor(
+                "dial_phone",
+                mapOf("phone_number" to "+1 (555) 123-4567")
+            )?.dataUri
+        )
+        assertNull(
+            AndroidAppIntentFactory.specFor(
+                "dial_phone",
+                mapOf("phone_number" to "123;call?to=456")
+            )
+        )
+        assertNull(AndroidAppIntentFactory.specFor("dial_phone", mapOf("phone_number" to "\u0001")))
+    }
+
+    @Test
+    fun sendEmailRejectsHeaderInjectionRecipients() {
+        assertNull(
+            AndroidAppIntentFactory.specFor(
+                "send_email",
+                mapOf("to" to "a@b.com?bcc=attacker@c.com")
+            )
+        )
+        assertNull(AndroidAppIntentFactory.specFor("send_email", mapOf("to" to "not an email")))
+    }
 }

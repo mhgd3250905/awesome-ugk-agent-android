@@ -103,13 +103,56 @@ object DemoActivityState {
 
     /** Keep runtime history bounded even before it is persisted to JSON. */
     internal fun boundSession(value: AgentSession) {
-        val system = value.messages.filterIsInstance<AgentMessage.System>().take(1)
-        val tail = value.messages
-            .filterNot { it is AgentMessage.System }
-            .takeLast(MAX_SESSION_MESSAGES - system.size)
-            .map(::compactMessage)
+        val system = value.messages.filterIsInstance<AgentMessage.System>().take(1).map(::compactMessage)
+        val nonSystem = value.messages.filterNot { it is AgentMessage.System }
+        val budget = (MAX_SESSION_MESSAGES - system.size).coerceAtLeast(1)
+        val trimmed = if (nonSystem.size <= budget) nonSystem else trimAtSafeBoundaries(nonSystem, budget)
         value.messages.clear()
-        value.messages.addAll(system.map(::compactMessage) + tail)
+        value.messages.addAll(system + trimmed.map(::compactMessage))
+    }
+
+    /**
+     * Bounds [messages] without breaking the transcript invariants that model
+     * providers enforce on the next request: the first message must be a user
+     * message, every assistant tool_use must keep its tool_result, and no
+     * orphaned tool_result may survive without its assistant envelope.
+     *
+     * A naive tail cut can split an assistant envelope from its results, which
+     * makes every later request on that session fail with a provider 400. The
+     * cut therefore only ever happens on whole groups: a user message, or an
+     * assistant envelope together with all of its consecutive tool results.
+     */
+    private fun trimAtSafeBoundaries(messages: List<AgentMessage>, budget: Int): List<AgentMessage> {
+        val lastUserIndex = messages.indexOfLast { it is AgentMessage.User }
+        if (lastUserIndex < 0) {
+            // No user message at all; keep whole trailing groups only.
+            return trailingWholeGroups(messages, budget)
+        }
+        if (messages.size - lastUserIndex <= budget) {
+            return messages.subList(lastUserIndex, messages.size)
+        }
+        // The current turn alone exceeds the budget. Keep its user message and
+        // as many complete assistant/tool groups after it as fit.
+        val tail = trailingWholeGroups(
+            messages.subList(lastUserIndex + 1, messages.size),
+            budget - 1
+        )
+        return listOf(messages[lastUserIndex]) + tail
+    }
+
+    /** Collects whole groups from the end of [messages] within [budget]. */
+    private fun trailingWholeGroups(messages: List<AgentMessage>, budget: Int): List<AgentMessage> {
+        val result = ArrayList<AgentMessage>()
+        var end = messages.size
+        while (end > 0 && result.size < budget) {
+            var start = end - 1
+            while (start > 0 && messages[start] is AgentMessage.Tool) start--
+            val group = messages.subList(start, end)
+            if (result.size + group.size > budget) break
+            result.addAll(0, group)
+            end = start
+        }
+        return result
     }
 
     private fun compactMessage(message: AgentMessage): AgentMessage = when (message) {

@@ -177,18 +177,22 @@ object AndroidAppIntentFactory {
             )
 
             "record_audio" -> AndroidAppIntentSpec(MediaStore.Audio.Media.RECORD_SOUND_ACTION)
-            "dial_phone" -> AndroidAppIntentSpec(
-                action = Intent.ACTION_DIAL,
-                dataUri = "tel:${parameters["phone_number"].orEmpty()}"
-            )
+            "dial_phone" -> dialDataUri("tel", parameters["phone_number"])?.let { dataUri ->
+                AndroidAppIntentSpec(
+                    action = Intent.ACTION_DIAL,
+                    dataUri = dataUri
+                )
+            }
 
-            "send_sms" -> AndroidAppIntentSpec(
-                action = Intent.ACTION_SENDTO,
-                dataUri = "smsto:${parameters["phone_number"].orEmpty()}",
-                extras = mapOf("sms_body" to parameters["message"].orEmpty())
-            )
+            "send_sms" -> dialDataUri("smsto", parameters["phone_number"])?.let { dataUri ->
+                AndroidAppIntentSpec(
+                    action = Intent.ACTION_SENDTO,
+                    dataUri = dataUri,
+                    extras = mapOf("sms_body" to parameters["message"].orEmpty())
+                )
+            }
 
-            "send_email" -> parameters["to"]?.takeIf { it.isNotBlank() }?.let { to ->
+            "send_email" -> parameters["to"]?.takeIf { it.isValidEmailRecipient() }?.let { to ->
                 AndroidAppIntentSpec(
                     action = Intent.ACTION_SENDTO,
                     dataUri = "mailto:$to",
@@ -208,8 +212,8 @@ object AndroidAppIntentFactory {
 
             "open_map" -> {
                 val geoUri = parameters["geo_uri"]?.let(::safeGeoUri)
-                    ?: parameters["query"]?.takeIf { it.isNotBlank() && it.isSafeText() }?.let { query ->
-                        "geo:0,0?q=${Uri.encode(query)}"
+                    ?: parameters["query"]?.takeIf { it.isEncodableQueryText() }?.let { query ->
+                        "geo:0,0?q=${encodeQueryComponent(query)}"
                     }
                 geoUri?.let {
                     AndroidAppIntentSpec(
@@ -267,6 +271,62 @@ object AndroidAppIntentFactory {
 
     private fun String.isSafeText(): Boolean {
         return isNotBlank() && none { it.isWhitespace() || it.isISOControl() }
+    }
+
+    /**
+     * Free-text query that will be percent-encoded into the geo search
+     * parameter. Whitespace is expected here ("coffee shop"); only control
+     * characters and blank text are rejected.
+     */
+    private fun String.isEncodableQueryText(): Boolean {
+        return isNotBlank() && none { it.isISOControl() }
+    }
+
+    /**
+     * Builds the data URI for dial/smsto targets. A missing number keeps the
+     * historical empty form so the dialer still opens; a non-blank number is
+     * accepted only when it consists of digits and visual separators, so
+     * agent-supplied text cannot restructure the URI ('?', '&', '#', ':' and
+     * control characters are rejected).
+     */
+    private fun dialDataUri(scheme: String, rawNumber: String?): String? {
+        val number = rawNumber?.trim()
+        if (number.isNullOrEmpty()) return "$scheme:"
+        return if (DIAL_CHARACTER.matches(number)) "$scheme:$number" else null
+    }
+
+    /** Blocks mailto header/query injection from an agent-supplied recipient. */
+    private fun String.isValidEmailRecipient(): Boolean {
+        return isNotBlank() &&
+            none { it.isWhitespace() || it.isISOControl() } &&
+            EMAIL_RECIPIENT.matches(this)
+    }
+
+    private val DIAL_CHARACTER = Regex("[0-9+()\\-.,\\s]+")
+    private val EMAIL_RECIPIENT = Regex("[A-Za-z0-9._%+\\-]+@[A-Za-z0-9.\\-]+")
+
+    /**
+     * Percent-encodes [value] for a URI query component without relying on
+     * android.net.Uri, so the factory stays unit-testable on the JVM.
+     */
+    private fun encodeQueryComponent(value: String): String {
+        val output = StringBuilder(value.length)
+        value.toByteArray(Charsets.UTF_8).forEach { byte ->
+            val code = byte.toInt() and 0xff
+            val isUnreserved = code in 0x41..0x5a ||
+                code in 0x61..0x7a ||
+                code in 0x30..0x39 ||
+                code == '-'.code ||
+                code == '_'.code ||
+                code == '.'.code ||
+                code == '~'.code
+            if (isUnreserved) {
+                output.append(code.toChar())
+            } else {
+                output.append('%').append("%02X".format(code))
+            }
+        }
+        return output.toString()
     }
 }
 
