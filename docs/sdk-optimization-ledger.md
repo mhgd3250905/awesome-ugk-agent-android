@@ -350,15 +350,15 @@ git diff --check
 
 封存结论：
 - 当前 Core publication 保持 `com.ugk.pi:ugk-pi-android:0.1.0`，Demo 保持 `0.2.1 / versionCode 3`；既有 `demo-app-v0.2.1` 标签不移动、不覆盖。
-- 将此前已完成但尚未提交的实现、测试、构建配置模板和验证记录保存为独立 Git checkpoint；父提交完整 SHA 为 `641847b0f1c4d1da5e62c395a50f632d5f29a2ba`，保存点标签为 `sdk-stabilization-baseline-2026-08-14`，该标签不是发布标签。
-- 本记录只代表指定 commit/工作树上的内部测试基线，不代表 SDK 或 Demo 正式发布，不提供 API/ABI 兼容承诺；测试证据必须在 checkpoint 提交后重新绑定，不能把父提交或 dirty worktree 当作最终证据。
+- 将此前已完成但尚未提交的实现、测试、构建配置模板和验证记录保存为独立 Git checkpoint；父提交完整 SHA 为 `641847b0f1c4d1da5e62c395a50f632d5f29a2ba`，source checkpoint 为 `28bc352622458d29e090656ae42fd32f057e9196`，保存点标签为 `sdk-stabilization-baseline-2026-08-14`，该标签不是发布标签。
+- 本记录只代表指定 commit/工作树上的内部测试基线，不代表 SDK 或 Demo 正式发布，不提供 API/ABI 兼容承诺；关键测试已在 `28bc352622458d29e090656ae42fd32f057e9196` 的干净工作树重新执行，不能把父提交或 dirty worktree 当作最终证据。
 - `.kotlin/` 临时缓存和被 Git 忽略的 `local.properties` 不进入版本保存；API key 不进入源码、文档或提交。
 - 本阶段冻结架构边界，后续只接受可复现回归、P0/P1 缺陷和验证阻断修复；不提前引入模块拆分、Coordinator、TicketStore 或 API/ABI baseline。
 
 验证快照：
 - 全模块单元测试、Demo Debug 构建、Core Release AAR、Core 外部消费检查和 `git diff --check` 通过。
 - `SM-A526U1`（Android 14/API 34、`arm64-v8a`、4 KB page）上的 Demo `connectedDebugAndroidTest` 为 `14/14` 通过；测试结束后已重新安装并启动 APK，未见 `FATAL EXCEPTION`、`UnsatisfiedLinkError` 或 `BadTokenException`。
-- Runtime Probe 为 A `9/10`、B `4/5`；唯一失败是设备当前 VPN/网络无上游导致 `example.com` DNS 失败，不归因于本地 Runtime 能力。
+- Runtime Probe 为 A `9/10`、B `4/5`；A 的 `curl` 为 `Could not resolve host: example.com`，B 为 `Resolving timed out after 15000 milliseconds`，均由设备当前 VPN/网络无上游导致，不归因于本地 Runtime 能力；因此双 Probe 网络 Gate 仍未通过。
 
 稳定化阶段的详细测试矩阵、已知未覆盖范围、冻结规则和退出条件见 [`sdk-stabilization-baseline.md`](sdk-stabilization-baseline.md)。当前仍未完成 16 KB page size、真实 Provider 端到端、Activity 生命周期和人工无障碍操作的完整证据；在这些证据补齐前，不宣称架构整改完成或全设备兼容。
 

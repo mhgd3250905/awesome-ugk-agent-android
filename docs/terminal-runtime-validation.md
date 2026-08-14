@@ -2,7 +2,7 @@
 
 更新时间：2026-08-14
 验证源码：`D:\AII\ugk-android`
-注意：以下结果是当前工作树的证据；未提交工作树必须在发布前重新绑定到明确 commit。
+注意：本轮最新物理设备结果绑定到 source checkpoint `28bc352622458d29e090656ae42fd32f057e9196`，验证时工作树干净；更改源码后的未提交工作树必须在发布前重新绑定到明确 commit。
 
 ## 1. 环境变量
 
@@ -187,9 +187,9 @@ $env:ANDROID_SERIAL = 'R5CRB11B2AW'
   --console=plain
 ```
 
-- `:demo-app:connectedDebugAndroidTest`：`14/14` 通过；当前 `demo-app` APK 为 `versionCode 3` / `versionName 0.2.1`，使用固定 Debug 签名覆盖安装，未卸载或清空用户数据。
+- `:demo-app:connectedDebugAndroidTest`：`14/14` 通过；当前 `demo-app` APK 为 `versionCode 3` / `versionName 0.2.1`。Instrumentation 执行期间由 Gradle 管理测试 APK 安装生命周期；结束后已使用 `adb install -r` 重新安装并启动 Demo，未把测试过程误记为用户数据保留。
 - `terminal-probe-demo-a`：`9/10` 通过；`terminal-probe-demo-b`：`4/5` 通过。除联网用例外的 Runtime、本地 HTTP、进程控制、Python/SQLite/OpenSSL 等本地能力均通过。
-- 两个未通过用例均为 `https://example.com` 联网测试。设备当时由 VPN 接管默认网络，`wlan0` 无 carrier、无可用外网路由，DNS/ICMP 均失败；这是测试环境阻塞，不判定为 Runtime 本地能力失败。
+- 两个未通过用例均为 `https://example.com` 联网测试：Probe A 为 `curl (6) Could not resolve host`，Probe B 为 `curl (28) Resolving timed out after 15000 milliseconds`。设备当时由 VPN 接管默认网络，`wlan0` 无 carrier、无可用外网路由，DNS/ICMP 均失败；这是测试环境阻塞，不判定为 Runtime 本地能力失败，双 Probe 网络 Gate 仍保持未通过。
 - 该轮还修正了 probe A 对 `TerminalAgentPlugin.tools()` 使用 `.single()` 的过时假设，并同步刷新了 CPython manifest 的锁文件摘要与大小。
 
 ## 15. 未覆盖矩阵

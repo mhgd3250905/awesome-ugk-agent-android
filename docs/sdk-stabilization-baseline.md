@@ -44,10 +44,19 @@
 
 上述结果只证明列出的设备、构建形态和网络条件，不外推到其他 Android 版本、page size、Provider 或宿主生命周期。
 
+关键验证工件：
+
+- Debug APK：`demo-app/build/outputs/apk/debug/demo-app-debug.apk`，SHA-256 `CD00EEBDAA372BBE118DE8D5C2F61E8A9ED08296E5B10377265BC3C65A06798D`。
+- Demo instrumentation XML：`demo-app/build/outputs/androidTest-results/connected/debug/TEST-SM-A526U1 - 14-_demo-app-.xml`，SHA-256 `616F07BE1F8C8063F91D83529911F84E839F28B3F6436C88BBACC429C2BD8C9C`。
+- Probe A XML：`terminal-probe-demo-a/build/outputs/androidTest-results/connected/debug/TEST-SM-A526U1 - 14-_terminal-probe-demo-a-.xml`，SHA-256 `FF0DF42937A349A47E3620B2309C309376B763B49C8DEFD8ABADC17E024F8492`。
+- Probe B XML：`terminal-probe-demo-b/build/outputs/androidTest-results/connected/debug/TEST-SM-A526U1 - 14-_terminal-probe-demo-b-.xml`，SHA-256 `2A87DDBB22455F19F02D6E8015471C26BAAF736A7AF546574B1DFB911E84FCB4`。
+- 启动日志未单独落盘；验证命令读取 `adb logcat -d -t 500`，未发现 `FATAL EXCEPTION`、`UnsatisfiedLinkError` 或 `BadTokenException`。
+
 ## 提交绑定
 
 - `641847b0f1c4d1da5e62c395a50f632d5f29a2ba`：本步骤开始前的父提交；不包含本次尚未封存的工作树改动。
-- 稳定化 checkpoint：本文件所在的版本保存提交；提交完成后从该提交重新执行关键验证，再以验证记录提交绑定最终标签。
+- `28bc352622458d29e090656ae42fd32f057e9196`：稳定化 source checkpoint；所有关键验证均在该提交、干净工作树上重新执行。
+- 本文件及台账的后续文档绑定提交只改变记录，不改变已验证生产代码；最终 `sdk-stabilization-baseline-2026-08-14` 标签应指向包含这些记录的最终文档提交。
 - `demo-app-v0.2.1` 指向历史 Demo 版本 `5e94c8adcdc6a8f5bb3a85037f8350ce7edb1e8c`，与当前开发线相差 13 个提交；不移动、不覆盖。
 
 本记录的最终保存提交、验证提交和 `sdk-stabilization-baseline-2026-08-14` 标签指向，必须以 Git 实际输出为准；若后续提交改变生产代码，必须重新执行关键验证，不能沿用本记录。
