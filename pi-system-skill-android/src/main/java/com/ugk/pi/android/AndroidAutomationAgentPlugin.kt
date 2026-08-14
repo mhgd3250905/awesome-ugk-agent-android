@@ -57,6 +57,7 @@ class AndroidAutomationAgentPlugin(
             Treat Android system state, app discovery, app launch, AccessibilityService state, and screen actions as separate capabilities.
             Use find_android_app to resolve a human app name to an exact packageName; do not guess package names.
             Use launch_android_app or launch_android_app_intent to open another app; never use terminal_bash_execute, am, or pm for app launch.
+            Before each protected launch or accessibility-settings action, call show_user_confirmation_dialog with target.toolName set to the exact next protected Tool name and target.input set to that Tool's complete JSON input. Invoke the next Tool with the identical name and input. selectedButtonId only records the button choice; it does not authorize a protected Tool by itself, and a missing or mismatched target ticket must be treated as not authorized.
             Cross-app screen reading and clicking require get_android_accessibility_status to report readyForScreenAutomation=true.
             If accessibility is disabled, call open_android_accessibility_settings, tell the user to enable the service manually, and wait for a new status check.
             After launching an app or performing a screen action, call screen_read_ui_tree again and verify the observed state before claiming success.

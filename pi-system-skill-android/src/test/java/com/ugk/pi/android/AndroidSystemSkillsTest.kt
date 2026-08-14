@@ -1,6 +1,7 @@
 package com.ugk.pi.android
 
 import org.junit.Assert.assertEquals
+import org.junit.Assert.assertFalse
 import org.junit.Assert.assertTrue
 import org.junit.Test
 
@@ -22,6 +23,7 @@ class AndroidSystemSkillsTest {
         )
         assertTrue(skill.instructions.contains("readyForScreenAutomation=true"))
         assertTrue(skill.instructions.contains("guess a package name"))
+        assertBoundConfirmationInstructions(skill.instructions)
     }
 
     @Test
@@ -42,6 +44,7 @@ class AndroidSystemSkillsTest {
             skill.methods.map { it.toolName }.toSet()
         )
         assertTrue(skill.instructions.contains("show_user_confirmation_dialog"))
+        assertBoundConfirmationInstructions(skill.instructions)
     }
 
     @Test
@@ -57,5 +60,14 @@ class AndroidSystemSkillsTest {
         assertTrue(skill.instructions.contains("native Intent resolver"))
         assertTrue(skill.instructions.contains("Do not use terminal_bash_execute"))
         assertTrue(skill.instructions.contains("open_url"))
+        assertBoundConfirmationInstructions(skill.instructions)
+    }
+
+    private fun assertBoundConfirmationInstructions(instructions: String) {
+        assertTrue(instructions.contains("target.toolName"))
+        assertTrue(instructions.contains("target.input"))
+        assertTrue(instructions.contains("selectedButtonId only records"))
+        assertTrue(instructions.contains("does not authorize a protected Tool by itself"))
+        assertFalse(instructions.contains("continue only after a confirming selectedButtonId"))
     }
 }

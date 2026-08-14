@@ -80,8 +80,15 @@ class LocalHttpServerToolTest {
         val skill = localHttpServerSkill()
 
         assertTrue(skill.instructions.contains("local_http_server_start"))
+        assertTrue(skill.instructions.contains("local_http_server_stop"))
         assertTrue(skill.instructions.contains("do not write nohup"))
         assertTrue(skill.instructions.contains("127.0.0.1"))
+        assertTrue(skill.instructions.contains("target.toolName"))
+        assertTrue(skill.instructions.contains("target.input"))
+        assertTrue(skill.instructions.contains("selectedButtonId only records"))
+        assertTrue(skill.instructions.contains("does not authorize a protected Tool by itself"))
+        assertTrue(skill.instructions.contains("local_http_server_status is read-only"))
+        assertTrue(skill.instructions.contains("launch_android_app_intent"))
         assertEquals(
             setOf("local_http_server_start", "local_http_server_status", "local_http_server_stop"),
             skill.methods.map { it.toolName }.toSet()

@@ -280,3 +280,15 @@ SessionStore 重构、事件关联改造或跨 Runtime 的 Plugin 所有权治�
 新增回归覆盖：同目标成功、对象键顺序稳定、数组顺序敏感、数字/布尔/null 规范化、Tool/Session/输入错配、过期、拒绝按钮、缺失/非法 ticket、目标缺失、一次性复用和 bypass。
 
 验证结果：confirmation 定向测试、`:ugk-pi-android:testDebugUnitTest` 和 `git diff --check` 均通过。本步不执行真机测试，因为没有改变 Android 宿主或实际 Tool 实现；真机验收留给 009C。
+
+## SDK-OPT-009B：System/Terminal confirmation instructions 迁移
+
+状态：已实现，主线程审查通过并提交
+
+实现范围：
+- 更新 System 的 Intent/Automation/权限设置 instructions，要求受保护 Tool 在下一次调用前通过 `show_user_confirmation_dialog` 提供 `target.toolName` 与完整 `target.input`，并以相同名称和输入执行下一次 Tool。
+- 更新 Terminal 的 `terminal_bash_execute`、`local_http_server_start`、`local_http_server_stop` 以及后续 `launch_android_app_intent` 的 instructions；保留 Bash、网络、loopback、服务管理和用户确认边界。
+- 明确 `selectedButtonId` 仅表示按钮选择，不能单独构成授权；状态查询等只读 Tool 不需要确认票据。
+- 未修改 Core、Demo、runtime `AGENTS.md`、Tool 执行逻辑、bypass、权限、Runtime、build.gradle、版本或既有用户未提交文件；未新增生产抽象。
+
+验证结果：System/Terminal 定向单元测试、全 SDK 单元回归、`demo-app:assembleDebug` 和 `git diff --check` 均通过。Demo 真机确认迁移留给 009C。

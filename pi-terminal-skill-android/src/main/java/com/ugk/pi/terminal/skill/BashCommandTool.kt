@@ -399,7 +399,7 @@ class BashCommandTool(
 
 fun terminalBashSkill(policy: TerminalToolPolicy = TerminalToolPolicy()): AndroidSkill {
     val confirmationRule = if (policy.requireUserConfirmation) {
-        "This host requires an immediate user confirmation before terminal_bash_execute."
+        "This host requires an immediate user confirmation before terminal_bash_execute. Call show_user_confirmation_dialog first with target.toolName set to terminal_bash_execute and target.input set to the complete JSON input for the exact next call, then call terminal_bash_execute with the identical input. selectedButtonId only records the dialog button choice; it does not authorize a protected Tool by itself."
     } else {
         "This host has explicitly disabled the terminal confirmation wrapper."
     }
@@ -411,6 +411,7 @@ fun terminalBashSkill(policy: TerminalToolPolicy = TerminalToolPolicy()): Androi
             This tool runs a real Bash executable packaged inside the host APK. It is not a terminal UI.
             The host injects the SDK runtime AGENTS.md as a global system instruction. Treat that document as the authoritative environment contract for this tool.
             $confirmationRule
+            When confirmation is enabled, the target binding must cover the complete input, including script, workingDirectory, timeoutMillis, and environment values when present. Never reuse a confirmation for a different command, workspace path, timeout, environment, or network request.
 
             Pass Bash source directly as the script. Do not invoke bash, bash -c, sh, or sh -c as a child command because this tool is already running Bash. Use non-interactive scripts only. Work only in the provided app-private workspace; use relative workingDirectory values such as projects/demo.
             The process runs with the host app's Android UID. It is not a security sandbox and must never be treated as a way to protect host secrets from an untrusted model.
@@ -451,8 +452,9 @@ fun localHttpServerSkill(): AndroidSkill {
             Use the prebuilt local_http_server_start tool when the user asks to serve or preview files from the terminal workspace.
             The server is implemented by the SDK with the packaged CPython runtime and binds only to 127.0.0.1; do not write nohup, disown, setsid, or a shell background daemon yourself.
             The directory must already exist inside the terminal workspace. Use local_http_server_status to verify that the service is listening, and local_http_server_stop when the user asks to stop it or the temporary service is no longer needed.
-            local_http_server_start and local_http_server_stop require the normal user confirmation flow; local_http_server_status is read-only and does not require confirmation.
-            The returned URL is browser-visible only on the same Android device. Use launch_android_app_intent with target open_url to hand it to the browser, after a separate user confirmation for that external Intent.
+            local_http_server_start and local_http_server_stop require the normal user confirmation flow. Before each protected call, call show_user_confirmation_dialog with target.toolName set to the exact next Tool name and target.input set to its complete JSON input, then invoke that Tool with the identical name and input. For local_http_server_start, bind the exact directory and any explicitly supplied port; if the next input relies on the default port, omit port in both inputs. For local_http_server_stop, bind the exact port. local_http_server_status is read-only and does not require confirmation or a ticket.
+            The returned URL is browser-visible only on the same Android device. Use launch_android_app_intent with target open_url to hand it to the browser, after a separate confirmation whose target.toolName is launch_android_app_intent and whose target.input exactly matches the next Intent input, including the actual URL. The confirmation target object is separate from any protected Tool input's own target field.
+            selectedButtonId only records the dialog button choice; it does not authorize a protected Tool by itself. The same target binding rule applies to any other protected Tool used in this workflow.
         """.trimIndent(),
         methods = listOf(
             AndroidSkillMethod(

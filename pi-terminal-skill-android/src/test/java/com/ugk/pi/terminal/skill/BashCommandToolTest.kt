@@ -27,6 +27,16 @@ import kotlinx.coroutines.runBlocking
 
 class BashCommandToolTest {
     @Test
+    fun terminalSkillRequiresAnExactBoundConfirmationTarget() {
+        val instructions = terminalBashSkill().instructions
+
+        assertTrue(instructions.contains("target.toolName"))
+        assertTrue(instructions.contains("target.input"))
+        assertTrue(instructions.contains("selectedButtonId only records"))
+        assertTrue(instructions.contains("does not authorize a protected Tool by itself"))
+    }
+
+    @Test
     fun executesBoundedRequestInsideRelativeWorkspace() = runBlocking {
         val workspace = Files.createTempDirectory("ugk-terminal-tool-test").toFile()
         val executor = RecordingExecutor()
