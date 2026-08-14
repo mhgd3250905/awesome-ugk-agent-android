@@ -148,6 +148,15 @@ class AndroidIntentIntegrationInstrumentedTest {
                         put("label", "取消")
                     })
                 }
+                putJsonObject("target") {
+                    put("toolName", "launch_android_app_intent")
+                    putJsonObject("input") {
+                        put("target", "open_url")
+                        putJsonObject("parameters") {
+                            put("url", "http://127.0.0.1:8787/weather.html")
+                        }
+                    }
+                }
             }
         )
     }

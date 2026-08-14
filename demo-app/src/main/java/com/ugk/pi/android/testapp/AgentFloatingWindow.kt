@@ -161,7 +161,7 @@ class AgentFloatingWindow(private val context: Context) : ConfirmationOverlayHos
         renderSnapshot()
     }
 
-    /** Render a stable, complete snapshot without imposing a text length cap. */
+    /** Render a stable, complete snapshot with bounded confirmation summaries. */
     fun bindSnapshot(value: AgentOverlaySnapshot) {
         val confirmation = pendingConfirmation ?: value.pendingConfirmation
         pendingConfirmation = confirmation
@@ -702,6 +702,22 @@ class AgentFloatingWindow(private val context: Context) : ConfirmationOverlayHos
             setTextIsSelectable(true)
             setPadding(0, 0, 0, dp(8))
         })
+        confirmation.target?.let { target ->
+            card.addView(TextView(context).apply {
+                text = "目标 Tool：${target.toolName}"
+                textSize = 12f
+                setTextColor(Ui.TextPrimary)
+                setTypeface(null, Typeface.BOLD)
+                setPadding(0, 0, 0, dp(4))
+            })
+            card.addView(TextView(context).apply {
+                text = "输入摘要：${target.inputSummary}"
+                textSize = 11f
+                setTextColor(Ui.TextSecondary)
+                setTextIsSelectable(true)
+                setPadding(0, 0, 0, dp(8))
+            })
+        }
 
         val buttonRow = LinearLayout(context).apply {
             orientation = if (confirmation.buttons.size <= 2) {

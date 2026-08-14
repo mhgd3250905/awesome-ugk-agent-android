@@ -23,6 +23,7 @@ import kotlinx.coroutines.runBlocking
 import kotlinx.serialization.json.buildJsonObject
 import kotlinx.serialization.json.put
 import kotlinx.serialization.json.putJsonArray
+import kotlinx.serialization.json.putJsonObject
 import org.junit.Assert.assertEquals
 import org.junit.Assert.assertFalse
 import org.junit.Assert.assertNotNull
@@ -44,7 +45,7 @@ class AndroidAutomationAgentIntegrationInstrumentedTest {
                 ),
                 ModelResponse(
                     content = "asking permission",
-                    toolCalls = listOf(confirmationCall())
+                    toolCalls = listOf(confirmationCall(baseContext.packageName))
                 ),
                 ModelResponse(
                     content = "launching app",
@@ -110,7 +111,7 @@ class AndroidAutomationAgentIntegrationInstrumentedTest {
         )
     }
 
-    private fun confirmationCall(): ToolCall {
+    private fun confirmationCall(packageName: String): ToolCall {
         return ToolCall(
             id = "launch-confirmation",
             name = "show_user_confirmation_dialog",
@@ -126,6 +127,12 @@ class AndroidAutomationAgentIntegrationInstrumentedTest {
                         put("id", "cancel")
                         put("label", "取消")
                     })
+                }
+                putJsonObject("target") {
+                    put("toolName", "launch_android_app")
+                    putJsonObject("input") {
+                        put("package_name", packageName)
+                    }
                 }
             }
         )

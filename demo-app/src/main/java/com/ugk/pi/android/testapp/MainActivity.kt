@@ -1306,10 +1306,12 @@ class MainActivity : Activity() {
             - swipe_up scrolls content DOWN (you see items below). swipe_down scrolls UP (you see items above).
 
             **Interacting via UI tree (when available):**
+            - Before every screen action, prepare the exact next Tool input, then call show_user_confirmation_dialog with target.toolName set to that Tool and target.input set to its complete JSON input. Invoke the next screen Tool with the identical name and input, and retry only after the user selects an accepted button. Full authorization mode may bypass this prompt.
             - Use screen_perform_action with nodeId for click, scroll, set_text.
             - Find scrollable containers (scrollable:true) and use scroll_forward/scroll_backward.
 
             **Interacting via gestures (for apps that block UI tree):**
+            - screen_gesture is an external visible action and also requires a fresh user confirmation before each call; set target.toolName to screen_gesture and target.input to the complete JSON input for that exact gesture, then invoke the identical call.
             - screen_gesture provides coordinate-based actions: tap, long_press, swipe_up, swipe_down, swipe_left, swipe_right.
             - Typical screen size is about 1080x2400 (check bounds from UI tree for your device).
             - Common coordinates: top area y=200-400, middle y=800-1200, bottom y=1600-2000.
@@ -1325,6 +1327,7 @@ class MainActivity : Activity() {
             6. Use tap at estimated coordinates to click on items.
 
             Global actions (screen_global_action, no nodeId needed):
+            - Confirm each global action immediately before calling it, with target.toolName set to screen_global_action and target.input set to the complete JSON input for that exact action; invoke the identical call after acceptance.
             - back: press the Back button
             - home: press the Home button
             - recents: open recent apps

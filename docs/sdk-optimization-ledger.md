@@ -295,7 +295,7 @@ SessionStore 重构、事件关联改造或跨 Runtime 的 Plugin 所有权治�
 
 ## SDK-OPT-009C：Demo confirmation presenter/UI 迁移
 
-状态：已实现，主线程审查通过；真机确认 UI 验收进行中
+状态：已实现，主线程审查通过并提交
 
 实现范围：
 - `UserConfirmationDialogRequest.target` 映射到 Demo overlay confirmation snapshot，保留
@@ -303,7 +303,7 @@ SessionStore 重构、事件关联改造或跨 Runtime 的 Plugin 所有权治�
 - Activity 前台 `AlertDialog` 和跨 App `AgentFloatingWindow` 均展示目标 Tool 与输入摘要；输入摘要上限为
   `MAX_CONFIRMATION_INPUT_SUMMARY_CHARS = 512`，不改变 full authorization 的旁路和生命周期行为。
 - 仅更新 `MainActivity` 中 screen action 的 instructions，要求确认 target 与下一次 Tool 的名称和完整输入完全一致。
-- 更新 Android Automation、Android Intent、Terminal 三组 Demo instrumentation confirmation helper，覆盖成功、取消和 AgentRuntime 循环的目标绑定夹具。
+- 更新 Android Automation、Android Intent、Terminal 三组 Demo instrumentation confirmation helper，覆盖成功、取消和 AgentRuntime 循环的目标绑定夹具；Terminal 循环的 `isError == false` 强断言随 009D 一并落地。
 - 未修改 Core、System、Terminal、runtime `AGENTS.md`、build.gradle、版本、权限、Activity 生命周期或既有 Screen Tool 实现。
 
 验证结果：
@@ -313,11 +313,11 @@ SessionStore 重构、事件关联改造或跨 Runtime 的 Plugin 所有权治�
 git diff --check
 ```
 
-上述命令通过；首次 `connectedDebugAndroidTest` 在 14 个测试中 12 个通过，Android Automation 和 Android Intent 各 1 个因 Core confirmation boundary 问题失败；修复后需重新执行并在提交前重新安装 APK。
+上述命令通过；首次 `connectedDebugAndroidTest` 在 14 个测试中 12 个通过，Android Automation 和 Android Intent 各 1 个因 Core confirmation boundary 问题失败。009D 修复后重新执行结果为 14/14 通过；随后已重新安装 Debug APK 并启动，日志无 `FATAL EXCEPTION`、`UnsatisfiedLinkError` 或 `BadTokenException`。
 
 ## SDK-OPT-009D：Runtime confirmation boundary integration fix
 
-状态：修复中，已由 009C 真机验收发现，待主线程验证后提交
+状态：已修复，主线程审查通过并提交
 
 问题与修复范围：
 - 真机暴露 Core 的旧判定只读取 `priorMessages.lastOrNull()`，而 `AgentRuntime` 在执行下一轮 ToolCall 前会先追加 Assistant(tool-calls) 外壳，导致确认后的 `launch_android_app` 和 `launch_android_app_intent` 被错误拒绝。
@@ -325,4 +325,4 @@ git diff --check
 - 补充 Core 的 Assistant 外壳正向/错配测试，并让 Terminal Runtime instrumentation 断言受保护 ToolResult 确实成功，避免只检查事件名称而掩盖授权失败。
 - 不引入 Coordinator、TicketStore、runId 或新的生产 API；不改变 ticket 字段、有效期、bypass 和 delegate 执行逻辑。
 
-009C 真机首次结果：14 个测试中 12 个通过；Android Automation 和 Android Intent 各 1 个因上述 Core 边界问题失败，Terminal 三项通过但原循环夹具此前未断言执行结果。修复后需重新执行 Demo connected tests 并重新安装 APK。
+验证结果：Core 定向单元测试、Core/Demo 单元测试、Demo AndroidTest 编译均通过；修复后 Demo 真机 `connectedDebugAndroidTest` 14/14 通过；当前 Debug APK 已重新安装并启动。独立子线程审核确认该方案属于 v1 有界修复，不需要提前引入 Runtime sequence API。

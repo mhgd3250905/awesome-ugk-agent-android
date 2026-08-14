@@ -283,7 +283,12 @@ class ActivityUserConfirmationDialogPresenter(
 
             val nextDialog = AlertDialog.Builder(hostActivity)
                 .setTitle(request.title)
-                .setMessage(request.message)
+                .setMessage(
+                    request.target?.let { target ->
+                        request.message + "\n\n目标 Tool：${target.toolName}" +
+                            "\n输入摘要：${target.toConfirmationInputSummary()}"
+                    } ?: request.message
+                )
                 .setCancelable(true)
                 .setView(createButtonPanel(buttons) { buttonId -> select(buttonId) })
                 .create()

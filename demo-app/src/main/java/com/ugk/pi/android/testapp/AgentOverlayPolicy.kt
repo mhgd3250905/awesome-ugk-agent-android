@@ -1,6 +1,7 @@
 package com.ugk.pi.android.testapp
 
 import com.ugk.pi.android.UserConfirmationDialogRequest
+import com.ugk.pi.android.UserConfirmationTarget
 
 /**
  * A concise process item that can be rendered by the in-app chat or the
@@ -19,18 +20,40 @@ data class AgentOverlayConfirmationButton(
     val label: String
 )
 
+data class AgentOverlayConfirmationTarget(
+    val toolName: String,
+    val inputSummary: String
+)
+
 data class AgentOverlayConfirmation(
     val title: String,
     val message: String,
-    val buttons: List<AgentOverlayConfirmationButton>
+    val buttons: List<AgentOverlayConfirmationButton>,
+    val target: AgentOverlayConfirmationTarget? = null
 )
+
+const val MAX_CONFIRMATION_INPUT_SUMMARY_CHARS = 512
+
+fun UserConfirmationTarget.toConfirmationInputSummary(): String =
+    input.toString().truncateForConfirmationDisplay(MAX_CONFIRMATION_INPUT_SUMMARY_CHARS)
 
 fun UserConfirmationDialogRequest.toOverlayConfirmation(): AgentOverlayConfirmation =
     AgentOverlayConfirmation(
         title = title,
         message = message,
-        buttons = buttons.map { AgentOverlayConfirmationButton(it.id, it.label) }
+        buttons = buttons.map { AgentOverlayConfirmationButton(it.id, it.label) },
+        target = target?.let {
+            AgentOverlayConfirmationTarget(
+                toolName = it.toolName,
+                inputSummary = it.toConfirmationInputSummary()
+            )
+        }
     )
+
+private fun String.truncateForConfirmationDisplay(maxChars: Int): String {
+    if (length <= maxChars) return this
+    return take(maxChars - 1) + '\u2026'
+}
 
 /**
  * The renderable state of the agent overlay.
