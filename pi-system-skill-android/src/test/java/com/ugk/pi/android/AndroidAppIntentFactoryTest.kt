@@ -129,4 +129,48 @@ class AndroidAppIntentFactoryTest {
         )
         assertNull(AndroidAppIntentFactory.specFor("send_email", mapOf("to" to "not an email")))
     }
+
+    @Test
+    fun sendSmsValidatesPhoneNumberLikeDial() {
+        assertEquals(
+            "smsto:+1 (555) 123-4567",
+            AndroidAppIntentFactory.specFor(
+                "send_sms",
+                mapOf("phone_number" to "+1 (555) 123-4567")
+            )?.dataUri
+        )
+        assertNull(AndroidAppIntentFactory.specFor("send_sms", mapOf("phone_number" to "123#456")))
+        assertNull(AndroidAppIntentFactory.specFor("send_sms", mapOf("phone_number" to "12\t34")))
+    }
+
+    @Test
+    fun blankNumbersKeepTheLegacyEmptyUri() {
+        assertEquals("tel:", AndroidAppIntentFactory.specFor("dial_phone", emptyMap())?.dataUri)
+        assertEquals("smsto:", AndroidAppIntentFactory.specFor("send_sms", emptyMap())?.dataUri)
+    }
+
+    @Test
+    fun dialAcceptsDtmfStarAndRejectsUriStructuralCharacters() {
+        assertEquals(
+            "tel:*21*1234",
+            AndroidAppIntentFactory.specFor("dial_phone", mapOf("phone_number" to "*21*1234"))?.dataUri
+        )
+        assertNull(AndroidAppIntentFactory.specFor("dial_phone", mapOf("phone_number" to "*21*1234#")))
+        assertNull(AndroidAppIntentFactory.specFor("dial_phone", mapOf("phone_number" to "123?x")))
+        assertNull(AndroidAppIntentFactory.specFor("dial_phone", mapOf("phone_number" to "123\n4")))
+    }
+
+    @Test
+    fun geoUriTakesPrecedenceOverQuery() {
+        assertEquals(
+            "geo:39.9,116.4",
+            AndroidAppIntentFactory.specFor(
+                "open_map",
+                mapOf(
+                    "geo_uri" to "geo:39.9,116.4",
+                    "query" to "coffee shop"
+                )
+            )?.dataUri
+        )
+    }
 }

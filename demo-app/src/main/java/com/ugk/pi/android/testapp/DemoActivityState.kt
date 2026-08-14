@@ -119,25 +119,31 @@ object DemoActivityState {
      *
      * A naive tail cut can split an assistant envelope from its results, which
      * makes every later request on that session fail with a provider 400. The
-     * cut therefore only ever happens on whole groups: a user message, or an
-     * assistant envelope together with all of its consecutive tool results.
+     * cut therefore only ever happens on whole groups — a user message, or an
+     * assistant envelope together with all of its consecutive tool results —
+     * and history is filled from the newest end so unused budget still keeps
+     * earlier turns.
      */
     private fun trimAtSafeBoundaries(messages: List<AgentMessage>, budget: Int): List<AgentMessage> {
-        val lastUserIndex = messages.indexOfLast { it is AgentMessage.User }
-        if (lastUserIndex < 0) {
-            // No user message at all; keep whole trailing groups only.
-            return trailingWholeGroups(messages, budget)
+        val kept = trailingWholeGroups(messages, budget)
+        val firstUserInKept = kept.indexOfFirst { it is AgentMessage.User }
+        if (firstUserInKept > 0) {
+            // The budget ended inside an older turn: drop that leading partial
+            // turn so the transcript starts with the user role.
+            return kept.subList(firstUserInKept, kept.size)
         }
-        if (messages.size - lastUserIndex <= budget) {
-            return messages.subList(lastUserIndex, messages.size)
-        }
-        // The current turn alone exceeds the budget. Keep its user message and
-        // as many complete assistant/tool groups after it as fit.
+        if (firstUserInKept == 0) return kept
+
+        // No user message inside the bounded window: the current turn alone is
+        // larger than the budget. Keep the user message that started it plus as
+        // many complete groups after it as fit.
+        val enclosingUserIndex = messages.indexOfLast { it is AgentMessage.User }
+        if (enclosingUserIndex < 0) return kept
         val tail = trailingWholeGroups(
-            messages.subList(lastUserIndex + 1, messages.size),
+            messages.subList(enclosingUserIndex + 1, messages.size),
             budget - 1
         )
-        return listOf(messages[lastUserIndex]) + tail
+        return listOf(messages[enclosingUserIndex]) + tail
     }
 
     /** Collects whole groups from the end of [messages] within [budget]. */

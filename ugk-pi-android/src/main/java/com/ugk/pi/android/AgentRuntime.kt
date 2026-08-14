@@ -433,7 +433,14 @@ class AgentRuntime(
         session: AgentSession,
         toolCalls: List<ToolCall>
     ) {
+        // Consider only results appended after the current envelope: providers
+        // may reuse tool-call ids across responses, and matching the whole
+        // history would then leave this envelope unrepaired.
+        val envelopeIndex = session.messages.indexOfLast {
+            it is AgentMessage.Assistant && it.toolCalls.isNotEmpty()
+        }
         val answeredIds = session.messages
+            .drop(if (envelopeIndex >= 0) envelopeIndex + 1 else 0)
             .filterIsInstance<AgentMessage.Tool>()
             .map { it.result.toolCallId }
             .toSet()

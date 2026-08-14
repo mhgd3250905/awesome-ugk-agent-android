@@ -81,6 +81,76 @@ class DemoSessionBoundedTrimTest {
         assertConversationInvariants(session.messages)
     }
 
+    @Test
+    fun `bound session stays within the message cap`() {
+        val session = AgentSession("session-cap")
+        session.messages += AgentMessage.System("system prompt")
+        session.messages += AgentMessage.User("first turn")
+        repeat(60) { turn ->
+            session.messages += AgentMessage.User("turn $turn")
+            val (envelope, result) = toolPair(turn)
+            session.messages += envelope
+            session.messages += result
+        }
+        session.messages += AgentMessage.Assistant("final answer")
+
+        DemoActivityState.boundSession(session)
+
+        assertConversationInvariants(session.messages)
+        assertTrue(
+            "trimmed session must stay within the 160 message cap " +
+                "but held ${session.messages.size}",
+            session.messages.size <= 160
+        )
+    }
+
+    @Test
+    fun `bound session keeps earlier turns when budget allows`() {
+        // 60 turns of [U, A, T]: the naive "keep only the last turn" trim
+        // would retain 3 messages; the budget has room for ~159.
+        val session = AgentSession("session-retention")
+        session.messages += AgentMessage.System("system prompt")
+        repeat(60) { turn ->
+            session.messages += AgentMessage.User("turn $turn")
+            val (envelope, result) = toolPair(turn)
+            session.messages += envelope
+            session.messages += result
+        }
+
+        DemoActivityState.boundSession(session)
+
+        assertConversationInvariants(session.messages)
+        val nonSystem = session.messages.filterNot { it is AgentMessage.System }
+        assertTrue(
+            "trim must keep earlier turns when the budget allows (kept ${nonSystem.size} messages)",
+            nonSystem.size >= 150
+        )
+    }
+
+    @Test
+    fun `bound session trims on user boundaries with interleaved pending messages`() {
+        // Mirrors AgentRuntime appending queued user messages between tool
+        // batches: [U, A, T, U, A, T, ...].
+        val session = AgentSession("session-interleaved")
+        session.messages += AgentMessage.System("system prompt")
+        repeat(80) { turn ->
+            session.messages += AgentMessage.User("turn $turn")
+            val (envelope, result) = toolPair(turn)
+            session.messages += envelope
+            session.messages += result
+        }
+        session.messages += AgentMessage.User("follow-up")
+
+        DemoActivityState.boundSession(session)
+
+        assertConversationInvariants(session.messages)
+        val nonSystem = session.messages.filterNot { it is AgentMessage.System }
+        assertTrue(
+            "the interleaved transcript must stay near the budget (kept ${nonSystem.size})",
+            nonSystem.size >= 150
+        )
+    }
+
     private fun assertConversationInvariants(messages: List<AgentMessage>) {
         val nonSystem = messages.filterNot { it is AgentMessage.System }
         assertTrue("trimmed session must keep messages", nonSystem.isNotEmpty())

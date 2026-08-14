@@ -5,6 +5,7 @@ import com.ugk.pi.android.AgentTool
 import com.ugk.pi.android.ToolCall
 import com.ugk.pi.android.ToolExecutionContext
 import com.ugk.pi.android.ToolResult
+import kotlinx.coroutines.CancellationException
 import kotlinx.coroutines.delay
 import kotlinx.serialization.json.JsonObject
 import kotlinx.serialization.json.buildJsonObject
@@ -78,6 +79,10 @@ class ScreenLaunchAppTool(
                     content = "Launched $packageName successfully."
                 )
             }
+        } catch (cancelled: CancellationException) {
+            // delay() throws when the run is cancelled; a cancelled launch
+            // wait is not a launch failure and must keep propagating.
+            throw cancelled
         } catch (e: Exception) {
             ToolResult(
                 toolCallId = call.id,
