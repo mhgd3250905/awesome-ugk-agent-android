@@ -115,13 +115,13 @@ class TerminalAgentPlugin(
     fun cancel(callId: String): Boolean = terminalTool.cancel(callId)
 
     /** Interrupts all running and queued terminal calls owned by this plugin. */
-    fun cancelAll(): Int = terminalTool.cancelAll()
+    override fun cancelAll(): Int = terminalTool.cancelAll()
 
     /** Stops services owned by this plugin instance when the host is shutting down. */
     fun stopAllLocalHttpServers(): Int = localHttpServerManager.stopAll()
 
     /** Releases Runtime-managed local services owned by this plugin instance. */
-    fun close() {
+    override fun close() {
         localHttpServerManager.close()
     }
 }

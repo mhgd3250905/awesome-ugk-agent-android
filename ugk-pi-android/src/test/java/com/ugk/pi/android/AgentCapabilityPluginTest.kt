@@ -26,6 +26,9 @@ class AgentCapabilityPluginTest {
                 .filterIsInstance<AgentMessage.System>()
                 .any { it.content.contains("test-plugin-skill") }
         )
+        assertEquals(0, runtime.cancelAllPlugins())
+        runtime.close()
+        runtime.close()
     }
 
     @Test
@@ -43,6 +46,31 @@ class AgentCapabilityPluginTest {
         }
 
         assertEquals("Tool name already registered: 'plugin_probe'", error.message)
+    }
+
+    @Test
+    fun runtimeForwardsCancellationAndClosesEachPluginOnlyOnce() {
+        val closeOrder = mutableListOf<String>()
+        val first = LifecyclePlugin(id = "first", cancellationCount = 2, closeOrder = closeOrder)
+        val second = LifecyclePlugin(id = "second", cancellationCount = 3, closeOrder = closeOrder)
+        val runtime = AgentRuntime.Builder()
+            .llmProvider(RecordingProvider())
+            .register(first)
+            .register(second)
+            .build()
+
+        assertEquals(5, runtime.cancelAllPlugins())
+        assertEquals(5, runtime.cancelAllPlugins())
+        assertEquals(2, first.cancelCalls)
+        assertEquals(2, second.cancelCalls)
+
+        runtime.close()
+        runtime.close()
+
+        assertEquals(1, first.closeCalls)
+        assertEquals(1, second.closeCalls)
+        assertEquals(listOf("second", "first"), closeOrder)
+        assertEquals(0, runtime.cancelAllPlugins())
     }
 
     private class TestPlugin(
@@ -67,6 +95,31 @@ class AgentCapabilityPluginTest {
                 )
             )
         )
+    }
+
+    private class LifecyclePlugin(
+        override val id: String,
+        private val cancellationCount: Int,
+        private val closeOrder: MutableList<String>
+    ) : AgentCapabilityPlugin {
+        var cancelCalls: Int = 0
+            private set
+        var closeCalls: Int = 0
+            private set
+
+        override fun tools(): List<AgentTool> = emptyList()
+
+        override fun skills(): List<AndroidSkill> = emptyList()
+
+        override fun cancelAll(): Int {
+            cancelCalls++
+            return cancellationCount
+        }
+
+        override fun close() {
+            closeCalls++
+            closeOrder += id
+        }
     }
 
     private class ProbeTool : AgentTool {

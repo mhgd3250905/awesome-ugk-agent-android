@@ -43,7 +43,6 @@ class MainActivity : Activity() {
     private val authorizationStore by lazy { AgentAuthorizationSettingsStore(this) }
     private val conversationStore by lazy { DemoActivityState.conversationStore(applicationContext) }
     private var runtime: AgentRuntime? = null
-    private var terminalPlugin: TerminalAgentPlugin? = null
     private lateinit var activeConversation: DemoConversation
     private lateinit var session: AgentSession
     private var runState: DemoRunState = DemoRunState.initial()
@@ -160,7 +159,8 @@ class MainActivity : Activity() {
             DemoActivityState.runCoordinator.stop()
             DemoActivityState.runCoordinator.clearQueue()
             DemoActivityState.runCoordinator.detach(activityToken)
-            terminalPlugin?.cancelAll()
+            runtime?.cancelAllPlugins()
+            runtime?.close()
             confirmationPresenter.release()
         } else {
             DemoActivityState.runCoordinator.detach(activityToken)
@@ -517,6 +517,8 @@ class MainActivity : Activity() {
     }
 
     private fun rebuildRuntime() {
+        stopAgent(clearQueuedMessages = true)
+        runtime?.close()
         val config = apiStore.activeConfig()
         val provider: LLMProvider = if (config != null) {
             AnthropicMessagesProvider(
@@ -527,12 +529,10 @@ class MainActivity : Activity() {
         } else {
             PlaceholderProvider
         }
-        terminalPlugin?.cancelAll()
         val nextTerminalPlugin = TerminalAgentPlugin(
             context = applicationContext,
             shouldBypassConfirmation = { authorizationStore.isFullAuthorizationEnabled() }
         )
-        terminalPlugin = nextTerminalPlugin
         runtime = AgentRuntime.Builder()
             .llmProvider(provider)
             .register(
@@ -937,7 +937,7 @@ class MainActivity : Activity() {
         confirmationPresenter.cancelPending()
         if (!DemoActivityState.runCoordinator.isRunning() && !runState.isBusy) return
         if (clearQueuedMessages) DemoActivityState.runCoordinator.clearQueue()
-        terminalPlugin?.cancelAll()
+        runtime?.cancelAllPlugins()
         runState = DemoActivityState.runCoordinator.stop().state
         renderRunState()
         floatingWindow.setSending(false)

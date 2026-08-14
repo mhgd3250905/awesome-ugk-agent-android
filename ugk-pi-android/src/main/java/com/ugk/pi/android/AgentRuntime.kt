@@ -6,6 +6,7 @@ import kotlinx.coroutines.flow.flow
 import kotlinx.serialization.json.booleanOrNull
 import kotlinx.serialization.json.contentOrNull
 import kotlinx.serialization.json.jsonPrimitive
+import java.util.concurrent.atomic.AtomicBoolean
 
 class AgentRuntime(
     private val llmProvider: LLMProvider,
@@ -17,6 +18,10 @@ class AgentRuntime(
     private val timeContextProvider: AgentTimeContextProvider = SystemAgentTimeContextProvider,
     private val agentInstructions: List<String> = emptyList()
 ) {
+    private var lifecyclePlugins: List<AgentCapabilityPlugin> = emptyList()
+    private var lifecyclePluginsAttached = false
+    private val closed = AtomicBoolean(false)
+
     class Builder {
         private var llmProvider: LLMProvider? = null
         private var toolRegistry: ToolRegistry = ToolRegistry()
@@ -26,6 +31,7 @@ class AgentRuntime(
         private var timeContextProvider: AgentTimeContextProvider = SystemAgentTimeContextProvider
         private val skills = mutableListOf<AndroidSkill>()
         private val agentInstructions = mutableListOf<String>()
+        private val plugins = mutableListOf<AgentCapabilityPlugin>()
 
         fun llmProvider(llmProvider: LLMProvider): Builder {
             this.llmProvider = llmProvider
@@ -78,6 +84,7 @@ class AgentRuntime(
             plugin.tools().forEach { toolRegistry.register(it) }
             skills += plugin.skills()
             agentInstructions += plugin.agentInstructions()
+            plugins += plugin
             return this
         }
 
@@ -94,8 +101,39 @@ class AgentRuntime(
                     .map(String::trim)
                     .filter(String::isNotBlank)
                     .distinct()
-            )
+            ).also { runtime ->
+                runtime.attachLifecyclePlugins(plugins.toList())
+            }
         }
+    }
+
+    /**
+     * Requests cancellation from every registered capability plugin.
+     *
+     * This forwards on every call while the Runtime is open: a plugin may
+     * start new work after an earlier cancellation request. Once [close] has
+     * been called, no further plugin work is expected and this becomes a
+     * no-op.
+     */
+    fun cancelAllPlugins(): Int {
+        if (closed.get()) return 0
+        return lifecyclePlugins.sumOf { it.cancelAll() }
+    }
+
+    /**
+     * Releases all registered capability plugins exactly once for this Runtime.
+     * Plugins are closed in reverse registration order.
+     */
+    fun close() {
+        if (!closed.compareAndSet(false, true)) return
+        lifecyclePlugins.asReversed().forEach { it.close() }
+    }
+
+    @Synchronized
+    private fun attachLifecyclePlugins(plugins: List<AgentCapabilityPlugin>) {
+        check(!lifecyclePluginsAttached) { "Runtime plugins have already been attached" }
+        lifecyclePlugins = plugins
+        lifecyclePluginsAttached = true
     }
 
     fun run(

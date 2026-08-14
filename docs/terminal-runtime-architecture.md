@@ -39,6 +39,10 @@ flowchart TD
 - `agentInstructions()` 读取打包在 `assets/ugk/AGENTS.md` 的 SDK runtime `AGENTS.md`，并由 `AgentRuntime` 放在每次 `ModelRequest` 的全局 system messages 最前面；
 - 默认用 `UserConfirmationRequiredTool` 包装；
 - `cancel(callId)`/`cancelAll()` 作用于该 Plugin 持有的同一个 Tool 实例。
+- `AgentRuntime.cancelAllPlugins()` 会统一转发已注册 Plugin 的 `cancelAll()`；宿主释放 Runtime
+  时先取消工作，再调用 `AgentRuntime.close()`，由 Runtime 幂等地转发 Plugin `close()`。
+- `TerminalAgentPlugin` 仍保留 `cancel(callId)` 和 `stopAllLocalHttpServers()` 作为精细控制 API，
+  但宿主的通用生命周期不应再按 Terminal 类型做特殊识别。
 
 ### 开发规范与运行时规范的边界
 

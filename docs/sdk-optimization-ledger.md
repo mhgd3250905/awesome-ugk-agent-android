@@ -37,4 +37,58 @@
 
 兼容性影响：此前依赖“后注册覆盖先注册”的错误配置将改为在注册时失败；当前没有提供隐式覆盖行为。Demo 版本和 SDK Maven 版本均未提升，本步骤不构成正式发布版本。
 
-下一步候选：统一 Plugin `close()` 和取消契约。只有在本步骤提交并确认工作树状态后，才进入下一步。
+后续步骤：统一 Plugin `close()` 和取消契约，已由下方 `SDK-OPT-002` 承接；本条记录仍保留
+`SDK-OPT-001` 的独立提交边界。
+
+## SDK-OPT-002：统一 Plugin 取消与资源释放契约
+
+状态：已实现并验证通过
+
+目标：让宿主通过 `AgentRuntime` 统一取消和释放已注册 Plugin，避免宿主必须特殊识别
+`TerminalAgentPlugin`。本步只处理生命周期转发，不引入 `AgentHostController`、`RuntimeLease`、
+模块拆分或后台服务。
+
+实现范围：
+
+- `AgentCapabilityPlugin` 增加默认 no-op 的 `cancelAll(): Int` 和 `close()`，旧 Plugin 不需要立即实现新方法。
+- `AgentRuntime.Builder` 记录通过 Builder 注册的 Plugin；直接构造 `AgentRuntime` 的旧路径保持不变。
+- 增加 `AgentRuntime.cancelAllPlugins()`：Runtime 未关闭时转发到所有注册 Plugin；关闭后返回 `0`。
+- 增加幂等的 `AgentRuntime.close()`：每个 Runtime 最多调用一次 Plugin `close()`，按逆注册顺序释放。
+- `TerminalAgentPlugin` 显式实现统一契约，同时保留 `cancel(callId)`、`stopAllLocalHttpServers()` 等既有专用 API。
+- Demo 的停止、Runtime 重建和 Activity 销毁改为操作 `AgentRuntime`，不再持有 Terminal Plugin 生命周期字段；重建前先停止当前任务。
+
+生命周期语义：
+
+- `cancelAllPlugins()` 可重复调用；每次只返回当次仍接受取消的工作数量。
+- `close()` 在同一个 Runtime 内幂等；关闭后不再转发取消请求。
+- Plugin 实现应让直接调用自身 `close()` 也保持幂等。
+- `AgentRuntime` 不会自动取消正在运行的 Flow；宿主应先调用 `cancelAllPlugins()`，再调用 `close()`。
+
+验证：
+
+```powershell
+.\gradlew.bat :ugk-pi-android:testDebugUnitTest `
+  --tests com.ugk.pi.android.AgentCapabilityPluginTest `
+  --tests com.ugk.pi.android.AgentRuntimeTest `
+  --console=plain
+
+.\gradlew.bat `
+  :ugk-pi-android:testDebugUnitTest `
+  :pi-file-skill-android:testDebugUnitTest `
+  :pi-schedule-skill-android:testDebugUnitTest `
+  :pi-system-skill-android:testDebugUnitTest `
+  :ugk-terminal-runtime-android:testDebugUnitTest `
+  :pi-terminal-skill-android:testDebugUnitTest `
+  --console=plain
+```
+
+结果：两组命令均通过；`ugk-terminal-runtime-android:testDebugUnitTest` 当前为 `NO-SOURCE`；
+`git diff --check` 通过。默认接口方法实际编译为 JVM default method。
+
+兼容性影响：新增方法均提供默认实现，现有 Plugin 源码和已有唯一注册路径无需修改；新增
+`AgentRuntime` 生命周期 API 不改变旧构造函数和既有 Tool/Plugin 名称。Demo 版本仍为
+`0.2.1 / versionCode 3`，SDK Maven 版本未提升，本步不构成正式发布版本。
+
+审核边界：本步没有解决同一 Plugin 实例被多个 Runtime 共享时的所有权治理，没有把 Runtime
+关闭自动绑定到每个 `Flow` 的取消，也没有解决跨 Activity 重建时进程级 Coordinator 与旧 Runtime
+的所有权迁移；这些保留为后续架构议题，不在当前稳定迭代扩大范围。
