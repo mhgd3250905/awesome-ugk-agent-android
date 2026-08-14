@@ -97,15 +97,16 @@ class ScreenPerformActionTool(
         allWindows.forEach { it.recycle() }
 
         if (targetRoot == null) {
-            Log.w(TAG, "execute: targetRoot is null from windows, trying rootInActiveWindow")
-            targetRoot = service.rootInActiveWindow
-        }
-        if (targetRoot == null) {
-            Log.e(TAG, "execute: no active window at all")
+            // Never silently re-target another window: the child indices in
+            // nodeId were computed against the window list captured by
+            // screen_read_ui_tree, so applying them to a different root would
+            // act on an unrelated node while reporting success.
+            Log.w(TAG, "execute: window $rootIdx from nodeId is no longer available")
             return ToolResult(
                 toolCallId = call.id,
                 name = name,
-                content = "No active window.",
+                content = "Window '$rootIdx' from nodeId is no longer available. " +
+                    "The screen may have changed. Call screen_read_ui_tree again.",
                 isError = true
             )
         }
@@ -165,7 +166,12 @@ class ScreenPerformActionTool(
     }
 
     private fun findNodeByPath(root: AccessibilityNodeInfo, path: String): AccessibilityNodeInfo? {
-        val indices = path.split(".").mapNotNull { it.toIntOrNull() }
+        // Every segment must be a plain child index. Silently dropping an
+        // invalid segment would resolve a different node than the caller
+        // asked for, so a malformed path resolves to nothing.
+        val indices = path.split(".").map { segment ->
+            segment.toIntOrNull() ?: return null
+        }
         if (indices.isEmpty()) return null
 
         var current: AccessibilityNodeInfo = root

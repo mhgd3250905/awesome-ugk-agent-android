@@ -265,23 +265,32 @@ class AgentRuntime(
                 reasoningContent = response.reasoningContent
             )
 
-            response.toolCalls.forEach { call ->
-                emit(AgentEvent.ToolStarted(call))
-                val result = executeTool(
-                    call = call,
-                    session = session,
-                    input = input,
-                    progressSink = { progress ->
-                        emit(AgentEvent.ToolProgress(call, progress))
+            try {
+                response.toolCalls.forEach { call ->
+                    emit(AgentEvent.ToolStarted(call))
+                    val result = executeTool(
+                        call = call,
+                        session = session,
+                        input = input,
+                        progressSink = { progress ->
+                            emit(AgentEvent.ToolProgress(call, progress))
+                        }
+                    )
+                    session.messages += AgentMessage.Tool(result)
+                    emit(AgentEvent.ToolFinished(result))
+                    terminalCompletion(result)?.let { completion ->
+                        session.messages += AgentMessage.Assistant(completion)
+                        emit(AgentEvent.Completed(completion))
+                        return@flow
                     }
-                )
-                session.messages += AgentMessage.Tool(result)
-                emit(AgentEvent.ToolFinished(result))
-                terminalCompletion(result)?.let { completion ->
-                    session.messages += AgentMessage.Assistant(completion)
-                    emit(AgentEvent.Completed(completion))
-                    return@flow
                 }
+            } catch (cancelled: CancellationException) {
+                // A cancelled run must not leave the assistant tool_use envelope
+                // without results: providers reject the whole next request when a
+                // tool_use has no tool_result, which would break the session
+                // permanently. Answer every unanswered call, then rethrow.
+                appendCancelledToolResults(session, response.toolCalls)
+                throw cancelled
             }
 
             pendingUserMessages()
@@ -412,6 +421,34 @@ class AgentRuntime(
             ?.contentOrNull
             ?.takeIf { it.isNotBlank() }
             ?: result.content
+    }
+
+    /**
+     * Answers every tool call of the current assistant envelope that has not
+     * produced a result yet. Only the session transcript is repaired; no
+     * events are emitted because the collecting coroutine is already
+     * cancelled.
+     */
+    private fun appendCancelledToolResults(
+        session: AgentSession,
+        toolCalls: List<ToolCall>
+    ) {
+        val answeredIds = session.messages
+            .filterIsInstance<AgentMessage.Tool>()
+            .map { it.result.toolCallId }
+            .toSet()
+        toolCalls.forEach { call ->
+            if (call.id in answeredIds) return@forEach
+            session.messages += AgentMessage.Tool(
+                ToolResult(
+                    toolCallId = call.id,
+                    name = call.name,
+                    content = "Tool execution was cancelled before this call completed. " +
+                        "The user stopped the run or the runtime shut down.",
+                    isError = true
+                )
+            )
+        }
     }
 }
 
