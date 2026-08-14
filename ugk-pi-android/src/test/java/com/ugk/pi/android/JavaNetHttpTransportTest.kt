@@ -13,5 +13,6 @@ class JavaNetHttpTransportTest {
 
         assertEquals(1234, transport.connectTimeoutMillis)
         assertEquals(5678, transport.readTimeoutMillis)
+        assertEquals(4 * 1024 * 1024, transport.maxResponseBytes)
     }
 }

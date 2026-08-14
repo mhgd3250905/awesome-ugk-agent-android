@@ -114,44 +114,51 @@ class ScreenPerformActionTool(
 
         try {
             val node = if (childPath.isEmpty()) targetRoot else findNodeByPath(targetRoot, childPath)
-            if (node == null) {
-                Log.e(TAG, "execute: node not found for path=$childPath in root with ${targetRoot.childCount} children")
+            try {
+                if (node == null) {
+                    Log.e(TAG, "execute: node not found for path=$childPath in root with ${targetRoot.childCount} children")
+                    return ToolResult(
+                        toolCallId = call.id,
+                        name = name,
+                        content = "Node not found: $nodeId. The screen may have changed. Call screen_read_ui_tree first.",
+                        isError = true
+                    )
+                }
+
+                Log.d(TAG, "execute: found node className=${node.className} text=${node.text} clickable=${node.isClickable}")
+
+                val result = when (action) {
+                    "click" -> node.performAction(AccessibilityNodeInfo.ACTION_CLICK)
+                    "long_click" -> node.performAction(AccessibilityNodeInfo.ACTION_LONG_CLICK)
+                    "scroll_forward" -> node.performAction(AccessibilityNodeInfo.ACTION_SCROLL_FORWARD)
+                    "scroll_backward" -> node.performAction(AccessibilityNodeInfo.ACTION_SCROLL_BACKWARD)
+                    "focus" -> node.performAction(AccessibilityNodeInfo.ACTION_FOCUS)
+                    "clear_focus" -> node.performAction(AccessibilityNodeInfo.ACTION_CLEAR_FOCUS)
+                    "set_text" -> {
+                        val args = Bundle()
+                        args.putCharSequence(AccessibilityNodeInfo.ACTION_ARGUMENT_SET_TEXT_CHARSEQUENCE, text ?: "")
+                        node.performAction(AccessibilityNodeInfo.ACTION_SET_TEXT, args)
+                    }
+                    else -> false
+                }
+
+                Log.d(TAG, "execute: action=$action result=$result")
+
                 return ToolResult(
                     toolCallId = call.id,
                     name = name,
-                    content = "Node not found: $nodeId. The screen may have changed. Call screen_read_ui_tree first.",
-                    isError = true
+                    content = buildJsonObject {
+                        put("nodeId", nodeId)
+                        put("action", action)
+                        put("success", result)
+                    }.toString(),
+                    isError = !result
                 )
-            }
-
-            Log.d(TAG, "execute: found node className=${node.className} text=${node.text} clickable=${node.isClickable}")
-
-            val result = when (action) {
-                "click" -> node.performAction(AccessibilityNodeInfo.ACTION_CLICK)
-                "long_click" -> node.performAction(AccessibilityNodeInfo.ACTION_LONG_CLICK)
-                "scroll_forward" -> node.performAction(AccessibilityNodeInfo.ACTION_SCROLL_FORWARD)
-                "scroll_backward" -> node.performAction(AccessibilityNodeInfo.ACTION_SCROLL_BACKWARD)
-                "focus" -> node.performAction(AccessibilityNodeInfo.ACTION_FOCUS)
-                "clear_focus" -> node.performAction(AccessibilityNodeInfo.ACTION_CLEAR_FOCUS)
-                "set_text" -> {
-                    val args = Bundle()
-                    args.putCharSequence(AccessibilityNodeInfo.ACTION_ARGUMENT_SET_TEXT_CHARSEQUENCE, text ?: "")
-                    node.performAction(AccessibilityNodeInfo.ACTION_SET_TEXT, args)
+            } finally {
+                if (node != null && node !== targetRoot) {
+                    node.recycle()
                 }
-                else -> false
             }
-
-            Log.d(TAG, "execute: action=$action result=$result")
-
-            return ToolResult(
-                toolCallId = call.id,
-                name = name,
-                content = buildJsonObject {
-                    put("nodeId", nodeId)
-                    put("action", action)
-                    put("success", result)
-                }.toString()
-            )
         } finally {
             targetRoot.recycle()
         }
@@ -162,10 +169,22 @@ class ScreenPerformActionTool(
         if (indices.isEmpty()) return null
 
         var current: AccessibilityNodeInfo = root
-        for (idx in indices) {
-            val child = current.getChild(idx) ?: return null
-            current = child
+        var ownsCurrent = false
+        try {
+            for (idx in indices) {
+                val child = current.getChild(idx) ?: return null
+                if (ownsCurrent) {
+                    current.recycle()
+                }
+                current = child
+                ownsCurrent = true
+            }
+            ownsCurrent = false
+            return current
+        } finally {
+            if (ownsCurrent) {
+                current.recycle()
+            }
         }
-        return current
     }
 }

@@ -1,10 +1,10 @@
 package com.ugk.pi.android
 
+import kotlinx.coroutines.flow.toList
 import kotlinx.coroutines.CompletableDeferred
 import kotlinx.coroutines.async
 import kotlinx.coroutines.awaitCancellation
 import kotlinx.coroutines.cancelAndJoin
-import kotlinx.coroutines.flow.toList
 import kotlinx.coroutines.launch
 import kotlinx.coroutines.runBlocking
 import kotlinx.serialization.json.JsonObject
@@ -132,6 +132,22 @@ class AgentRuntimeTest {
             runtime.run(session, "second").toList().last()
         )
         assertEquals(2, requestCount)
+    }
+
+    @Test
+    fun `provider exception emits failed event without crashing the flow`() = runBlocking {
+        val provider = object : LLMProvider {
+            override suspend fun generate(request: ModelRequest): ModelResponse {
+                error("provider unavailable")
+            }
+        }
+        val session = AgentSession(id = "provider-error")
+        val runtime = AgentRuntime(provider, ToolRegistry())
+
+        val events = runtime.run(session, "hello").toList()
+
+        assertEquals(AgentEvent.Failed("provider unavailable"), events.last())
+        assertEquals(listOf(AgentMessage.User("hello")), session.messages)
     }
 
     @Test
@@ -308,8 +324,30 @@ class AgentRuntimeTest {
     }
 
     @Test
-    fun `default max iterations is fifty`() {
-        assertEquals(50, DEFAULT_MAX_ITERATIONS)
+    fun `default max iterations allows long tool workflows`() {
+        assertEquals(500, DEFAULT_MAX_ITERATIONS)
+    }
+
+    @Test
+    fun `default runtime continues beyond the former fifty iteration cutoff`() = runBlocking {
+        val call = ToolCall(
+            id = "long-loop-call",
+            name = "echo",
+            input = JsonObject(mapOf("text" to JsonPrimitive("continue")))
+        )
+        val provider = ScriptedLLMProvider(
+            *(List(51) { ModelResponse(content = "working", toolCalls = listOf(call)) } +
+                ModelResponse(content = "done")).toTypedArray()
+        )
+        val runtime = AgentRuntime(
+            llmProvider = provider,
+            toolRegistry = ToolRegistry().register(EchoTool())
+        )
+
+        val events = runtime.run(AgentSession(id = "long-loop"), "continue").toList()
+
+        assertEquals(AgentEvent.Completed("done"), events.last())
+        assertEquals(52, provider.requests.size)
     }
 
     @Test

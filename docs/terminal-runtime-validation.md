@@ -1,29 +1,27 @@
 # Terminal Runtime 验证矩阵
 
-更新时间：2026-08-13
-验证源码：`E:\AII\ugk-android-new`
+更新时间：2026-08-14
+验证源码：`D:\AII\ugk-android`
 注意：以下结果是当前工作树的证据；未提交工作树必须在发布前重新绑定到明确 commit。
 
 ## 1. 环境变量
 
 ```powershell
-$env:JAVA_HOME = 'E:\Android\Android Studio\jbr'
-$env:ANDROID_HOME = 'E:\Android\SDK'
-$env:ANDROID_SDK_ROOT = 'E:\Android\SDK'
-$env:ANDROID_USER_HOME = 'E:\Android\.android'
-$env:ANDROID_AVD_HOME = 'E:\Android\.android\avd'
+$env:JAVA_HOME = 'E:\AndroidStudioKoalaFeat2024\jbr'
+$env:ANDROID_HOME = 'E:\Application\Android\2020SDK\sdk'
+$env:ANDROID_USER_HOME = 'C:\Users\shengk\.android'
 ```
 
-当前 NDK：`E:\Android\SDK\ndk\28.2.13676358`。大型 system image、AVD data 和构建缓存放 E 盘。
+当前 NDK：`E:\Application\Android\2020SDK\sdk\ndk\28.2.13676358`。
 
 ## 2. Gate 总表
 
 | Gate | 验证内容 | 当前结果 |
 |---|---|---|
 | Gate 1 | 两 ABI 原生静态/锁文件/AAR/APK/无 Node | 已通过 |
-| Gate 2 | x86_64 API 24/29/35 4KB、API36 16KB、A+B 重定位 | x86_64 子集已通过 |
-| Gate 3 | API24/4KB、API36/16KB 的确认/取消/超时/进程组/并发/输出/环境 | x86_64 子集已通过 |
-| Host integration | `demo-app` 接入 Terminal Plugin、确认工具和真实 APK Runtime | API35 x86_64/4KB 已通过 |
+| Gate 2 | x86_64 API 24/29/35 4KB、API36 16KB、arm64 API34/4KB、A+B 重定位 | x86_64 已通过；arm64 API34/4KB 子集已通过 |
+| Gate 3 | API24/4KB、API36/16KB 的确认/取消/超时/进程组/并发/输出/环境 | x86_64 子集已通过；arm64 本地控制子集已通过 |
+| Host integration | `demo-app` 接入 Terminal Plugin、确认工具和真实 APK Runtime | API35 x86_64/4KB、API34 arm64/4KB 已通过 |
 | Release Gate | arm64、完整 API/page size、Release AAB、升级、低盘、性能、许可证 | 未通过/未完成 |
 
 ## 3. 单元测试和静态验收
@@ -176,17 +174,35 @@ $env:ANDROID_SERIAL = 'emulator-5556'
 
 判定：本次现场故障应归类为模拟器的 SystemUI/图形/输入链路 ANR，不判定为本地 HTTP Runtime 启动失败。当前仍需关注 demo UI 的渲染压力：它同时存在 Activity、悬浮窗和确认对话框渲染根，且 `MainActivity` 在 `Dispatchers.Main` 收集 Agent 事件；模型请求体构造和响应解析也可能在调用方上下文执行。后续应在不调用真实 API 的前提下补充 UI 性能回归，并考虑把序列化/解析与长 Agent 回路移出主线程。
 
-## 14. 未覆盖矩阵
+## 14. 当前物理 arm64/API34 回归
+
+验证日期：2026-08-14；设备：`SM-A526U1`，Android 14/API 34、arm64-v8a、4 KB page size；ADB 序列号：`R5CRB11B2AW`。
+
+```powershell
+$env:ANDROID_SERIAL = 'R5CRB11B2AW'
+.\gradlew.bat :demo-app:connectedDebugAndroidTest --console=plain
+.\gradlew.bat `
+  :terminal-probe-demo-a:connectedDebugAndroidTest `
+  :terminal-probe-demo-b:connectedDebugAndroidTest `
+  --console=plain
+```
+
+- `:demo-app:connectedDebugAndroidTest`：`14/14` 通过；当前 `demo-app` APK 为 `versionCode 3` / `versionName 0.2.1`，使用固定 Debug 签名覆盖安装，未卸载或清空用户数据。
+- `terminal-probe-demo-a`：`9/10` 通过；`terminal-probe-demo-b`：`4/5` 通过。除联网用例外的 Runtime、本地 HTTP、进程控制、Python/SQLite/OpenSSL 等本地能力均通过。
+- 两个未通过用例均为 `https://example.com` 联网测试。设备当时由 VPN 接管默认网络，`wlan0` 无 carrier、无可用外网路由，DNS/ICMP 均失败；这是测试环境阻塞，不判定为 Runtime 本地能力失败。
+- 该轮还修正了 probe A 对 `TerminalAgentPlugin.tools()` 使用 `.single()` 的过时假设，并同步刷新了 CPython manifest 的锁文件摘要与大小。
+
+## 15. 未覆盖矩阵
 
 | 维度 | 未覆盖 |
 |---|---|
-| ABI | arm64-v8a 4KB、arm64-v8a 16KB 运行 |
-| API/page size | API34；API35/16KB；API36/4KB；其他真实设备组合 |
+| ABI | arm64-v8a 16KB 运行 |
+| API/page size | API35/16KB；API36/4KB；其他真实设备组合 |
 | 构建形态 | API24/29/36 的 Release APK/AAB split 安装与升级 |
 | 设备状态 | 低磁盘、低内存、进程被杀后的 Agent 运行恢复、升级迁移 |
 | 架构 | 跨进程 cancel-by-id、独立 Service/Binder Supervisor、主动逃逸治理 |
 
-## 15. 设备执行命令
+## 16. 设备执行命令
 
 设备通过 USB/ADB 在线并设置序列号后：
 
@@ -200,7 +216,7 @@ $env:ANDROID_SERIAL = '设备序列号'
 
 测试需要设备联网，因为包含 `https://example.com`。测试只使用两个 Probe App 的安装包、私有目录和进程；不需要 root，不应清理用户其他 App。
 
-## 16. 证据判读
+## 17. 证据判读
 
 - API24 没有 `getconf` 时使用 `/proc/self/smaps` 的 `KernelPageSize`；
 - API36 16KB 必须实际读到 `16384`；

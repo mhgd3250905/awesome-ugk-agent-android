@@ -110,7 +110,12 @@ signature 不能直接作为人工维护的稳定 API 数量；Kotlin 编译器�
 
 当前只要求 Release AAR、POM/Module Metadata、临时隔离 Maven consumer、Core 单元测试和必要的 API surface inventory 通过；不建立永久 consumer、远程仓库、签名体系或强制 API/ABI baseline。
 
-只有同时出现真实长期外部 consumer 或正式分发承诺、完成稳定 API 分层、确定兼容承诺并具备至少一个旧版本升级回归场景时，才把 API/ABI baseline 提升为 release-candidate gate。该 gate 只阻断候选发布，不阻断日常 Debug 开发；Core API gate 也不混入 Terminal Runtime 的 ELF/page-size gate。
+API/ABI gate 分成“必要前置条件”和“触发事件”，避免把两者混成一个模糊条件：
+
+- 必要前置条件（全部满足）：完成稳定的 Core 公共 API 分层；确定正式版本策略、发布渠道和兼容性承诺；具备至少一个旧版本升级回归场景。
+- 触发事件（任一发生）：出现需要长期维护的真实外部 consumer 或 `0.x` 坐标开始正式分发；发生一次需要证明“无意 API/ABI 破坏”的跨版本变更。
+
+只有必要前置条件全部满足且发生任一触发事件时，才把 API/ABI baseline 提升为 release-candidate gate。该 gate 只阻断候选发布，不阻断日常 Debug 开发；Core API gate 也不混入 Terminal Runtime 的 ELF/page-size gate。
 
 ### 基线决策
 
@@ -118,12 +123,12 @@ signature 不能直接作为人工维护的稳定 API 数量；Kotlin 编译器�
 最小外部编译消费证据，没有正式第三方消费者、远程发布承诺或稳定的 API 分层；此时引入完整兼容性
 插件会提前冻结设计并增加维护成本。
 
-满足以下任一触发条件后，再建立并强制 baseline：
+必要前置条件全部满足且发生任一触发事件后，再建立并强制 baseline：
 
-1. 出现需要长期维护的真实外部 consumer，或 `0.x` 坐标开始对外正式分发。
-2. 完成 Core 公共 API 分层，明确哪些 Provider、AndroidSkill、确认类型属于稳定承诺。
-3. 确定正式版本策略、发布渠道和兼容性承诺，并准备至少一个升级回归场景。
-4. 发生一次需要证明“无意 API/ABI 破坏”的跨版本变更。
+1. 必要前置条件：明确哪些 Provider、AndroidSkill、确认类型属于稳定承诺。
+2. 必要前置条件：确定正式版本策略、发布渠道、兼容性承诺，并准备至少一个升级回归场景。
+3. 触发事件：出现需要长期维护的真实外部 consumer，或 `0.x` 坐标开始对外正式分发。
+4. 触发事件：发生一次需要证明“无意 API/ABI 破坏”的跨版本变更。
 
 触发后，baseline 应先作为发布 gate 运行，不应直接阻塞所有日常开发构建。本步骤不引入插件、永久
 consumer module、生产依赖或版本变更。

@@ -33,6 +33,7 @@ import com.ugk.pi.android.AnthropicMessagesProvider
 import com.ugk.pi.android.LLMProvider
 import com.ugk.pi.android.ModelRequest
 import com.ugk.pi.android.ModelResponse
+import com.ugk.pi.android.UserConfirmationRequiredTool
 import com.ugk.pi.terminal.skill.TerminalAgentPlugin
 import java.text.DateFormat
 import java.util.Date
@@ -554,10 +555,30 @@ class MainActivity : Activity() {
                 override val id = "accessibility-screen"
                 override fun tools() = listOf(
                     ScreenReadUiTreeTool(),
-                    ScreenPerformActionTool(),
-                    ScreenGlobalActionTool(),
-                    ScreenGestureTool(),
-                    ScreenPressKeyTool()
+                    UserConfirmationRequiredTool(
+                        ScreenPerformActionTool(),
+                        shouldBypassConfirmation = {
+                            authorizationStore.isFullAuthorizationEnabled()
+                        }
+                    ),
+                    UserConfirmationRequiredTool(
+                        ScreenGlobalActionTool(),
+                        shouldBypassConfirmation = {
+                            authorizationStore.isFullAuthorizationEnabled()
+                        }
+                    ),
+                    UserConfirmationRequiredTool(
+                        ScreenGestureTool(),
+                        shouldBypassConfirmation = {
+                            authorizationStore.isFullAuthorizationEnabled()
+                        }
+                    ),
+                    UserConfirmationRequiredTool(
+                        ScreenPressKeyTool(),
+                        shouldBypassConfirmation = {
+                            authorizationStore.isFullAuthorizationEnabled()
+                        }
+                    )
                 )
                 override fun skills() = listOf(accessibilityScreenSkill)
             })

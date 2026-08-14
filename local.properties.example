@@ -1,0 +1,9 @@
+# Copy this file to local.properties and replace the placeholders.
+# Keep local.properties untracked; it may contain a machine-specific API path.
+sdk.dir=C:/Android/Sdk
+ugk.debug.keystore=C:/Users/<user>/.android/debug.keystore
+# Optional external API config. The file uses key=value lines such as
+# baseurl=...
+# model=...
+# apikey=...
+# ugk.api.config=C:/path/to/api-config.txt

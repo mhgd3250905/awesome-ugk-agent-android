@@ -7,10 +7,12 @@ import com.ugk.pi.android.ToolCall
 import com.ugk.pi.android.ToolExecutionContext
 import com.ugk.pi.android.ToolResult
 import kotlinx.serialization.json.JsonObject
+import kotlinx.serialization.json.JsonPrimitive
 import kotlinx.serialization.json.buildJsonObject
 import kotlinx.serialization.json.contentOrNull
 import kotlinx.serialization.json.jsonPrimitive
 import kotlinx.serialization.json.put
+import kotlinx.serialization.json.putJsonArray
 import kotlinx.serialization.json.putJsonObject
 
 class ScreenReadUiTreeTool(
@@ -46,7 +48,7 @@ class ScreenReadUiTreeTool(
 
         val ownPackage = service.packageName
         val maxDepth = call.input["max_depth"]?.jsonPrimitive?.contentOrNull?.toIntOrNull() ?: 15
-        val elements = mutableListOf<String>()
+        val elements = mutableListOf<JsonObject>()
         var nodeCount = 0
         val maxNodes = 200
         var detectedPackage = "unknown"
@@ -82,22 +84,29 @@ class ScreenReadUiTreeTool(
             val focusable = node.isFocusable
             val viewId = node.viewIdResourceName
 
-            val props = mutableListOf<String>()
-            if (!text.isNullOrBlank()) props.add("\"text\":\"${text.replace("\"", "\\\"")}\"")
-            if (!contentDesc.isNullOrBlank()) props.add("\"contentDesc\":\"${contentDesc.replace("\"", "\\\"")}\"")
-            if (!hint.isNullOrBlank()) props.add("\"hint\":\"${hint.replace("\"", "\\\"")}\"")
-            props.add("\"type\":\"$className\"")
-            props.add("\"bounds\":[${bounds.left},${bounds.top},${bounds.right},${bounds.bottom}]")
-            if (clickable) props.add("\"clickable\":true")
-            if (scrollable) props.add("\"scrollable\":true")
-            if (editable) props.add("\"editable\":true")
-            if (checkable) props.add("\"checkable\":true")
-            if (checked) props.add("\"checked\":true")
-            if (!enabled) props.add("\"enabled\":false")
-            if (focusable) props.add("\"focusable\":true")
-            if (!viewId.isNullOrBlank()) props.add("\"viewId\":\"$viewId\"")
-
-            elements.add("{\"nodeId\":\"$path\",${props.joinToString(",")}}")
+            elements.add(
+                buildJsonObject {
+                    put("nodeId", path)
+                    if (!text.isNullOrBlank()) put("text", text)
+                    if (!contentDesc.isNullOrBlank()) put("contentDesc", contentDesc)
+                    if (!hint.isNullOrBlank()) put("hint", hint)
+                    put("type", className)
+                    putJsonArray("bounds") {
+                        add(JsonPrimitive(bounds.left))
+                        add(JsonPrimitive(bounds.top))
+                        add(JsonPrimitive(bounds.right))
+                        add(JsonPrimitive(bounds.bottom))
+                    }
+                    if (clickable) put("clickable", true)
+                    if (scrollable) put("scrollable", true)
+                    if (editable) put("editable", true)
+                    if (checkable) put("checkable", true)
+                    if (checked) put("checked", true)
+                    if (!enabled) put("enabled", false)
+                    if (focusable) put("focusable", true)
+                    if (!viewId.isNullOrBlank()) put("viewId", viewId)
+                }
+            )
 
             for (i in 0 until node.childCount) {
                 node.getChild(i)?.let { child ->
@@ -142,7 +151,13 @@ class ScreenReadUiTreeTool(
 
         Log.d(TAG, "execute: pkg=$detectedPackage nodeCount=$nodeCount elements=${elements.size}")
 
-        val content = """{"package":"$detectedPackage","nodeCount":$nodeCount,"elements":[${elements.joinToString(",")}]}"""
+        val content = buildJsonObject {
+            put("package", detectedPackage)
+            put("nodeCount", nodeCount)
+            putJsonArray("elements") {
+                elements.forEach { add(it) }
+            }
+        }.toString()
 
         return ToolResult(
             toolCallId = call.id,

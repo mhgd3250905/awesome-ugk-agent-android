@@ -3,6 +3,7 @@
 更新时间：2026-08-14
 当前版本：`0.2.1`（`versionCode 3`）
 版本范围：仅 `:demo-app`；SDK/AAR 模块版本继续独立维护。
+当前阶段：稳定化测试期；本次 `sdk-stabilization-baseline-2026-08-14` 是工程 checkpoint，不是新的 Demo 发布版本。
 
 ## 版本规则
 
@@ -51,17 +52,25 @@
 - 失败详情保留完整正文，紧凑状态只用于摘要；悬浮窗切换会话时清除旧活动记录。
 - 无悬浮窗权限时后台确认显式走取消兜底，不再留下不可见的 pending；删除无效的 saved-state transcript 字段。
 - 无 API 配置时不再额外弹出悬浮窗授权提示；确认 presenter 在 Activity 真正结束时释放旧窗口和授权回调；会话持久化采用最新快照合并写入，避免快速连续保存造成无界后台队列。
+- 屏幕 UI 树改用结构化 JSON 序列化；屏幕动作失败正确返回 `isError=true`，并补齐 Accessibility 节点回收。
 
 ### 验收证据
 
 - `:demo-app:testDebugUnitTest`：通过（12 个测试，包含会话淘汰顺序、超长失败详情和运行协调器回归）。
 - `:demo-app:assembleDebug`：通过；最终 APK 元数据为 `versionCode 3` / `versionName 0.2.1`。
+- `:demo-app:connectedDebugAndroidTest`：在 `SM-A526U1`（Android 14/API 34、arm64-v8a、4 KB）上 `14/14` 通过；使用 `adb install -r -d` 覆盖安装，未卸载或清空用户数据。
 - 独立审查线程 `019ffc0d-ca14-77f3-83f7-beeaae65d310` 已完成最终代码复验：六维检查无 P1/P2 阻塞；建议后续补充 presenter release/detach、最新快照写入和无 API 发送路径的自动化测试。
 
 ### 当前未完成证据
 
-- 本轮代码修复后尚未在物理设备上重新执行悬浮窗、Activity 重建和键盘触控验收；当前 `adb devices -l` 无在线设备。
-- 不把 `0.2.0` 之前的真机报告冒充为 `0.2.1` 证据；设备恢复后必须使用当前 APK、当前 tag 和设备序列号重新记录。
+- 本轮尚未重新执行人工悬浮窗、Activity 重建和键盘触控验收；连接的真机回归覆盖的是自动化 Demo/Runtime 测试。
+- 未覆盖的人工场景仍需使用当前 APK、当前 tag 和设备序列号重新记录，不能用旧版本报告替代。
+
+### 稳定化测试期版本边界
+
+- 本次保存不提升 `versionName` 或 `versionCode`；`0.2.1 / versionCode 3` 继续代表当前 Demo 测试交付物。
+- `demo-app-v0.2.1` 保持不变；稳定化 checkpoint 使用独立标签，不能当作新的产品版本或正式发布标签。
+- 后续若只是稳定性修复、测试和证据整理，先更新本台账和 SDK 稳定化文档；只有形成新的可安装交付物或用户可感知行为变化时才评估 patch/minor bump。
 
 ## 0.1.0 · 历史开发基线
 

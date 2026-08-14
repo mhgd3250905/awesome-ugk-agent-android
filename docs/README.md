@@ -2,7 +2,7 @@
 
 更新时间：2026-08-13
 适用项目：`awesome-ugk-agent-android`
-源码目录：`E:\AII\ugk-android-new`
+源码目录：`D:\AII\ugk-android`
 
 独立持续开发台账：[awesome-ugk-agent-android-ledger](https://github.com/mhgd3250905/awesome-ugk-agent-android-ledger)
 
@@ -40,6 +40,7 @@
 | [demo-app-version-ledger.md](demo-app-version-ledger.md) | demo-app 版本、变更范围和验收台账 |
 | [sdk-optimization-ledger.md](sdk-optimization-ledger.md) | SDK 架构优化步骤、验证结果和版本影响台账 |
 | [sdk-core-consumer-contract.md](sdk-core-consumer-contract.md) | Core AAR 外部消费边界、版本策略和 API/ABI gate 触发条件 |
+| [sdk-stabilization-baseline.md](sdk-stabilization-baseline.md) | SDK 稳定化测试期、版本封存点、验证快照和退出条件 |
 
 ## 快速阅读顺序
 

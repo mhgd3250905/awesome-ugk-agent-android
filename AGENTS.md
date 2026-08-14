@@ -31,8 +31,9 @@ Terminal Runtime 的当前目标、状态和验证以 `docs/README.md` 为入口
 
 ## 构建命令
 
-本机 `demo-app` 的 Debug 签名和默认 API 配置由被 Git 忽略的 `local.properties` 固定：签名使用
-`E:\Android\.android\debug.keystore`，API 配置只从 `E:\AII\deepseek-202608.txt` 读取。API 内容不得复制进源码、文档或提交；Release 默认不嵌入 API 配置。
+`demo-app` 的 Debug 签名和默认 API 配置由被 Git 忽略的 `local.properties` 固定。首次构建请复制
+`local.properties.example`，填写本机 SDK、稳定 debug keystore，以及可选的外部 API 配置文件路径。
+API 内容不得复制进源码、文档或提交；Release 默认不嵌入 API 配置。
 
 ```powershell
 # 构建原有无障碍 demo
@@ -57,7 +58,7 @@ Terminal Runtime 的当前目标、状态和验证以 `docs/README.md` 为入口
 # Runtime 静态/打包验收
 .\scripts\terminal-runtime\verify-runtime.ps1 `
   -CheckPackages `
-  -NdkRoot 'E:\Android\SDK\ndk\28.2.13676358'
+  -NdkRoot (Join-Path $env:ANDROID_HOME 'ndk\28.2.13676358')
 
 # 发布到本地 Maven（供外部项目消费）
 .\gradlew.bat :ugk-pi-android:publishReleasePublicationToMavenLocal --console=plain

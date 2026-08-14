@@ -7,13 +7,13 @@ Android Agent Runtime SDK：提供通用 Agent 工具循环、Android Skill，�
 这是开发中的 SDK，不是最终发布版。
 
 - Core Profile：Bash、curl、OpenSSL、SQLite、CPython 3.14.6；最低 `minSdk 24`。
-- x86_64 API 24/29/35（4 KB）和 API 36（16 KB）已通过双 `applicationId` 回归。
+- x86_64 API 24/29/35（4 KB）和 API 36（16 KB）已通过双 `applicationId` 回归；当前已在真实 arm64-v8a Android 14/API 34、4 KB 设备上完成 Runtime 与 Demo 回归。
 - Runtime 控制 Gate 3 已在 x86_64 API 24/4 KB 与 API 36/16 KB 通过。
-- arm64 运行、完整 page-size/API 矩阵、Release AAB、升级迁移、低资源、性能和许可证发布检查仍未完成。
+- arm64 当前仅覆盖 Android 14/API 34、4 KB 真机；arm64 16 KB、完整 page-size/API 矩阵、Release AAB、升级迁移、低资源、性能和许可证发布检查仍未完成。
 - v1 不支持、不打包、不宣称 Node.js、Git、OpenSSH、jq。
 - Runtime 无 UI，不要求安装 Termux 或第二个 App；它与宿主共享 Android UID，不是安全沙箱。
 - `pi-system-skill-android` 提供白名单 Android 原生 Intent Tool；打开网页、相机、拨号、地图、分享等动作不通过终端执行。
-- `demo-app` 当前开发版本为 `0.2.0`（`versionCode 2`）；聊天过程、会话管理和跨 App 悬浮窗的当前验收以 [`docs/demo-app-ui-redesign.md`](docs/demo-app-ui-redesign.md) 为准。
+- `demo-app` 当前开发版本为 `0.2.1`（`versionCode 3`）；聊天过程、会话管理和跨 App 悬浮窗的当前验收以 [`docs/demo-app-ui-redesign.md`](docs/demo-app-ui-redesign.md) 为准。
 
 ## 模块
 
@@ -33,11 +33,14 @@ Android Agent Runtime SDK：提供通用 Agent 工具循环、Android Skill，�
 Windows PowerShell：
 
 ```powershell
-$env:JAVA_HOME = 'E:\Android\Android Studio\jbr'
+# 首次构建前复制 local.properties.example 为 local.properties，
+# 并填写本机 Android SDK 与稳定 debug keystore 路径。
 .\gradlew.bat :demo-app:assembleDebug --console=plain
 ```
 
 完整单元测试、双宿主仪器测试和 Runtime 静态验收见 [`AGENTS.md`](AGENTS.md) 与 [`docs/terminal-runtime-validation.md`](docs/terminal-runtime-validation.md)。
+
+当前真机基线：`SM-A526U1`、Android 14/API 34、arm64-v8a、4 KB page size；`:demo-app:connectedDebugAndroidTest` 为 `14/14`，两个 Runtime Probe 的本地能力测试通过，联网用例因设备当前 VPN 无可用上游网络而未通过。
 
 ## 文档入口
 

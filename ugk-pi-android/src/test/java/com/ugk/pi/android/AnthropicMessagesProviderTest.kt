@@ -1,5 +1,6 @@
 package com.ugk.pi.android
 
+import kotlinx.coroutines.CancellationException
 import kotlinx.coroutines.runBlocking
 import kotlinx.serialization.json.Json
 import kotlinx.serialization.json.JsonObject
@@ -214,6 +215,29 @@ class AnthropicMessagesProviderTest {
 
         assertEquals("ok", response.content)
         assertEquals(2, transport.callCount)
+    }
+
+    @Test
+    fun `does not retry coroutine cancellation`() = runBlocking {
+        var callCount = 0
+        val transport = object : HttpTransport {
+            override suspend fun post(request: HttpRequest): HttpResponse {
+                callCount++
+                throw CancellationException("cancelled")
+            }
+        }
+        val provider = AnthropicMessagesProvider(
+            apiKey = "test-key",
+            model = "deepseek-v4-flash",
+            baseUrl = "https://example.com/anthropic",
+            transport = transport,
+            retryPolicy = AnthropicRetryPolicy(maxAttempts = 3, initialDelayMillis = 0)
+        )
+
+        val error = runCatching { provider.generate(simpleRequest()) }.exceptionOrNull()
+
+        assertTrue(error is CancellationException)
+        assertEquals(1, callCount)
     }
 
     private fun simpleRequest(): ModelRequest {

@@ -103,7 +103,8 @@ class ScreenGestureTool(
                 put("x", x)
                 put("y", y)
                 put("success", result)
-            }.toString()
+            }.toString(),
+            isError = !result
         )
     }
 

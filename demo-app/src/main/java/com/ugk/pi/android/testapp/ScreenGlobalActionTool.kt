@@ -84,7 +84,8 @@ class ScreenGlobalActionTool(
             content = buildJsonObject {
                 put("action", action)
                 put("success", result)
-            }.toString()
+            }.toString(),
+            isError = !result
         )
     }
 }

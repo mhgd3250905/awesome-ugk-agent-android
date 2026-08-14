@@ -211,13 +211,24 @@ class AgentRuntime(
                 )
             )
             val startedAt = System.currentTimeMillis()
-            val response = llmProvider.generate(
-                ModelRequest(
-                    sessionId = session.id,
-                    messages = requestMessages,
-                    tools = tools
+            val response = try {
+                llmProvider.generate(
+                    ModelRequest(
+                        sessionId = session.id,
+                        messages = requestMessages,
+                        tools = tools
+                    )
                 )
-            )
+            } catch (error: CancellationException) {
+                throw error
+            } catch (error: Throwable) {
+                emit(
+                    AgentEvent.Failed(
+                        error.message ?: error::class.java.name
+                    )
+                )
+                return@flow
+            }
 
             emit(
                 AgentEvent.ModelResponded(
@@ -404,7 +415,14 @@ class AgentRuntime(
     }
 }
 
-internal const val DEFAULT_MAX_ITERATIONS = 50
+/**
+ * Default number of model/tool iterations allowed for one run.
+ *
+ * This remains a finite safety limit, while giving screen and terminal
+ * workflows enough room to continue past the former 50- and 200-iteration cutoffs.
+ * Hosts can override it with [AgentRuntime.Builder.maxIterations].
+ */
+internal const val DEFAULT_MAX_ITERATIONS = 500
 private const val MAX_INCOMPLETE_RESPONSE_RETRIES = 2
 private fun sessionAlreadyRunningMessage(sessionId: String): String =
     "AgentSession '$sessionId' is already running."

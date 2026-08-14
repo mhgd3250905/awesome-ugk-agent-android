@@ -119,4 +119,4 @@ OpenAI 官方 Android 帮助中心把聊天历史、删除会话和设置作为�
 - `:demo-app:testDebugUnitTest`：通过，包含本轮会话淘汰和长失败详情回归。
 - `:demo-app:compileDebugKotlin`：通过；未调用付费 API。
 - 代码级审查已修复第一轮 P1/P2 清单；独立审查线程最终复验通过，未发现 P1/P2 代码阻塞，仅保留后续自动化覆盖补强建议。
-- 本轮未重新执行真机或 connected instrumentation：`adb devices -l` 当前无在线设备；上方 `0.2.0` 真机报告只作为历史证据，不代表 `0.2.1` 已验收。
+- 本轮稳定化验证已在 `SM-A526U1`（Android 14/API 34、`arm64-v8a`、4 KB）执行 `:demo-app:connectedDebugAndroidTest`，结果为 `14/14`；该结果是自动化 Demo/Runtime 证据，不替代人工悬浮窗、Activity 重建、键盘触控和无障碍操作验收。

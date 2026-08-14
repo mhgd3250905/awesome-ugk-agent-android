@@ -300,8 +300,8 @@
     {
       "name": "CPython 3.14.6 standard-library manifest",
       "path": "src/main/assets/ugk-terminal-runtime/python/3.14.6/manifest.sha256",
-      "sizeBytes": 62794,
-      "sha256": "f992d1b4d45c37d7e9a065248f6bd06d0c78e3936668a62cbdbb7986a5360e49"
+      "sizeBytes": 62181,
+      "sha256": "f6d5fa7070b6e7c4a9c50159457d6bbec5e235b9d5c7c4916dd054bdf8b166a6"
     },
     {
       "name": "CPython 3.14.6 standard-library archive",

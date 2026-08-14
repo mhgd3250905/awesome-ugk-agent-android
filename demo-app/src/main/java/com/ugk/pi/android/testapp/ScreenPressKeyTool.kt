@@ -74,7 +74,8 @@ class ScreenPressKeyTool(
                     put("key", key)
                     put("method", "ime_action")
                     put("success", result)
-                }.toString()
+                }.toString(),
+                isError = !result
             )
         }
 
@@ -87,7 +88,8 @@ class ScreenPressKeyTool(
                 put("key", key)
                 put("method", "gesture")
                 put("success", result)
-            }.toString()
+            }.toString(),
+            isError = !result
         )
     }
 

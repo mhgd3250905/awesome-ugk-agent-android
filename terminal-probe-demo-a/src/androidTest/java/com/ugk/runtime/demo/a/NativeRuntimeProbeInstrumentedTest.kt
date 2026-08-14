@@ -28,7 +28,7 @@ class NativeRuntimeProbeInstrumentedTest {
     fun terminalAgentPluginRequiresImmediateUserConfirmationByDefault() = runBlocking {
         val context = InstrumentationRegistry.getInstrumentation().targetContext
         val plugin = TerminalAgentPlugin(context)
-        val tool = plugin.tools().single()
+        val tool = plugin.tools().single { it.name == "terminal_bash_execute" }
         val marker = File(context.filesDir, "confirmation-must-not-run.txt")
         marker.delete()
 
@@ -55,7 +55,7 @@ class NativeRuntimeProbeInstrumentedTest {
             context,
             TerminalToolPolicy(requireUserConfirmation = false, maxConcurrentExecutions = 1)
         )
-        val tool = plugin.tools().single()
+        val tool = plugin.tools().single { it.name == "terminal_bash_execute" }
         val workspace = File(context.filesDir, "ugk-terminal-workspace/gate3-explicit-cancel")
         val started = File(workspace, "started.txt")
         val leaked = File(workspace, "leaked.txt")
