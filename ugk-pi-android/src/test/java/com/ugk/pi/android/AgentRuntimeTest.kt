@@ -1,6 +1,11 @@
 package com.ugk.pi.android
 
+import kotlinx.coroutines.CompletableDeferred
+import kotlinx.coroutines.async
+import kotlinx.coroutines.awaitCancellation
+import kotlinx.coroutines.cancelAndJoin
 import kotlinx.coroutines.flow.toList
+import kotlinx.coroutines.launch
 import kotlinx.coroutines.runBlocking
 import kotlinx.serialization.json.JsonObject
 import kotlinx.serialization.json.JsonPrimitive
@@ -10,6 +15,125 @@ import org.junit.Assert.assertTrue
 import org.junit.Test
 
 class AgentRuntimeTest {
+    @Test
+    fun `same session rejects a concurrent run without changing its history`() = runBlocking {
+        val providerEntered = CompletableDeferred<Unit>()
+        val releaseProvider = CompletableDeferred<Unit>()
+        var requestCount = 0
+        val provider = object : LLMProvider {
+            override suspend fun generate(request: ModelRequest): ModelResponse {
+                requestCount++
+                providerEntered.complete(Unit)
+                releaseProvider.await()
+                return ModelResponse(content = "first done")
+            }
+        }
+        val session = AgentSession(id = "concurrent-session")
+        val runtime = AgentRuntime(provider, ToolRegistry())
+
+        val firstRun = async {
+            runtime.run(session, "first").toList()
+        }
+        providerEntered.await()
+
+        val secondEvents = runtime.run(session, "second").toList()
+
+        assertEquals(
+            listOf(AgentEvent.Failed("AgentSession 'concurrent-session' is already running.")),
+            secondEvents
+        )
+        assertEquals(listOf(AgentMessage.User("first")), session.messages)
+        assertEquals(1, requestCount)
+
+        releaseProvider.complete(Unit)
+        assertEquals(AgentEvent.Completed("first done"), firstRun.await().last())
+        assertEquals(
+            listOf(
+                AgentMessage.User("first"),
+                AgentMessage.Assistant("first done")
+            ),
+            session.messages
+        )
+    }
+
+    @Test
+    fun `cancellation releases the session gate for a subsequent run`() = runBlocking {
+        val providerEntered = CompletableDeferred<Unit>()
+        var requestCount = 0
+        val provider = object : LLMProvider {
+            override suspend fun generate(request: ModelRequest): ModelResponse {
+                if (requestCount++ == 0) {
+                    providerEntered.complete(Unit)
+                    awaitCancellation()
+                }
+                return ModelResponse(content = "after cancellation")
+            }
+        }
+        val session = AgentSession(id = "cancelled-session")
+        val runtime = AgentRuntime(provider, ToolRegistry())
+
+        val firstRun = launch {
+            runtime.run(session, "first").toList()
+        }
+        providerEntered.await()
+        firstRun.cancelAndJoin()
+
+        val secondEvents = runtime.run(session, "second").toList()
+
+        assertEquals(AgentEvent.Completed("after cancellation"), secondEvents.last())
+        assertEquals(2, requestCount)
+        assertEquals(
+            listOf(
+                AgentMessage.User("first"),
+                AgentMessage.User("second"),
+                AgentMessage.Assistant("after cancellation")
+            ),
+            session.messages
+        )
+    }
+
+    @Test
+    fun `uncaught run exception releases the session gate for a subsequent run`() = runBlocking {
+        val call = ToolCall(
+            id = "exception-tool-call",
+            name = "echo",
+            input = JsonObject(mapOf("text" to JsonPrimitive("ping")))
+        )
+        var requestCount = 0
+        val provider = object : LLMProvider {
+            override suspend fun generate(request: ModelRequest): ModelResponse {
+                return if (requestCount++ == 0) {
+                    ModelResponse(content = "checking", toolCalls = listOf(call))
+                } else {
+                    ModelResponse(content = "recovered")
+                }
+            }
+        }
+        val session = AgentSession(id = "exception-session")
+        val runtime = AgentRuntime(
+            llmProvider = provider,
+            toolRegistry = ToolRegistry().register(EchoTool())
+        )
+        var thrown: IllegalStateException? = null
+
+        try {
+            runtime.run(
+                session = session,
+                input = AgentRunInput(content = "first"),
+                pendingUserMessages = { error("pending message source failed") }
+            ).toList()
+        } catch (error: IllegalStateException) {
+            thrown = error
+        }
+
+        assertEquals("pending message source failed", thrown?.message)
+        assertEquals(
+            AgentEvent.Completed("recovered"),
+            runtime.run(session, "second").toList().last()
+        )
+        assertEquals(2, requestCount)
+    }
+
     @Test
     fun `completes when provider returns no tool calls`() = runBlocking {
         val provider = ScriptedLLMProvider(

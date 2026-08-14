@@ -2,6 +2,7 @@ package com.ugk.pi.android
 
 import kotlinx.coroutines.CancellationException
 import kotlinx.coroutines.flow.Flow
+import kotlinx.coroutines.flow.emitAll
 import kotlinx.coroutines.flow.flow
 import kotlinx.serialization.json.booleanOrNull
 import kotlinx.serialization.json.contentOrNull
@@ -154,6 +155,23 @@ class AgentRuntime(
     )
 
     fun run(
+        session: AgentSession,
+        input: AgentRunInput,
+        pendingUserMessages: suspend () -> List<String>
+    ): Flow<AgentEvent> = flow {
+        if (!session.runGate.tryLock()) {
+            emit(AgentEvent.Failed(sessionAlreadyRunningMessage(session.id)))
+            return@flow
+        }
+
+        try {
+            emitAll(runInternal(session, input, pendingUserMessages))
+        } finally {
+            session.runGate.unlock()
+        }
+    }
+
+    private fun runInternal(
         session: AgentSession,
         input: AgentRunInput,
         pendingUserMessages: suspend () -> List<String>
@@ -388,6 +406,8 @@ class AgentRuntime(
 
 internal const val DEFAULT_MAX_ITERATIONS = 50
 private const val MAX_INCOMPLETE_RESPONSE_RETRIES = 2
+private fun sessionAlreadyRunningMessage(sessionId: String): String =
+    "AgentSession '$sessionId' is already running."
 private const val INCOMPLETE_RESPONSE_FAILURE_MESSAGE =
     "Model returned an incomplete final response three consecutive times."
 

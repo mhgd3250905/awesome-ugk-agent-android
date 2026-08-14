@@ -122,3 +122,62 @@
 - 本轮子线程产生的票据实现、测试、提示文本和接入 hunk 已全部撤销，未进入提交或版本发布。
 
 重新启动条件：先固定票据字段和 fingerprint 规范，再一次性完成 Core 单测、Demo 单测、确认取消/过期/重复使用测试和真机高影响操作验证；届时接受“旧 UI/API 保持、旧授权语义收紧”的兼容性边界。
+
+## SDK-OPT-005：AgentSession 并发运行门禁
+
+状态：已实现并验证通过
+
+目标：明确同一个 `AgentSession` 不允许多个 cold `Flow` 同时运行，避免并发读写
+`session.messages`；取消或异常结束后必须释放运行占用，使下一次运行可以正常开始。
+
+实现范围：
+
+- `AgentSession` 增加非构造参数的内部 `Mutex`，不改变现有构造函数、`data class`
+  equality 或 `messages` 数据结构。
+- `AgentRuntime` 最深层 `run()` 在 Flow 收集时使用 `tryLock()`；同一 Session 已被占用时，
+  使用现有 `AgentEvent.Failed` 返回明确结果，不新增 sealed event，不等待或排队第二次运行。
+- 运行主体通过 `try/finally` 释放 Mutex，覆盖正常完成、Flow 取消、Provider/Tool 之外的异常路径。
+- 未修改 `SessionStore`、Provider/Tool 协议、`AgentEvent` 定义、Demo UI 或
+  `DemoAgentRunCoordinator`；Coordinator 仍保留自身的 UI 级 Job 门禁，Runtime 负责 SDK 级保护。
+
+并发拒绝消息格式：
+
+```text
+AgentSession '<sessionId>' is already running.
+```
+
+验证：
+
+```powershell
+.\gradlew.bat :ugk-pi-android:testDebugUnitTest `
+  --tests com.ugk.pi.android.AgentRuntimeTest `
+  --console=plain
+
+.\gradlew.bat `
+  :ugk-pi-android:testDebugUnitTest `
+  :pi-file-skill-android:testDebugUnitTest `
+  :pi-schedule-skill-android:testDebugUnitTest `
+  :pi-system-skill-android:testDebugUnitTest `
+  :ugk-terminal-runtime-android:testDebugUnitTest `
+  :pi-terminal-skill-android:testDebugUnitTest `
+  :demo-app:testDebugUnitTest `
+  --console=plain
+
+.\gradlew.bat :demo-app:assembleDebug --console=plain
+```
+
+新增回归覆盖：
+
+- 同一 Session 第二次并发运行返回 `AgentEvent.Failed`，且不追加第二条用户消息。
+- 第一次运行取消后，同一 Session 可以再次完成运行。
+- 运行主体发生未捕获异常后，同一 Session 可以再次完成运行。
+
+结果：上述命令通过；`ugk-terminal-runtime-android:testDebugUnitTest` 仍为现有
+`NO-SOURCE` 状态；`git diff --check` 通过。
+
+兼容性影响：旧的唯一运行路径不变；新增的冲突路径从此前可能并发修改 Session，变为返回
+`AgentEvent.Failed`。没有新增事件类型、没有改变公开构造函数、Demo 版本仍为
+`0.2.1 / versionCode 3`，SDK Maven 版本未提升，本步骤不构成正式发布版本。
+
+审核边界：本步只解决同一 `AgentSession` 的运行互斥和释放，不引入 `runId`、`RunHandle`、
+SessionStore 重构、事件关联改造或跨 Runtime 的 Plugin 所有权治理。
