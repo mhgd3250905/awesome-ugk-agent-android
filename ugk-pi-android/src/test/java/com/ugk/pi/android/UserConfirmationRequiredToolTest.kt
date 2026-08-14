@@ -67,9 +67,9 @@ class UserConfirmationRequiredToolTest {
     }
 
     @Test
-    fun rejectsConfirmationWhenItIsNotTheLastMessage() = runBlocking {
+    fun acceptsConfirmationBeforeTheRuntimeAssistantToolCallEnvelope() = runBlocking {
         val delegate = RecordingTool()
-        val tool = UserConfirmationRequiredTool(delegate)
+        val tool = UserConfirmationRequiredTool(delegate, nowEpochMillis = { NOW })
         val intentCall = ToolCall("intent-1", tool.name, buildJsonObject { put("target", "open_url") })
 
         val result = tool.execute(
@@ -86,7 +86,57 @@ class UserConfirmationRequiredToolTest {
             )
         )
 
+        assertFalse(result.isError)
+        assertTrue(delegate.executed)
+    }
+
+    @Test
+    fun rejectsConfirmationWhenAssistantEnvelopeDoesNotContainCurrentCall() = runBlocking {
+        val delegate = RecordingTool()
+        val tool = UserConfirmationRequiredTool(delegate)
+        val intentCall = ToolCall("intent-1", tool.name, buildJsonObject { put("target", "open_url") })
+        val differentCall = ToolCall("different-1", tool.name, buildJsonObject { put("target", "camera_capture") })
+
+        val result = tool.execute(
+            intentCall,
+            ToolExecutionContext(
+                sessionId = SESSION,
+                priorMessages = listOf(
+                    AgentMessage.Tool(confirmationResult(SESSION, tool.name, intentCall.input)),
+                    AgentMessage.Assistant(
+                        content = "Launching another action.",
+                        toolCalls = listOf(differentCall)
+                    )
+                )
+            )
+        )
+
         assertTrue(result.isError)
+        assertFalse(delegate.executed)
+    }
+
+    @Test
+    fun rejectsConfirmationAfterUserSystemOrOtherToolMessage() = runBlocking {
+        val delegate = RecordingTool()
+        val tool = UserConfirmationRequiredTool(delegate, nowEpochMillis = { NOW })
+        val call = ToolCall("intent-1", tool.name, buildJsonObject { put("target", "open_url") })
+        val confirmation = AgentMessage.Tool(confirmationResult(SESSION, tool.name, call.input))
+        val invalidHistories = listOf(
+            listOf<AgentMessage>(confirmation, AgentMessage.User("new user request")),
+            listOf<AgentMessage>(confirmation, AgentMessage.System("new system boundary")),
+            listOf<AgentMessage>(
+                confirmation,
+                AgentMessage.Tool(ToolResult("other-1", "other_tool", "completed"))
+            )
+        )
+
+        invalidHistories.forEach { priorMessages ->
+            val result = tool.execute(
+                call,
+                ToolExecutionContext(sessionId = SESSION, priorMessages = priorMessages)
+            )
+            assertTrue(result.isError)
+        }
         assertFalse(delegate.executed)
     }
 

@@ -37,9 +37,29 @@ class UserConfirmationRequiredTool(
     }
 
     private fun ToolExecutionContext.hasImmediateUserConfirmation(call: ToolCall): Boolean {
-        val result = (priorMessages.lastOrNull() as? AgentMessage.Tool)?.result
+        val lastToolIndex = priorMessages.indexOfLast { it is AgentMessage.Tool }
+        if (lastToolIndex < 0) return false
+
+        val result = (priorMessages[lastToolIndex] as? AgentMessage.Tool)?.result
             ?: return false
         if (result.name != "show_user_confirmation_dialog" || result.isError) return false
+
+        // AgentRuntime appends the model's Assistant(toolCalls) envelope before
+        // executing that response's ToolCall. It is transport context, not a
+        // new action. Allow exactly that envelope when it contains this exact
+        // call; any user/system message or additional ToolResult invalidates
+        // the confirmation.
+        val messagesAfterConfirmation = priorMessages.drop(lastToolIndex + 1)
+        if (messagesAfterConfirmation.size > 1) return false
+        val assistantEnvelope = messagesAfterConfirmation.singleOrNull()
+            as? AgentMessage.Assistant
+        if (messagesAfterConfirmation.isNotEmpty() &&
+            assistantEnvelope?.toolCalls?.any {
+                it.name == call.name && it.input == call.input
+            } != true
+        ) {
+            return false
+        }
 
         val confirmation = runCatching {
             Json.parseToJsonElement(result.content).jsonObject

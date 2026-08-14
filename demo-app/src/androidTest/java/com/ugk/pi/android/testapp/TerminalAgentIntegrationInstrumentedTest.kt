@@ -25,6 +25,7 @@ import kotlinx.coroutines.flow.toList
 import kotlinx.serialization.json.buildJsonObject
 import kotlinx.serialization.json.put
 import kotlinx.serialization.json.putJsonArray
+import kotlinx.serialization.json.putJsonObject
 import org.junit.Assert.assertEquals
 import org.junit.Assert.assertFalse
 import org.junit.Assert.assertTrue
@@ -54,8 +55,9 @@ class TerminalAgentIntegrationInstrumentedTest {
         assertTrue(plugin.skills().any { it.id == "local-http-server" })
         val confirmationTool = UserConfirmationDialogTool(RecordingPresenter("confirm"))
 
+        val terminalInput = confirmedTerminalInput()
         val confirmation = confirmationTool.execute(
-            confirmationCall("confirm"),
+            confirmationCall("confirm", terminalInput),
             ToolExecutionContext(sessionId = "demo-integration")
         )
         assertFalse("confirmation tool failed: $confirmation", confirmation.isError)
@@ -64,13 +66,7 @@ class TerminalAgentIntegrationInstrumentedTest {
             ToolCall(
                 id = "terminal-confirmed",
                 name = terminalTool.name,
-                input = buildJsonObject {
-                    put(
-                        "script",
-                        "printf 'confirmed\\n'; " +
-                            "python -c \"import ssl, sqlite3, hashlib; print('python=ok')\""
-                    )
-                }
+                input = terminalInput
             ),
             ToolExecutionContext(
                 sessionId = "demo-integration",
@@ -93,17 +89,18 @@ class TerminalAgentIntegrationInstrumentedTest {
         val marker = File(context.filesDir, "terminal-cancel-must-not-run.txt")
         marker.delete()
 
+        val terminalInput = buildJsonObject {
+            put("script", "printf executed > '${marker.absolutePath}'")
+        }
         val confirmation = confirmationTool.execute(
-            confirmationCall("cancel"),
+            confirmationCall("cancel", terminalInput),
             ToolExecutionContext(sessionId = "demo-integration")
         )
         val result = terminalTool.execute(
             ToolCall(
                 id = "terminal-cancelled",
                 name = terminalTool.name,
-                input = buildJsonObject {
-                    put("script", "printf executed > '${marker.absolutePath}'")
-                }
+                input = terminalInput
             ),
             ToolExecutionContext(
                 sessionId = "demo-integration",
@@ -130,7 +127,7 @@ class TerminalAgentIntegrationInstrumentedTest {
             listOf(
                 ModelResponse(
                     content = "requesting confirmation",
-                    toolCalls = listOf(confirmationCall("agent-confirm"))
+                    toolCalls = listOf(confirmationCall("agent-confirm", terminalCall().input))
                 ),
                 ModelResponse(
                     content = "executing terminal",
@@ -149,8 +146,12 @@ class TerminalAgentIntegrationInstrumentedTest {
         val finishedTools = events
             .filterIsInstance<AgentEvent.ToolFinished>()
             .map { it.result.name }
+        val terminalResult = events
+            .filterIsInstance<AgentEvent.ToolFinished>()
+            .single { it.result.name == "terminal_bash_execute" }
 
         assertEquals(listOf("show_user_confirmation_dialog", "terminal_bash_execute"), finishedTools)
+        assertFalse("runtime confirmation did not authorize terminal call", terminalResult.result.isError)
         assertEquals("done", (events.last() as AgentEvent.Completed).content)
         assertTrue(provider.requests.first().tools.any { it.name == "terminal_bash_execute" })
         assertTrue(provider.requests.first().tools.any { it.name == "show_user_confirmation_dialog" })
@@ -162,7 +163,10 @@ class TerminalAgentIntegrationInstrumentedTest {
         )
     }
 
-    private fun confirmationCall(selectedButtonId: String): ToolCall {
+    private fun confirmationCall(
+        selectedButtonId: String,
+        targetInput: kotlinx.serialization.json.JsonObject
+    ): ToolCall {
         return ToolCall(
             id = "confirmation-$selectedButtonId",
             name = "show_user_confirmation_dialog",
@@ -179,7 +183,19 @@ class TerminalAgentIntegrationInstrumentedTest {
                         put("label", "Cancel")
                     })
                 }
+                putJsonObject("target") {
+                    put("toolName", "terminal_bash_execute")
+                    put("input", targetInput)
+                }
             }
+        )
+    }
+
+    private fun confirmedTerminalInput(): kotlinx.serialization.json.JsonObject = buildJsonObject {
+        put(
+            "script",
+            "printf 'confirmed\\n'; " +
+                "python -c \"import ssl, sqlite3, hashlib; print('python=ok')\""
         )
     }
 

@@ -62,14 +62,14 @@
 
 - `nonce` 使用宿主运行环境的密码学安全随机源生成，至少 128 bit；它不是业务输入，也不能由模型指定。
 - 默认票据有效期为 120 秒；`now >= expiresAtEpochMillis` 即过期。时钟由 Core 注入，便于测试。
-- 受保护 Tool 只有在其 `priorMessages` 的最后一条 ToolResult 是本次确认结果、按钮属于允许集合、票据未过期且所有绑定字段匹配时才执行。
-- 目标 Tool 执行成功、失败或被拒绝后，确认结果不再是下一次 Tool 的最近结果；下一次尝试必须重新确认。这是 v1 的“紧邻结果一次性”语义。
+- 受保护 Tool 只有在其 `priorMessages` 的最后一条 ToolResult 是本次确认结果、其后至多只有一个包含当前完整 ToolCall 的 Assistant(tool-call) 外壳、按钮属于允许集合、票据未过期且所有绑定字段匹配时才执行。该 Assistant 外壳是 Runtime 的消息封装，不代表新的执行；User/System 消息或任何其他 ToolResult 出现在确认之后都必须拒绝。
+- 目标 Tool 执行成功、失败或被拒绝后，确认结果不再是下一次 Tool 的最近 ToolResult；下一次尝试必须重新确认。这是 v1 的“紧邻结果一次性”语义。
 - 不匹配、缺字段、JSON 非法、过期、拒绝按钮、不同 Session 或重复使用均 fail-closed，不调用 delegate。
 - v1 不宣称对宿主手工伪造的 `priorMessages` 提供持久化防重放能力；如果未来支持跨进程/排队确认，必须增加共享的 TicketStore，并把消费状态纳入新的协议版本。
 
 ## 5. 旁路与兼容策略
 
-- `shouldBypassConfirmation` 仍表示宿主显式启用的 full authorization 策略；旁路不生成、不伪造票据，并必须由宿主负责生命周期和 UI 说明。
+- `shouldBypassConfirmation` 仍表示宿主显式启用的 full authorization 策略；旁路不要求、不校验 ticket。若宿主仍调用确认 Tool，确认 Tool 可能按 target 返回普通 ticket，但受保护 Tool 的旁路路径不会读取它；生命周期和 UI 说明仍由宿主负责。
 - 旧的仅返回 `selectedButtonId` 的确认结果可以继续被非受保护的确认调用读取，但受保护 Tool 默认拒绝无绑定票据的结果。
 - 旧的 `UserConfirmationDialogRequest(title, message, buttons)` 源码调用可以保留迁移期兼容构造，但没有 `target` 时不能产生可执行的受保护票据。
 - Demo 的旧 UI/API 不需要立即删除；迁移时必须在确认 UI 中展示目标 Tool 和目标输入摘要，并更新 Agent instructions 让模型在每次高影响操作前提交完整 target。
@@ -87,7 +87,7 @@
 - 同一目标 Tool 与同一输入成功；Tool 名称、输入字段、对象键顺序变化分别失败。
 - 不同 Session、过期票据、拒绝按钮、缺少 ticket、非法 ticket 分别失败。
 - 同一确认结果执行一次后再次尝试失败；不同目标不能复用。
-- full authorization 显式开启时仍可执行，但不会伪造或写入 ticket。
+- full authorization 显式开启时仍可执行，受保护 Tool 不要求或校验 ticket；是否调用确认 Tool 及其返回值由宿主实现决定。
 - Activity 重建/悬浮窗切换期间确认仍能完成或安全取消。
 - 真机上至少验证一次 Terminal 命令确认、一次 Screen 动作确认、一次取消和一次过期/重试路径。
 

@@ -259,9 +259,9 @@ SessionStore 重构、事件关联改造或跨 Runtime 的 Plugin 所有权治�
 - 确认请求必须携带 `target.toolName` 和完整 `target.input`；确认发生时目标 Tool 通常尚未执行，不能靠后续 Tool 调用推断授权对象。
 - 确认结果保留 `selectedButtonId`，新增带 `version/sessionId/toolName/inputFingerprint/nonce/issuedAtEpochMillis/expiresAtEpochMillis` 的 ticket。
 - `inputFingerprint` 使用版本化 canonical JSON + SHA-256；对象键排序、数组顺序、数字规范化和无法规范化时的拒绝语义已固定。
-- 受保护 Tool 默认要求同一 Session、同一 Tool、同一输入摘要、未过期且紧邻的确认结果；缺字段、拒绝、过期、错配和重复使用均 fail-closed。
+- 受保护 Tool 默认要求同一 Session、同一 Tool、同一输入摘要、未过期且紧邻的确认结果；允许 Runtime 在结果后附带一个包含当前 ToolCall 的 Assistant 外壳，但 User/System 消息或任何其他 ToolResult 会使确认失效；缺字段、拒绝、过期、错配和重复使用均 fail-closed。
 - v1 的一次性语义依赖 Runtime 工具结果顺序；跨进程或排队确认若未来需要持久化防重放，必须另行引入共享 TicketStore 和协议版本。
-- `shouldBypassConfirmation` 仍是宿主显式 full authorization 旁路，不生成或伪造 ticket。
+- `shouldBypassConfirmation` 仍是宿主显式 full authorization 旁路，不要求或校验 ticket；若宿主仍调用确认 Tool，其返回的普通 ticket 在旁路路径不会被读取。
 
 兼容边界：旧的 `selectedButtonId` 结果可以保留给非受保护确认调用；受保护 Tool 默认拒绝无 target/ticket 的旧结果。旧构造函数可在迁移期保留，但不能据此执行受保护操作。
 
@@ -274,8 +274,8 @@ SessionStore 重构、事件关联改造或跨 Runtime 的 Plugin 所有权治�
 实现范围：
 - Core 增加 `UserConfirmationTarget`、`UserConfirmationTicket` 和共享的 `canonical-json-v1` SHA-256 输入摘要实现。
 - `UserConfirmationDialogTool` 从 `ToolExecutionContext.sessionId` 和确认请求 target 生成 120 秒、至少 128 bit nonce 的 ticket；旧请求缺少 target 时仍可返回普通选择结果，但不生成受保护 ticket。
-- `UserConfirmationRequiredTool` 默认 fail-closed，校验最后一条 confirmation ToolResult、允许按钮、ticket version/session/tool/input fingerprint、nonce 和时间窗口；显式 `shouldBypassConfirmation` 仍可旁路。
-- 未引入 TicketStore、Coordinator、runId、System/Terminal/Demo 代码或版本变更；v1 一次性语义依赖 Runtime 的紧邻 ToolResult 顺序。
+- `UserConfirmationRequiredTool` 默认 fail-closed，校验最后一条 confirmation ToolResult、其后至多一个包含当前 ToolCall 名称和完整输入的 Assistant 外壳、允许按钮、ticket version/session/tool/input fingerprint、nonce 和时间窗口；显式 `shouldBypassConfirmation` 仍可旁路。
+- 未引入 TicketStore、Coordinator、runId、System/Terminal/Demo 代码或版本变更；v1 一次性语义依赖 Runtime 的紧邻 ToolResult 顺序及有界 Assistant 外壳规则。
 
 新增回归覆盖：同目标成功、对象键顺序稳定、数组顺序敏感、数字/布尔/null 规范化、Tool/Session/输入错配、过期、拒绝按钮、缺失/非法 ticket、目标缺失、一次性复用和 bypass。
 
@@ -292,3 +292,37 @@ SessionStore 重构、事件关联改造或跨 Runtime 的 Plugin 所有权治�
 - 未修改 Core、Demo、runtime `AGENTS.md`、Tool 执行逻辑、bypass、权限、Runtime、build.gradle、版本或既有用户未提交文件；未新增生产抽象。
 
 验证结果：System/Terminal 定向单元测试、全 SDK 单元回归、`demo-app:assembleDebug` 和 `git diff --check` 均通过。Demo 真机确认迁移留给 009C。
+
+## SDK-OPT-009C：Demo confirmation presenter/UI 迁移
+
+状态：已实现，主线程审查通过；真机确认 UI 验收进行中
+
+实现范围：
+- `UserConfirmationDialogRequest.target` 映射到 Demo overlay confirmation snapshot，保留
+  `toolName` 和有上限的 JSON 输入摘要；旧请求没有 target 时保持 `null`，不填充虚假目标。
+- Activity 前台 `AlertDialog` 和跨 App `AgentFloatingWindow` 均展示目标 Tool 与输入摘要；输入摘要上限为
+  `MAX_CONFIRMATION_INPUT_SUMMARY_CHARS = 512`，不改变 full authorization 的旁路和生命周期行为。
+- 仅更新 `MainActivity` 中 screen action 的 instructions，要求确认 target 与下一次 Tool 的名称和完整输入完全一致。
+- 更新 Android Automation、Android Intent、Terminal 三组 Demo instrumentation confirmation helper，覆盖成功、取消和 AgentRuntime 循环的目标绑定夹具。
+- 未修改 Core、System、Terminal、runtime `AGENTS.md`、build.gradle、版本、权限、Activity 生命周期或既有 Screen Tool 实现。
+
+验证结果：
+```powershell
+.\gradlew.bat :demo-app:testDebugUnitTest :demo-app:assembleDebug --console=plain
+.\gradlew.bat :demo-app:compileDebugAndroidTestKotlin --console=plain
+git diff --check
+```
+
+上述命令通过；首次 `connectedDebugAndroidTest` 在 14 个测试中 12 个通过，Android Automation 和 Android Intent 各 1 个因 Core confirmation boundary 问题失败；修复后需重新执行并在提交前重新安装 APK。
+
+## SDK-OPT-009D：Runtime confirmation boundary integration fix
+
+状态：修复中，已由 009C 真机验收发现，待主线程验证后提交
+
+问题与修复范围：
+- 真机暴露 Core 的旧判定只读取 `priorMessages.lastOrNull()`，而 `AgentRuntime` 在执行下一轮 ToolCall 前会先追加 Assistant(tool-calls) 外壳，导致确认后的 `launch_android_app` 和 `launch_android_app_intent` 被错误拒绝。
+- 允许确认 ToolResult 后至多存在一个明确包含当前完整 ToolCall 的 Assistant 外壳；其余 User/System/ToolResult 或不匹配的 Assistant 均继续 fail-closed。
+- 补充 Core 的 Assistant 外壳正向/错配测试，并让 Terminal Runtime instrumentation 断言受保护 ToolResult 确实成功，避免只检查事件名称而掩盖授权失败。
+- 不引入 Coordinator、TicketStore、runId 或新的生产 API；不改变 ticket 字段、有效期、bypass 和 delegate 执行逻辑。
+
+009C 真机首次结果：14 个测试中 12 个通过；Android Automation 和 Android Intent 各 1 个因上述 Core 边界问题失败，Terminal 三项通过但原循环夹具此前未断言执行结果。修复后需重新执行 Demo connected tests 并重新安装 APK。
