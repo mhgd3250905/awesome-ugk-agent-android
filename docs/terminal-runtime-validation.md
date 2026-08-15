@@ -1,18 +1,20 @@
 # Terminal Runtime 验证矩阵
 
-更新时间：2026-08-14
-验证源码：`D:\AII\ugk-android`
+更新时间：2026-08-15
+验证源码：`E:\AII\ugk-android-new`
 注意：本轮最新物理设备结果绑定到 source checkpoint `28bc352622458d29e090656ae42fd32f057e9196`，验证时工作树干净；更改源码后的未提交工作树必须在发布前重新绑定到明确 commit。
 
 ## 1. 环境变量
 
+以下为当前机器的可执行环境；早期轮次小节中的旧布局（`E:\AndroidStudioKoalaFeat2024\jbr`、`E:\Application\Android\2020SDK\sdk`、`C:\Users\shengk\.android`）在本机已不存在，历史记录只保留当时的命令与结果。
+
 ```powershell
-$env:JAVA_HOME = 'E:\AndroidStudioKoalaFeat2024\jbr'
-$env:ANDROID_HOME = 'E:\Application\Android\2020SDK\sdk'
-$env:ANDROID_USER_HOME = 'C:\Users\shengk\.android'
+$env:JAVA_HOME = 'E:\Android\Android Studio\jbr'
+$env:ANDROID_HOME = 'E:\Android\SDK'
+$env:ANDROID_USER_HOME = 'C:\Users\29485\.android'
 ```
 
-当前 NDK：`E:\Application\Android\2020SDK\sdk\ndk\28.2.13676358`。
+当前 NDK：`E:\Android\SDK\ndk\28.2.13676358`。
 
 ## 2. Gate 总表
 
