@@ -1,6 +1,6 @@
 # SDK 优化推进台账
 
-更新时间：2026-08-14
+更新时间：2026-08-15
 
 ## 版本与推进规则
 
@@ -363,3 +363,32 @@ git diff --check
 稳定化阶段的详细测试矩阵、已知未覆盖范围、冻结规则和退出条件见 [`sdk-stabilization-baseline.md`](sdk-stabilization-baseline.md)。当前仍未完成 16 KB page size、真实 Provider 端到端、Activity 生命周期和人工无障碍操作的完整证据；在这些证据补齐前，不宣称架构整改完成或全设备兼容。
 
 实现范围：本条目只完成版本保存和状态文档收口，不产生 SDK/Demo 版本 bump，不改变公共 API 或运行时行为。
+
+## SDK-STAB-002：会话转录不变式与工具目标缺陷修复（PR #1）
+
+状态：已合并入 main 并完成文档收口；稳定化窗口准入依据见 D-018
+
+合并坐标：PR `mhgd3250905/awesome-ugk-agent-android#1`，分支 `fix/p0-session-transcript-and-tool-targeting`，以 rebase 方式合入 main（提交 `6a752c0`、`f8f5738`，2026-08-15）。
+
+缺陷与修复范围：
+
+- P0（Core）：`AgentRuntime.runInternal` 在工具批次执行前先写入 assistant `tool_use` 信封；运行被取消时未应答调用永久缺失 `tool_result`，此后该会话的每个 provider 请求都被拒绝。修复为捕获批次循环的 `CancellationException`，经 `appendCancelledToolResults` 为每个未应答调用补写合成 cancelled `tool_result`（isError=true）后重抛；不 emit 事件。
+- P0（demo-app）：`DemoActivityState.boundSession` 的 `takeLast` 截断可在信封/结果之间切分，产生孤儿 `tool_result` 或非 user 首消息，同样导致会话永久不可用。修复为 `trimAtSafeBoundaries` 只在整组边界（user 消息，或 assistant 信封+其全部连续 `tool_result`）裁剪并从最新端回填，首消息保持 user。
+- P1：`open_map` 因 `isSafeText` 禁止空白而拒绝一切多词查询，改为控制字符校验 + 纯 JVM RFC3986 百分号编码；`screen_perform_action` 在 nodeId 窗口索引失效时静默回退 `rootInActiveWindow` 对无关节点执行动作，改为返回结构化错误并要求重新读屏。
+- P2（4 项）：nodeId 路径严格解析（`parseScreenNodePath`，非法段不再静默丢弃或回退窗口 0）；`screen_read_ui_tree` 的 `package` 优先取活动窗口；`tel:`/`smsto:`/`mailto:` 增加拨号字符类与邮箱收件人校验；`screen_launch_app` 以可取消的 `delay(1500)` 替换 `Thread.sleep(1500)` 并显式重抛取消。
+
+稳定化窗口准入：冻结规则原准入类别为 P0/P1 缺陷、可复现回归、验证阻断修复；本批 P1/P2 修复的准入决策、依据和后续约束记录于 `terminal-runtime-decisions.md` D-018。
+
+审查记录：PR 内含两轮独立只读审查（第 1 轮 3 MAJOR + 4 MINOR 全部修复；第 2 轮 PASS）。合并前主会话另做两轴审查（规范轴/需求轴），确认新增 `@Test` 恰 24 个（Core 4 / demo-app 11 / pi-system 9）、无版本 bump、无新增源码级公共 API；发现并处置三项流程问题：P2 窗口准入缺决策（本条目与 D-018 补齐）、本仓库零台账登记（本条目补齐）、PR 描述两处失实（demo-app 测试数 9 更正为 11；“30 万次模糊测试”注明为审查线程内部对等价 Java 实现的验证、未提交至仓库，已在 PR 描述更新）。
+
+验证（合并后 main `f8f5738`、干净工作树重跑，2026-08-15）：
+
+- 全模块 JVM 单元测试（含 demo-app）：142/142 通过，0 失败 0 错误（基线 118 + 24 回归）。
+- `:demo-app:assembleDebug`、`:ugk-pi-android:bundleReleaseAar`：通过。
+- Core API surface inventory：class files 80、source-facing public types 61 不变；public member signatures 574→575，与基线 `6d9af7d` 的 javap 清单逐行 diff 确认唯一差异为编译器合成成员 `access$appendCancelledToolResults`（Kotlin 为 flow lambda 访问新增 private helper 生成的 synthetic accessor），源码级公共 API 无新增。该 +1 属 SDK-OPT-007 已记录的“编译器生成成员计数波动”，不构成 API 变更；增量与 clean 重建的签名清单一致。
+- `git diff --check`：通过。
+- 未复验项：`connectedDebugAndroidTest` 与安装冒烟沿用 PR 分支上的 API 35 模拟器记录（14/14），本机当日无在线设备，未在本会话重跑。
+
+兼容性影响：无 SDK/Demo 版本 bump；取消路径的转录补写发生在收集方已取消之后，不改变确认票据契约的 fail-closed 判定方向；截断与取消修复使长会话在取消/截断后可继续使用（此前为永久损坏）。
+
+遗留（不阻塞，待设备在线后验收）：`screen_perform_action` 窗口失效路径、`screen package` 活动窗口、`screen_launch_app` 取消语义三项无 JVM 回归测试（需真机无障碍联调）；IME 输入中多窗口同报 active 时 `package` 仍可能报告输入法包名；截断保留度在单组超预算的连续尾部裁剪场景（约 4%）低于预算上限，不变式始终成立。

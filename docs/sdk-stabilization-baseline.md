@@ -65,7 +65,7 @@
 
 ### 冻结规则
 
-- 只接受 P0/P1 缺陷、可复现回归、阻断验证的问题修复；每个修复必须补充对应测试或证据。
+- 只接受 P0/P1 缺陷、可复现回归、阻断验证的问题修复；每个修复必须补充对应测试或证据。低于 P1 的确定性缺陷修复按 `terminal-runtime-decisions.md` D-018 的准入条件执行（首个获批批次见台账 SDK-STAB-002 / PR #1）。
 - 不在稳定化窗口内新增模块拆分、Runtime Coordinator、持久化 TicketStore、runId 或新的跨模块公共 API。
 - 不因内部修复、文档、测试或架构整理自动提升 SDK/Demo 版本。
 - 任何改变公共 API、确认语义、权限边界、Terminal Runtime scope 或 Gate 退出条件的工作，先新增独立台账条目并重新审查。

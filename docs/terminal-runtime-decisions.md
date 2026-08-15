@@ -135,3 +135,11 @@
 - 影响：Runtime `AGENTS.md` 必须明确 `python`/`python3` 只能在当前 Bash 中直接调用，禁止将其交给
   `nohup`、`env`、`setsid`、`xargs` 等外部 exec 包装器；本地 HTTP 服务不是 LAN/public server，
   也不承诺宿主进程被杀后的恢复。后续若需要 WebSocket、TLS、外网绑定或任意 daemon，应另立决策。
+
+## D-018：稳定化窗口对确定性缺陷修复的准入边界
+
+- 日期：2026-08-15
+- 背景：PR #1（SDK-STAB-002）在稳定化窗口内同时修复 2 个 P0、2 个 P1 和 4 个 P2。冻结规则列出的准入类别是 P0/P1 缺陷、可复现回归和验证阻断修复；其中 nodeId 严格解析、`screen package` 活动窗口、`tel:`/`smsto:`/`mailto:` 输入校验和 `Thread.sleep` 替换按原始分级为 P2，需要明确准入依据，避免窗口被无限放宽。
+- 决策：稳定化窗口内，低于 P1 的修复仅在同时满足以下条件时准入：缺陷是确定性的功能/数据正确性问题或输入校验缺口（不是重构、性能优化或新能力）；每项附带回归测试或有书面说明的验证缺口；不触碰公共 API、确认语义、权限边界、Terminal Runtime scope 或 Gate 退出条件；不引入 Coordinator、TicketStore、runId、模块拆分或新跨模块 API。本批 4 个 P2 全部满足上述条件，予以放行；其中 `Thread.sleep`→`delay` 一项是对 PR 自身第一版引入问题的修复。此决策是对冻结规则的细化，不改变其禁止项；后续 P2 级修复必须先在台账登记条目并引用本决策，才能合入。
+- 原因：拒绝这批修复会使已证实的静默误操作（对无关节点执行动作并报告成功）和 URI 重构输入面继续存在；而放行条件不扩大架构面，与窗口“冻结边界、只修缺陷”的目的一致。
+- 影响：Core API surface 的 public member signature 计数可因编译器合成成员（如 `access$` 桥）随 private helper 增减而波动（本批 574→575，唯一差异为 `access$appendCancelledToolResults` synthetic accessor）；inventory 总数差异须先经与基线的逐行 diff 区分合成成员与源码 API 变化，只有后者才按 SDK-OPT-010 的版本规则处理。
