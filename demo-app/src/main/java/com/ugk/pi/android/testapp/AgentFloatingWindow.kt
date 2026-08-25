@@ -407,8 +407,8 @@ class AgentFloatingWindow(private val context: Context) : ConfirmationOverlayHos
         val composer = LinearLayout(context).apply {
             orientation = LinearLayout.HORIZONTAL
             gravity = Gravity.BOTTOM
-            background = Ui.rounded(context, Ui.SurfaceSoft, 12)
-            setPadding(dp(5), dp(3), dp(5), dp(3))
+            background = Ui.rounded(context, Ui.SurfaceElevated, 14, Ui.Outline)
+            setPadding(dp(6), dp(3), dp(6), dp(3))
         }
         inputField = EditText(context).apply {
             hint = "给 Agent 发消息"
@@ -441,11 +441,11 @@ class AgentFloatingWindow(private val context: Context) : ConfirmationOverlayHos
         composer.addView(inputField, LinearLayout.LayoutParams(0, LinearLayout.LayoutParams.WRAP_CONTENT, 1f))
         composer.addView(sendButton, LinearLayout.LayoutParams(
             LinearLayout.LayoutParams.WRAP_CONTENT,
-            dp(42)
+            dp(38)
         ).apply { marginStart = dp(4) })
         composer.addView(stopButton, LinearLayout.LayoutParams(
             LinearLayout.LayoutParams.WRAP_CONTENT,
-            dp(42)
+            dp(38)
         ).apply { marginStart = dp(4) })
         contentRoot.addView(composer, LinearLayout.LayoutParams(
             LinearLayout.LayoutParams.MATCH_PARENT,
@@ -459,14 +459,14 @@ class AgentFloatingWindow(private val context: Context) : ConfirmationOverlayHos
     private fun actionButton(label: String, description: String, action: () -> Unit): TextView =
         TextView(context).apply {
             text = label
-            textSize = 11f
-            setTypeface(null, Typeface.BOLD)
+            textSize = 11.5f
+            setTypeface(Typeface.create("sans-serif-medium", Typeface.NORMAL))
             setTextColor(Ui.MintDark)
             gravity = Gravity.CENTER
             minWidth = dp(42)
-            minHeight = dp(36)
-            setPadding(dp(6), dp(4), dp(6), dp(4))
-            background = Ui.rounded(context, Ui.SurfaceSoft, 10)
+            minHeight = dp(34)
+            setPadding(dp(8), dp(4), dp(8), dp(4))
+            background = Ui.clickableRounded(context, Ui.SurfaceSubtle, Ui.SurfaceSoft, 10, Ui.Outline)
             contentDescription = description
             setOnClickListener { action() }
             // A swipe that starts on a button must stay a window drag, not

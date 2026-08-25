@@ -82,20 +82,102 @@ class DemoChatMessageView @JvmOverloads constructor(
     attrs: AttributeSet? = null
 ) : FrameLayout(context, attrs) {
 
-    private val bubble = TextView(context).apply {
-        setTextSize(TypedValue.COMPLEX_UNIT_SP, 16f)
+    private val userBubble = TextView(context).apply {
+        setTextSize(TypedValue.COMPLEX_UNIT_SP, 15f)
         setTextColor(DemoChatPalette.textPrimary)
         typeface = Typeface.create("sans-serif", Typeface.NORMAL)
-        setLineSpacing(0f, 1.14f)
-        includeFontPadding = true
-        minHeight = context.chatDp(44)
+        setLineSpacing(0f, 1.25f)
+        includeFontPadding = false
+        minHeight = context.chatDp(40)
         setPadding(
             context.chatDp(16),
             context.chatDp(11),
             context.chatDp(16),
             context.chatDp(11)
         )
+        background = asymmetricRoundedBackground(
+            context = context,
+            fillColor = DemoChatPalette.userBubble,
+            strokeColor = DemoChatPalette.userStroke,
+            topLeftDp = 18,
+            topRightDp = 18,
+            bottomRightDp = 4,
+            bottomLeftDp = 18
+        )
+        setTextIsSelectable(true)
         importantForAccessibility = View.IMPORTANT_FOR_ACCESSIBILITY_NO
+    }
+
+    private val assistantAvatar = TextView(context).apply {
+        text = "✦"
+        textSize = 13f
+        gravity = Gravity.CENTER
+        setTextColor(DemoChatPalette.mintDark)
+        background = roundedBackground(
+            context,
+            DemoChatPalette.mintSoft,
+            DemoChatPalette.mintStroke,
+            15
+        )
+        importantForAccessibility = View.IMPORTANT_FOR_ACCESSIBILITY_NO
+    }
+
+    private val assistantHeader = TextView(context).apply {
+        text = "UGK Agent"
+        textSize = 11.5f
+        typeface = Typeface.create("sans-serif-medium", Typeface.NORMAL)
+        setTextColor(DemoChatPalette.textSecondary)
+        setPadding(context.chatDp(4), 0, 0, context.chatDp(4))
+        importantForAccessibility = View.IMPORTANT_FOR_ACCESSIBILITY_NO
+    }
+
+    private val assistantBubble = TextView(context).apply {
+        setTextSize(TypedValue.COMPLEX_UNIT_SP, 15f)
+        setTextColor(DemoChatPalette.textPrimary)
+        typeface = Typeface.create("sans-serif", Typeface.NORMAL)
+        setLineSpacing(0f, 1.28f)
+        includeFontPadding = false
+        minHeight = context.chatDp(40)
+        setPadding(
+            context.chatDp(16),
+            context.chatDp(12),
+            context.chatDp(16),
+            context.chatDp(12)
+        )
+        background = asymmetricRoundedBackground(
+            context = context,
+            fillColor = DemoChatPalette.assistantBubble,
+            strokeColor = DemoChatPalette.assistantStroke,
+            topLeftDp = 4,
+            topRightDp = 18,
+            bottomRightDp = 18,
+            bottomLeftDp = 18
+        )
+        setTextIsSelectable(true)
+        importantForAccessibility = View.IMPORTANT_FOR_ACCESSIBILITY_NO
+    }
+
+    private val assistantContainer = LinearLayout(context).apply {
+        orientation = LinearLayout.HORIZONTAL
+        gravity = Gravity.TOP
+        val avatarParams = LinearLayout.LayoutParams(context.chatDp(30), context.chatDp(30)).apply {
+            topMargin = context.chatDp(2)
+            marginEnd = context.chatDp(8)
+        }
+        addView(assistantAvatar, avatarParams)
+
+        val rightColumn = LinearLayout(context).apply {
+            orientation = LinearLayout.VERTICAL
+            addView(assistantHeader, LinearLayout.LayoutParams(
+                LinearLayout.LayoutParams.WRAP_CONTENT,
+                LinearLayout.LayoutParams.WRAP_CONTENT
+            ))
+            addView(assistantBubble, LinearLayout.LayoutParams(
+                LinearLayout.LayoutParams.WRAP_CONTENT,
+                LinearLayout.LayoutParams.WRAP_CONTENT
+            ))
+        }
+        addView(rightColumn, LinearLayout.LayoutParams(0, LinearLayout.LayoutParams.WRAP_CONTENT, 1f))
     }
 
     private var role: DemoChatMessageRole = DemoChatMessageRole.ASSISTANT
@@ -106,14 +188,20 @@ class DemoChatMessageView @JvmOverloads constructor(
         clipToPadding = false
         setPadding(
             context.chatDp(12),
-            context.chatDp(4),
+            context.chatDp(6),
             context.chatDp(12),
-            context.chatDp(4)
+            context.chatDp(6)
         )
         importantForAccessibility = View.IMPORTANT_FOR_ACCESSIBILITY_YES
         addView(
-            bubble,
+            userBubble,
             LayoutParams(LayoutParams.WRAP_CONTENT, LayoutParams.WRAP_CONTENT).apply {
+                gravity = Gravity.END
+            }
+        )
+        addView(
+            assistantContainer,
+            LayoutParams(LayoutParams.MATCH_PARENT, LayoutParams.WRAP_CONTENT).apply {
                 gravity = Gravity.START
             }
         )
@@ -123,11 +211,21 @@ class DemoChatMessageView @JvmOverloads constructor(
     /** 绑定角色和消息正文；不会触发任何业务回调。 */
     fun bind(role: DemoChatMessageRole, text: CharSequence) {
         this.role = role
-        // Chat content is user data. Do not silently trim it for presentation;
-        // the parent ScrollView provides the bounded viewport instead.
         messageText = text.toString()
-        bubble.text = messageText
-        applyRoleStyle()
+        if (role == DemoChatMessageRole.USER) {
+            userBubble.visibility = View.VISIBLE
+            assistantContainer.visibility = View.GONE
+            userBubble.text = messageText
+        } else {
+            userBubble.visibility = View.GONE
+            assistantContainer.visibility = View.VISIBLE
+            assistantBubble.text = DemoMarkdownFormatter.format(messageText)
+        }
+        contentDescription = buildString {
+            append(role.accessibilityLabel)
+            append("：")
+            append(messageText.ifBlank { "空消息" })
+        }
     }
 
     /** 只更新消息正文，保留当前角色。 */
@@ -147,36 +245,19 @@ class DemoChatMessageView @JvmOverloads constructor(
 
     override fun onMeasure(widthMeasureSpec: Int, heightMeasureSpec: Int) {
         val availableWidth = MeasureSpec.getSize(widthMeasureSpec)
-        bubble.maxWidth = if (availableWidth > 0) {
+        val maxBubbleWidth = if (availableWidth > 0) {
             (availableWidth * MAX_BUBBLE_WIDTH_FRACTION).roundToInt()
         } else {
             context.chatDp(DEFAULT_BUBBLE_MAX_WIDTH_DP)
         }
+        userBubble.maxWidth = maxBubbleWidth
+        assistantBubble.maxWidth = maxBubbleWidth
         super.onMeasure(widthMeasureSpec, heightMeasureSpec)
-    }
-
-    private fun applyRoleStyle() {
-        val isUser = role == DemoChatMessageRole.USER
-        bubble.background = roundedBackground(
-            context = context,
-            fillColor = if (isUser) DemoChatPalette.userBubble else DemoChatPalette.assistantBubble,
-            strokeColor = if (isUser) DemoChatPalette.userStroke else DemoChatPalette.assistantStroke,
-            radiusDp = 18
-        )
-        bubble.setTextColor(DemoChatPalette.textPrimary)
-        val layoutParams = bubble.layoutParams as? LayoutParams ?: return
-        layoutParams.gravity = if (isUser) Gravity.END else Gravity.START
-        bubble.layoutParams = layoutParams
-        contentDescription = buildString {
-            append(role.accessibilityLabel)
-            append("：")
-            append(messageText.ifBlank { "空消息" })
-        }
     }
 
     private companion object {
         const val DEFAULT_BUBBLE_MAX_WIDTH_DP = 320
-        const val MAX_BUBBLE_WIDTH_FRACTION = 0.86f
+        const val MAX_BUBBLE_WIDTH_FRACTION = 0.85f
     }
 }
 
@@ -354,7 +435,7 @@ class DemoChatProcessCardView @JvmOverloads constructor(
         headerIcon.apply {
             text = "✦"
             gravity = Gravity.CENTER
-            setTextSize(TypedValue.COMPLEX_UNIT_SP, 16f)
+            setTextSize(TypedValue.COMPLEX_UNIT_SP, 15f)
             setTextColor(DemoChatPalette.mintDark)
             background = roundedBackground(
                 context,
@@ -387,28 +468,35 @@ class DemoChatProcessCardView @JvmOverloads constructor(
 
     private fun configureExpansionView() {
         expansionView.apply {
-            setTextSize(TypedValue.COMPLEX_UNIT_SP, 12f)
+            setTextSize(TypedValue.COMPLEX_UNIT_SP, 11.5f)
             setTextColor(DemoChatPalette.mintDark)
             typeface = Typeface.create("sans-serif-medium", Typeface.NORMAL)
             maxLines = 1
+            setPadding(context.chatDp(9), context.chatDp(3), context.chatDp(9), context.chatDp(3))
+            background = roundedBackground(
+                context,
+                DemoChatPalette.mintSoft,
+                DemoChatPalette.mintStroke,
+                999
+            )
             importantForAccessibility = View.IMPORTANT_FOR_ACCESSIBILITY_NO
         }
     }
 
     private fun configureCollapsedSummary() {
         collapsedSummaryView.apply {
-            setTextSize(TypedValue.COMPLEX_UNIT_SP, 14f)
+            setTextSize(TypedValue.COMPLEX_UNIT_SP, 13.5f)
             setTextColor(DemoChatPalette.textSecondary)
             typeface = Typeface.create("sans-serif", Typeface.NORMAL)
             maxLines = 1
-            setPadding(0, context.chatDp(5), 0, context.chatDp(2))
+            setPadding(0, context.chatDp(6), 0, context.chatDp(2))
             importantForAccessibility = View.IMPORTANT_FOR_ACCESSIBILITY_NO
         }
     }
 
     private fun configureStepsContainer() {
         stepsContainer.orientation = VERTICAL
-        stepsContainer.setPadding(0, context.chatDp(4), 0, context.chatDp(2))
+        stepsContainer.setPadding(0, context.chatDp(6), 0, context.chatDp(2))
         stepsContainer.importantForAccessibility = View.IMPORTANT_FOR_ACCESSIBILITY_NO
     }
 
@@ -514,11 +602,13 @@ class DemoChatProcessCardView @JvmOverloads constructor(
         stepsContainer.removeAllViews()
         currentState.steps.forEachIndexed { index, step ->
             if (index > 0) {
-                stepsContainer.addView(View(context), LayoutParams(
+                stepsContainer.addView(View(context).apply {
+                    setBackgroundColor(DemoChatPalette.outline)
+                }, LayoutParams(
                     context.chatDp(1),
-                    context.chatDp(12)
+                    context.chatDp(10)
                 ).apply {
-                    marginStart = context.chatDp(14)
+                    marginStart = context.chatDp(12)
                 })
             }
             stepsContainer.addView(buildStepRow(step))
@@ -535,7 +625,7 @@ class DemoChatProcessCardView @JvmOverloads constructor(
         val row = LinearLayout(context).apply {
             orientation = HORIZONTAL
             gravity = Gravity.TOP
-            minimumHeight = context.chatDp(44)
+            minimumHeight = context.chatDp(40)
             isClickable = hasDetails
             isFocusable = hasDetails
             importantForAccessibility = if (hasDetails) {
@@ -547,7 +637,7 @@ class DemoChatProcessCardView @JvmOverloads constructor(
         val indicator = TextView(context).apply {
             text = stepIndicator(step.status)
             gravity = Gravity.CENTER
-            setTextSize(TypedValue.COMPLEX_UNIT_SP, 13f)
+            setTextSize(TypedValue.COMPLEX_UNIT_SP, 12f)
             setTypeface(Typeface.DEFAULT, Typeface.BOLD)
             setTextColor(stepIndicatorTextColor(step.status))
             background = roundedBackground(
@@ -568,10 +658,10 @@ class DemoChatProcessCardView @JvmOverloads constructor(
         }
         val title = TextView(context).apply {
             text = step.title
-            setTextSize(TypedValue.COMPLEX_UNIT_SP, 14f)
+            setTextSize(TypedValue.COMPLEX_UNIT_SP, 13.5f)
             setTextColor(DemoChatPalette.textPrimary)
             typeface = Typeface.create("sans-serif-medium", Typeface.NORMAL)
-            setLineSpacing(0f, 1.12f)
+            setLineSpacing(0f, 1.15f)
             importantForAccessibility = View.IMPORTANT_FOR_ACCESSIBILITY_NO
         }
         textColumn.addView(title, LayoutParams(LayoutParams.MATCH_PARENT, LayoutParams.WRAP_CONTENT))
@@ -581,11 +671,20 @@ class DemoChatProcessCardView @JvmOverloads constructor(
                 text = fullDetail
                 setTextSize(TypedValue.COMPLEX_UNIT_SP, 12f)
                 setTextColor(DemoChatPalette.textSecondary)
-                setLineSpacing(0f, 1.18f)
-                setPadding(0, context.chatDp(3), 0, 0)
+                typeface = Typeface.create("sans-serif", Typeface.NORMAL)
+                setLineSpacing(0f, 1.25f)
+                setPadding(context.chatDp(10), context.chatDp(8), context.chatDp(10), context.chatDp(8))
+                background = roundedBackground(
+                    context,
+                    DemoChatPalette.surfaceSubtle,
+                    DemoChatPalette.outline,
+                    8
+                )
                 setTextIsSelectable(true)
                 importantForAccessibility = View.IMPORTANT_FOR_ACCESSIBILITY_NO
-            }, LayoutParams(LayoutParams.MATCH_PARENT, LayoutParams.WRAP_CONTENT))
+            }, LayoutParams(LayoutParams.MATCH_PARENT, LayoutParams.WRAP_CONTENT).apply {
+                topMargin = context.chatDp(6)
+            })
         } else {
             val compactDetail = detailParts.firstOrNull() ?: if (hasDetails) {
                 "点击展开查看完整结果"
@@ -597,10 +696,10 @@ class DemoChatProcessCardView @JvmOverloads constructor(
                     text = compactDetail
                     setTextSize(TypedValue.COMPLEX_UNIT_SP, 12f)
                     setTextColor(DemoChatPalette.textSecondary)
-                    setLineSpacing(0f, 1.12f)
+                    setLineSpacing(0f, 1.15f)
                     maxLines = 1
                     ellipsize = android.text.TextUtils.TruncateAt.END
-                    setPadding(0, context.chatDp(3), 0, 0)
+                    setPadding(0, context.chatDp(2), 0, 0)
                     importantForAccessibility = View.IMPORTANT_FOR_ACCESSIBILITY_NO
                 }, LayoutParams(LayoutParams.MATCH_PARENT, LayoutParams.WRAP_CONTENT))
             }
@@ -681,25 +780,26 @@ class DemoChatProcessCardView @JvmOverloads constructor(
 }
 
 private object DemoChatPalette {
-    val surface = Color.rgb(248, 250, 247)
-    val assistantBubble = Color.rgb(255, 255, 255)
-    val assistantStroke = Color.rgb(229, 226, 221)
-    val userBubble = Color.rgb(211, 244, 228)
-    val userStroke = Color.rgb(184, 228, 207)
-    val cardSurface = Color.rgb(255, 255, 255)
-    val cardPressed = Color.rgb(241, 252, 247)
-    val cardStroke = Color.rgb(222, 231, 225)
-    val mintDark = Color.rgb(17, 126, 92)
-    val mintSoft = Color.rgb(231, 248, 240)
-    val mintStroke = Color.rgb(184, 228, 207)
-    val amber = Color.rgb(153, 105, 25)
-    val amberSoft = Color.rgb(252, 244, 224)
-    val danger = Color.rgb(190, 45, 45)
-    val dangerSoft = Color.rgb(253, 235, 235)
-    val outline = Color.rgb(222, 231, 225)
-    val textMuted = Color.rgb(135, 146, 143)
-    val textPrimary = Color.rgb(28, 35, 33)
-    val textSecondary = Color.rgb(85, 108, 100)
+    val surface get() = Ui.Surface
+    val surfaceSubtle get() = Ui.SurfaceSubtle
+    val assistantBubble get() = Ui.AssistantBubble
+    val assistantStroke get() = Ui.AssistantStroke
+    val userBubble get() = Ui.UserBubble
+    val userStroke get() = Ui.UserStroke
+    val cardSurface get() = Ui.SurfaceElevated
+    val cardPressed get() = Ui.SurfaceSoft
+    val cardStroke get() = Ui.Outline
+    val mintDark get() = Ui.MintDark
+    val mintSoft get() = Ui.MintLight
+    val mintStroke get() = Ui.MintStroke
+    val amber get() = Ui.Warning
+    val amberSoft get() = Ui.WarningSoft
+    val danger get() = Ui.Danger
+    val dangerSoft get() = Ui.DangerSoft
+    val outline get() = Ui.Outline
+    val textMuted get() = Ui.TextMuted
+    val textPrimary get() = Ui.TextPrimary
+    val textSecondary get() = Ui.TextSecondary
 }
 
 private fun Context.chatDp(value: Int): Int =
@@ -713,6 +813,24 @@ private fun roundedBackground(
 ): Drawable = GradientDrawable().apply {
     setColor(fillColor)
     cornerRadius = context.chatDp(radiusDp).toFloat()
+    setStroke(context.chatDp(1), strokeColor)
+}
+
+private fun asymmetricRoundedBackground(
+    context: Context,
+    fillColor: Int,
+    strokeColor: Int,
+    topLeftDp: Int,
+    topRightDp: Int,
+    bottomRightDp: Int,
+    bottomLeftDp: Int
+): Drawable = GradientDrawable().apply {
+    setColor(fillColor)
+    val tl = context.chatDp(topLeftDp).toFloat()
+    val tr = context.chatDp(topRightDp).toFloat()
+    val br = context.chatDp(bottomRightDp).toFloat()
+    val bl = context.chatDp(bottomLeftDp).toFloat()
+    cornerRadii = floatArrayOf(tl, tl, tr, tr, br, br, bl, bl)
     setStroke(context.chatDp(1), strokeColor)
 }
 
@@ -736,3 +854,4 @@ private fun pressedCardBackground(context: Context): Drawable = StateListDrawabl
         )
     )
 }
+

@@ -2,9 +2,14 @@ package com.ugk.pi.android.testapp
 
 import android.app.AlertDialog
 import android.content.ComponentName
+import android.content.Context
 import android.content.Intent
 import android.provider.Settings
 import android.app.Activity
+import android.view.inputmethod.InputMethodManager
+import android.graphics.Canvas
+import android.graphics.Color
+import android.graphics.Paint
 import android.graphics.Typeface
 import android.os.Build
 import android.os.Bundle
@@ -15,6 +20,7 @@ import android.view.Gravity
 import android.view.View
 import android.view.WindowInsets
 import android.view.WindowInsetsAnimation
+import android.view.WindowInsetsController
 import android.view.WindowManager
 import android.widget.EditText
 import android.widget.FrameLayout
@@ -61,11 +67,18 @@ class MainActivity : Activity() {
         }
     }
 
+    private lateinit var rootLayout: FrameLayout
+    private lateinit var headerView: LinearLayout
+    private lateinit var historyButton: TextView
+    private lateinit var themeButton: TextView
+    private lateinit var settingsButton: TextView
+    private lateinit var composerLayout: LinearLayout
+    private lateinit var inputShellLayout: LinearLayout
     private lateinit var appBarTitle: TextView
     private lateinit var messageContainer: LinearLayout
     private lateinit var messageScrollView: ScrollView
     private lateinit var inputField: EditText
-    private lateinit var sendButton: TextView
+    private lateinit var sendButton: SendActionButton
     private lateinit var providerLabel: TextView
     private lateinit var runStatusLabel: TextView
     private lateinit var statusBanner: TextView
@@ -73,6 +86,7 @@ class MainActivity : Activity() {
     private var processCard: DemoChatProcessCardView? = null
     private var assistantMessageView: DemoChatMessageView? = null
     private var lastImeInsetBottom = 0
+    private val themeListener: (Boolean) -> Unit = { runOnUiThread { applyTheme() } }
     private val floatingWindow by lazy {
         DemoActivityState.floatingWindow(applicationContext).apply {
             onSendMessage = { text -> DemoActivityState.overlaySend?.invoke(text) == true }
@@ -85,6 +99,22 @@ class MainActivity : Activity() {
 
     override fun onCreate(savedInstanceState: Bundle?) {
         super.onCreate(savedInstanceState)
+        ThemeManager.init(this)
+        ThemeManager.addListener(themeListener)
+        if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.R) {
+            window.setDecorFitsSystemWindows(false)
+        } else {
+            @Suppress("DEPRECATION")
+            window.decorView.systemUiVisibility = (
+                View.SYSTEM_UI_FLAG_LAYOUT_STABLE
+                or View.SYSTEM_UI_FLAG_LAYOUT_FULLSCREEN
+                or View.SYSTEM_UI_FLAG_LAYOUT_HIDE_NAVIGATION
+            )
+        }
+        @Suppress("DEPRECATION")
+        window.statusBarColor = Color.TRANSPARENT
+        @Suppress("DEPRECATION")
+        window.navigationBarColor = Color.TRANSPARENT
         window.setSoftInputMode(WindowManager.LayoutParams.SOFT_INPUT_ADJUST_RESIZE)
         activeConversation = conversationStore.get(
             DemoActivityState.activeConversationId ?: conversationStore.activeId()
@@ -168,6 +198,7 @@ class MainActivity : Activity() {
             confirmationPresenter.detach(this)
         }
         DemoActivityState.rememberSession(activeConversation.id, session)
+        ThemeManager.removeListener(themeListener)
         super.onDestroy()
         DemoActivityState.clearOverlayCallbacks(activityToken)
         if (finishing) hideFloatingWindow()
@@ -243,22 +274,23 @@ class MainActivity : Activity() {
     }
 
     private fun buildUi(): View {
-        val root = FrameLayout(this).apply {
+        rootLayout = FrameLayout(this).apply {
             setBackgroundColor(Ui.Surface)
         }
         val content = LinearLayout(this).apply {
             orientation = LinearLayout.VERTICAL
         }
-        root.addView(content, FrameLayout.LayoutParams(
+        rootLayout.addView(content, FrameLayout.LayoutParams(
             FrameLayout.LayoutParams.MATCH_PARENT,
             FrameLayout.LayoutParams.MATCH_PARENT
         ))
 
-        val historyButton = TextView(this).apply {
+        historyButton = TextView(this).apply {
             text = "☰"
-            textSize = 22f
+            textSize = 20f
             gravity = Gravity.CENTER
             setTextColor(Ui.TextPrimary)
+            background = Ui.clickableRounded(this@MainActivity, Ui.SurfaceElevated, Ui.SurfaceSoft, 12, Ui.Outline)
             contentDescription = getString(R.string.content_description_sessions)
             isClickable = true
             isFocusable = true
@@ -267,14 +299,14 @@ class MainActivity : Activity() {
 
         appBarTitle = TextView(this).apply {
             text = activeConversation.title
-            textSize = 18f
+            textSize = 17f
             setTypeface(Typeface.create("sans-serif-medium", Typeface.NORMAL))
             setTextColor(Ui.TextPrimary)
             maxLines = 1
             ellipsize = android.text.TextUtils.TruncateAt.END
         }
         providerLabel = TextView(this).apply {
-            textSize = 11f
+            textSize = 11.5f
             setTextColor(Ui.TextSecondary)
             maxLines = 1
             ellipsize = android.text.TextUtils.TruncateAt.END
@@ -289,52 +321,79 @@ class MainActivity : Activity() {
             addView(providerLabel, LinearLayout.LayoutParams(
                 LinearLayout.LayoutParams.MATCH_PARENT,
                 LinearLayout.LayoutParams.WRAP_CONTENT
-            ).apply { topMargin = dp(2) })
+            ).apply { topMargin = dp(1) })
         }
 
         runStatusLabel = TextView(this).apply {
             textSize = 12f
-            setTextColor(Ui.MintDark)
+            setTypeface(Typeface.create("sans-serif-medium", Typeface.NORMAL))
             gravity = Gravity.CENTER
-            setPadding(dp(10), dp(6), dp(10), dp(6))
-            background = Ui.rounded(this@MainActivity, Ui.SurfaceSoft, 999)
+            setPadding(dp(10), dp(4), dp(10), dp(4))
             maxLines = 1
         }
-        val settingsButton = TextView(this).apply {
-            text = "⚙"
-            textSize = 22f
+
+        themeButton = TextView(this).apply {
+            text = ThemeManager.currentMode.icon
+            textSize = 17f
             gravity = Gravity.CENTER
             setTextColor(Ui.TextPrimary)
+            background = Ui.clickableRounded(this@MainActivity, Ui.SurfaceElevated, Ui.SurfaceSoft, 12, Ui.Outline)
+            contentDescription = "切换主题模式"
+            isClickable = true
+            isFocusable = true
+            setOnClickListener {
+                val next = ThemeManager.toggle(this@MainActivity)
+                text = next.icon
+            }
+        }
+
+        settingsButton = TextView(this).apply {
+            text = "⚙"
+            textSize = 20f
+            gravity = Gravity.CENTER
+            setTextColor(Ui.TextPrimary)
+            background = Ui.clickableRounded(this@MainActivity, Ui.SurfaceElevated, Ui.SurfaceSoft, 12, Ui.Outline)
             contentDescription = getString(R.string.content_description_settings)
             isClickable = true
             isFocusable = true
             setOnClickListener { openSettings() }
         }
-        val header = LinearLayout(this).apply {
+        headerView = LinearLayout(this).apply {
             orientation = LinearLayout.HORIZONTAL
             gravity = Gravity.CENTER_VERTICAL
-            setPadding(dp(10), dp(8), dp(8), dp(8))
-            background = Ui.rounded(this@MainActivity, Ui.SurfaceElevated, 0)
-            addView(historyButton, LinearLayout.LayoutParams(dp(44), dp(44)))
-            addView(titleStack, LinearLayout.LayoutParams(0, dp(48), 1f).apply {
-                marginStart = dp(4)
+            setPadding(dp(12), dp(8), dp(12), dp(8))
+            background = Ui.rounded(this@MainActivity, Ui.SurfaceElevated, 0, Ui.Outline, 1)
+            addView(historyButton, LinearLayout.LayoutParams(dp(40), dp(40)))
+            addView(titleStack, LinearLayout.LayoutParams(0, LinearLayout.LayoutParams.WRAP_CONTENT, 1f).apply {
+                marginStart = dp(10)
+                marginEnd = dp(10)
             })
             addView(runStatusLabel, LinearLayout.LayoutParams(
                 LinearLayout.LayoutParams.WRAP_CONTENT,
                 LinearLayout.LayoutParams.WRAP_CONTENT
-            ).apply { marginEnd = dp(4) })
-            addView(settingsButton, LinearLayout.LayoutParams(dp(44), dp(44)))
+            ).apply { marginEnd = dp(6) })
+            addView(themeButton, LinearLayout.LayoutParams(dp(40), dp(40)).apply {
+                marginEnd = dp(6)
+            })
+            addView(settingsButton, LinearLayout.LayoutParams(dp(40), dp(40)))
         }
-        content.addView(header, LinearLayout.LayoutParams(
+        content.addView(headerView, LinearLayout.LayoutParams(
             LinearLayout.LayoutParams.MATCH_PARENT,
             LinearLayout.LayoutParams.WRAP_CONTENT
         ))
 
         statusBanner = TextView(this).apply {
-            textSize = 12f
+            textSize = 12.5f
             setTextColor(Ui.Warning)
-            setPadding(dp(16), dp(8), dp(16), dp(8))
-            background = Ui.rounded(this@MainActivity, Ui.SurfaceSoft, 12)
+            setTypeface(Typeface.create("sans-serif-medium", Typeface.NORMAL))
+            setPadding(dp(14), dp(9), dp(14), dp(9))
+            background = Ui.clickableRounded(
+                this@MainActivity,
+                Ui.WarningSoft,
+                Ui.SurfaceSubtle,
+                14,
+                Ui.WarningStroke
+            )
             isClickable = true
             isFocusable = true
         }
@@ -342,12 +401,12 @@ class MainActivity : Activity() {
             LinearLayout.LayoutParams.MATCH_PARENT,
             LinearLayout.LayoutParams.WRAP_CONTENT
         ).apply {
-            setMargins(dp(12), dp(4), dp(12), dp(4))
+            setMargins(dp(12), dp(8), dp(12), dp(2))
         })
 
         messageContainer = LinearLayout(this).apply {
             orientation = LinearLayout.VERTICAL
-            setPadding(dp(4), dp(12), dp(4), dp(20))
+            setPadding(dp(6), dp(10), dp(6), dp(16))
         }
         messageScrollView = ScrollView(this).apply {
             setFillViewport(true)
@@ -364,18 +423,27 @@ class MainActivity : Activity() {
             hint = "给 Agent 发消息"
             setHintTextColor(Ui.TextMuted)
             setTextColor(Ui.TextPrimary)
-            textSize = 16f
+            textSize = 15.5f
             inputType = InputType.TYPE_CLASS_TEXT or InputType.TYPE_TEXT_FLAG_MULTI_LINE or
                     InputType.TYPE_TEXT_FLAG_CAP_SENTENCES
             setSingleLine(false)
             maxLines = 5
             minLines = 1
-            gravity = Gravity.TOP or Gravity.START
+            gravity = Gravity.CENTER_VERTICAL or Gravity.START
             background = null
-            setPadding(dp(12), dp(10), dp(8), dp(10))
+            setPadding(dp(12), dp(8), dp(8), dp(8))
+            isFocusable = true
+            isFocusableInTouchMode = true
+            isCursorVisible = true
             setOnFocusChangeListener { _, hasFocus ->
+                inputShellLayout.background = Ui.rounded(
+                    this@MainActivity,
+                    Ui.SurfaceElevated,
+                    22,
+                    if (hasFocus) Ui.Mint else Ui.Outline,
+                    if (hasFocus) 2 else 1
+                )
                 updateComposerState()
-                if (hasFocus) scrollToEnd()
             }
         }
         inputField.addTextChangedListener(object : TextWatcher {
@@ -387,38 +455,41 @@ class MainActivity : Activity() {
             }
             override fun afterTextChanged(editable: Editable?) = Unit
         })
-        sendButton = TextView(this).apply {
-            textSize = 20f
-            setTypeface(null, Typeface.BOLD)
-            gravity = Gravity.CENTER
-            setTextColor(Ui.SurfaceElevated)
-            background = Ui.rounded(this@MainActivity, Ui.Mint, 22)
+        sendButton = SendActionButton(this).apply {
             contentDescription = getString(R.string.content_description_send)
             isClickable = true
-            isFocusable = true
+            isFocusable = false
             setOnClickListener { sendMessage() }
         }
-        val inputShell = LinearLayout(this).apply {
+        inputShellLayout = LinearLayout(this).apply {
             orientation = LinearLayout.HORIZONTAL
             gravity = Gravity.BOTTOM
-            background = Ui.rounded(this@MainActivity, Ui.SurfaceElevated, 18, Ui.Outline)
+            background = Ui.rounded(this@MainActivity, Ui.SurfaceElevated, 22, Ui.Outline, 1)
             setPadding(dp(4), dp(4), dp(6), dp(4))
             addView(inputField, LinearLayout.LayoutParams(0, LinearLayout.LayoutParams.WRAP_CONTENT, 1f))
-            addView(sendButton, LinearLayout.LayoutParams(dp(44), dp(44)).apply {
+            addView(sendButton, LinearLayout.LayoutParams(dp(36), dp(36)).apply {
                 marginStart = dp(4)
+                marginEnd = dp(2)
+                bottomMargin = dp(3)
             })
+            setOnClickListener {
+                inputField.requestFocus()
+                val imm = getSystemService(Context.INPUT_METHOD_SERVICE) as? InputMethodManager
+                imm?.showSoftInput(inputField, InputMethodManager.SHOW_IMPLICIT)
+            }
         }
         composerHint = TextView(this).apply {
             text = "Agent 会按需调用工具，重要操作会先请求确认"
             textSize = 11f
             setTextColor(Ui.TextMuted)
-            setPadding(dp(4), dp(5), dp(4), 0)
+            gravity = Gravity.CENTER
+            setPadding(dp(4), dp(6), dp(4), 0)
         }
-        val composer = LinearLayout(this).apply {
+        composerLayout = LinearLayout(this).apply {
             orientation = LinearLayout.VERTICAL
-            setPadding(dp(12), dp(8), dp(12), dp(10))
-            background = Ui.rounded(this@MainActivity, Ui.SurfaceElevated, 0)
-            addView(inputShell, LinearLayout.LayoutParams(
+            setPadding(dp(12), dp(6), dp(12), dp(8))
+            background = Ui.rounded(this@MainActivity, Ui.SurfaceElevated, 0, Ui.Outline, 1)
+            addView(inputShellLayout, LinearLayout.LayoutParams(
                 LinearLayout.LayoutParams.MATCH_PARENT,
                 LinearLayout.LayoutParams.WRAP_CONTENT
             ))
@@ -427,33 +498,105 @@ class MainActivity : Activity() {
                 LinearLayout.LayoutParams.WRAP_CONTENT
             ))
         }
-        content.addView(composer, LinearLayout.LayoutParams(
+        content.addView(composerLayout, LinearLayout.LayoutParams(
             LinearLayout.LayoutParams.MATCH_PARENT,
             LinearLayout.LayoutParams.WRAP_CONTENT
         ))
 
-        installSystemBarInsets(root)
-        return root
+        installSystemBarInsets(rootLayout)
+        return rootLayout
+    }
+
+    private fun applyTheme() {
+        if (!::rootLayout.isInitialized) return
+        rootLayout.setBackgroundColor(Ui.Surface)
+        headerView.background = Ui.rounded(this, Ui.SurfaceElevated, 0, Ui.Outline, 1)
+        historyButton.setTextColor(Ui.TextPrimary)
+        historyButton.background = Ui.clickableRounded(this, Ui.SurfaceElevated, Ui.SurfaceSoft, 12, Ui.Outline)
+        themeButton.text = ThemeManager.currentMode.icon
+        themeButton.setTextColor(Ui.TextPrimary)
+        themeButton.background = Ui.clickableRounded(this, Ui.SurfaceElevated, Ui.SurfaceSoft, 12, Ui.Outline)
+        settingsButton.setTextColor(Ui.TextPrimary)
+        settingsButton.background = Ui.clickableRounded(this, Ui.SurfaceElevated, Ui.SurfaceSoft, 12, Ui.Outline)
+        appBarTitle.setTextColor(Ui.TextPrimary)
+        providerLabel.setTextColor(Ui.TextSecondary)
+        composerLayout.background = Ui.rounded(this, Ui.SurfaceElevated, 0, Ui.Outline, 1)
+        inputShellLayout.background = Ui.rounded(
+            this,
+            Ui.SurfaceElevated,
+            22,
+            if (inputField.hasFocus()) Ui.Mint else Ui.Outline,
+            if (inputField.hasFocus()) 2 else 1
+        )
+        inputField.setTextColor(Ui.TextPrimary)
+        inputField.setHintTextColor(Ui.TextMuted)
+
+        // 同步系统状态栏与导航栏图标颜色（深色模式白字，浅色模式黑字）
+        if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.R) {
+            val controller = window.insetsController
+            if (controller != null) {
+                val lightBars = WindowInsetsController.APPEARANCE_LIGHT_STATUS_BARS or
+                        WindowInsetsController.APPEARANCE_LIGHT_NAVIGATION_BARS
+                if (ThemeManager.isDark) {
+                    controller.setSystemBarsAppearance(0, lightBars)
+                } else {
+                    controller.setSystemBarsAppearance(lightBars, lightBars)
+                }
+            }
+        } else {
+            @Suppress("DEPRECATION")
+            var flags = window.decorView.systemUiVisibility
+            if (ThemeManager.isDark) {
+                flags = flags and View.SYSTEM_UI_FLAG_LIGHT_STATUS_BAR.inv()
+                if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.O) {
+                    flags = flags and View.SYSTEM_UI_FLAG_LIGHT_NAVIGATION_BAR.inv()
+                }
+            } else {
+                flags = flags or View.SYSTEM_UI_FLAG_LIGHT_STATUS_BAR
+                if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.O) {
+                    flags = flags or View.SYSTEM_UI_FLAG_LIGHT_NAVIGATION_BAR
+                }
+            }
+            @Suppress("DEPRECATION")
+            window.decorView.systemUiVisibility = flags
+        }
+
+        if (::statusBanner.isInitialized) {
+            statusBanner.background = Ui.clickableRounded(
+                this,
+                Ui.WarningSoft,
+                Ui.SurfaceSubtle,
+                14,
+                Ui.WarningStroke
+            )
+        }
+
+        if (::sendButton.isInitialized) {
+            sendButton.invalidate()
+        }
+
+        if (::composerHint.isInitialized) {
+            composerHint.setTextColor(Ui.TextMuted)
+        }
+
+        updateAppBar()
+        updateCapabilityBanner()
+        renderRunState()
+        renderConversation()
     }
 
     @Suppress("DEPRECATION")
     private fun installSystemBarInsets(root: View) {
-        val initialLeft = root.paddingLeft
-        val initialTop = root.paddingTop
-        val initialRight = root.paddingRight
-        val initialBottom = root.paddingBottom
-
         fun applyInsets(insets: WindowInsets) {
-            val systemInsets = if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.R) {
-                val current = insets.getInsets(WindowInsets.Type.statusBars() or WindowInsets.Type.navigationBars())
-                InsetsSnapshot(current.left, current.top, current.right, current.bottom)
+            val statusTop = if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.R) {
+                insets.getInsets(WindowInsets.Type.statusBars()).top
             } else {
-                InsetsSnapshot(
-                    insets.systemWindowInsetLeft,
-                    insets.systemWindowInsetTop,
-                    insets.systemWindowInsetRight,
-                    insets.systemWindowInsetBottom
-                )
+                insets.systemWindowInsetTop
+            }
+            val navBottom = if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.R) {
+                insets.getInsets(WindowInsets.Type.navigationBars()).bottom
+            } else {
+                insets.systemWindowInsetBottom
             }
             val imeBottom = if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.R) {
                 val imeType = WindowInsets.Type.ime()
@@ -461,17 +604,25 @@ class MainActivity : Activity() {
             } else {
                 0
             }
-            val bottomInset = maxOf(systemInsets.bottom, imeBottom)
-            root.setPadding(
-                initialLeft + systemInsets.left,
-                initialTop + systemInsets.top,
-                initialRight + systemInsets.right,
-                initialBottom + bottomInset
-            )
+            val bottomInset = maxOf(navBottom, imeBottom)
+
+            // 顶栏延伸至状态栏下方，消除顶部黑边
+            if (::headerView.isInitialized) {
+                headerView.setPadding(dp(12), statusTop + dp(8), dp(12), dp(8))
+            }
+            // 底部输入区自适应导航栏与软键盘高度，软键盘升起时输入框精准贴合键盘上方
+            if (::composerLayout.isInitialized) {
+                composerLayout.setPadding(dp(12), dp(6), dp(12), bottomInset + dp(8))
+            }
+            // 根容器不额外增加双重内边距，确保 100% 满屏占满
+            root.setPadding(0, 0, 0, 0)
+
             if (imeBottom != lastImeInsetBottom) {
                 lastImeInsetBottom = imeBottom
                 if (imeBottom > 0) {
-                    messageScrollView.post { messageScrollView.fullScroll(View.FOCUS_DOWN) }
+                    messageScrollView.post {
+                        messageScrollView.smoothScrollTo(0, messageContainer.bottom)
+                    }
                 }
             }
         }
@@ -481,9 +632,6 @@ class MainActivity : Activity() {
             insets
         }
         root.setOnApplyWindowInsetsListener(applyInsetsListener)
-        // Android 15 edge-to-edge can deliver IME changes to the decor view
-        // without relaying them to a content root that already applied bar
-        // insets. Listen at both levels so the composer always stays above IME.
         window.decorView.setOnApplyWindowInsetsListener(applyInsetsListener)
         if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.R) {
             root.setWindowInsetsAnimationCallback(object : WindowInsetsAnimation.Callback(
@@ -651,7 +799,7 @@ class MainActivity : Activity() {
             return
         }
         DemoActivityState.overlayPromptShown = true
-        overlayPermissionDialog = AlertDialog.Builder(this)
+        overlayPermissionDialog = AlertDialog.Builder(this, Ui.dialogTheme())
             .setTitle("开启跨 App 悬浮窗")
             .setMessage("离开 Agent Test 后，悬浮小窗可以继续显示任务进度，并发送后续消息，不会打断当前 Agent 操作。")
             .setNegativeButton("暂不") { dialog, _ -> dialog.dismiss() }
@@ -679,6 +827,7 @@ class MainActivity : Activity() {
         if (activeConversation.title == "新对话") {
             activeConversation.title = conversationStore.suggestedTitle(message)
         }
+        val isFirstMessage = activeConversation.messages.none { it.role == "user" || it.role == "assistant" }
         activeConversation.messages += DemoStoredMessage("user", message)
         activeConversation.updatedAt = System.currentTimeMillis()
         conversationStore.save(activeConversation)
@@ -686,6 +835,9 @@ class MainActivity : Activity() {
         updateAppBar()
 
         assistantMessageView = null
+        if (isFirstMessage) {
+            messageContainer.removeAllViews()
+        }
         addChatMessage(DemoChatMessageRole.USER, message)
         addProcessCard()
         DemoActivityState.activeConversationId = activeConversation.id
@@ -843,15 +995,22 @@ class MainActivity : Activity() {
     private fun renderRunState() {
         val state = runState
         runStatusLabel.text = state.statusLabel
-        runStatusLabel.setTextColor(
-            when (state.status) {
-                DemoRunStatus.FAILED -> Ui.Danger
-                DemoRunStatus.WAITING_CONFIRMATION -> Ui.Warning
-                DemoRunStatus.COMPLETED -> Ui.Success
-                DemoRunStatus.CANCELLED -> Ui.TextSecondary
-                else -> Ui.MintDark
-            }
-        )
+        val (textColor, bgColor, strokeColor) = when (state.status) {
+            DemoRunStatus.FAILED, DemoRunStatus.TOOL_FAILURE ->
+                Triple(Ui.Danger, Ui.DangerSoft, Ui.Danger)
+            DemoRunStatus.WAITING_CONFIRMATION ->
+                Triple(Ui.Warning, Ui.WarningSoft, Ui.WarningStroke)
+            DemoRunStatus.COMPLETED ->
+                Triple(Ui.Success, Ui.SuccessSoft, Ui.MintStroke)
+            DemoRunStatus.CANCELLED ->
+                Triple(Ui.TextSecondary, Ui.SurfaceSoft, Ui.Outline)
+            DemoRunStatus.THINKING, DemoRunStatus.TOOL_RUNNING ->
+                Triple(if (Ui.isDark) Ui.Mint else Ui.MintDark, Ui.MintLight, Ui.OutlineFocus)
+            DemoRunStatus.IDLE, DemoRunStatus.TOOL_SUCCESS ->
+                Triple(if (Ui.isDark) Ui.Mint else Ui.MintDark, Ui.MintLight, Ui.MintStroke)
+        }
+        runStatusLabel.setTextColor(textColor)
+        runStatusLabel.background = Ui.rounded(this, bgColor, 999, strokeColor, 1)
         val latestStep = state.steps.lastOrNull()
         val stage = when (state.status) {
             DemoRunStatus.THINKING -> DemoChatProcessStage.THINKING
@@ -935,23 +1094,17 @@ class MainActivity : Activity() {
         if (!::sendButton.isInitialized) return
         val busy = runState.isBusy
         inputField.isEnabled = !busy
-        sendButton.text = if (busy) "■" else "↑"
+        val hasText = !inputField.text.isNullOrBlank()
+        val actionable = busy || hasText
         sendButton.contentDescription = getString(
             if (busy) R.string.content_description_stop else R.string.content_description_send
         )
-        sendButton.background = Ui.rounded(
-            this,
-            if (busy) Ui.Danger else Ui.Mint,
-            22
-        )
-        val hasText = !inputField.text.isNullOrBlank()
-        // While busy this button is the stop action; while idle it is only
-        // actionable when there is a non-blank message.
-        // A cancelled Job may still be draining; text can already be queued
-        // during that short window, so do not disable a valid send action.
-        val actionable = busy || hasText
+        sendButton.buttonState = when {
+            busy -> SendActionButton.State.BUSY
+            hasText -> SendActionButton.State.ACTIVE
+            else -> SendActionButton.State.DISABLED
+        }
         sendButton.isEnabled = actionable
-        sendButton.alpha = if (actionable) 1f else 0.55f
     }
 
     private fun stopAgent(clearQueuedMessages: Boolean = true) {
@@ -996,21 +1149,37 @@ class MainActivity : Activity() {
         val empty = LinearLayout(this).apply {
             orientation = LinearLayout.VERTICAL
             gravity = Gravity.CENTER_HORIZONTAL
-            setPadding(dp(28), dp(64), dp(28), dp(24))
+            setPadding(dp(20), dp(48), dp(20), dp(24))
         }
+        val heroOuter = FrameLayout(this).apply {
+            background = Ui.rounded(this@MainActivity, Ui.MintLight, 999)
+            setPadding(dp(8), dp(8), dp(8), dp(8))
+        }
+        val heroInner = TextView(this).apply {
+            text = "✦"
+            textSize = 26f
+            gravity = Gravity.CENTER
+            setTextColor(Ui.SurfaceElevated)
+            background = Ui.rounded(this@MainActivity, Ui.Mint, 999)
+        }
+        heroOuter.addView(heroInner, FrameLayout.LayoutParams(dp(54), dp(54), Gravity.CENTER))
+        empty.addView(heroOuter, LinearLayout.LayoutParams(dp(70), dp(70)).apply {
+            bottomMargin = dp(16)
+        })
+
         val title = TextView(this).apply {
             text = "Agent 就绪"
-            textSize = 24f
+            textSize = 22f
             setTypeface(Typeface.create("sans-serif-medium", Typeface.NORMAL))
             setTextColor(Ui.TextPrimary)
             gravity = Gravity.CENTER
         }
         val description = TextView(this).apply {
             text = "描述你想完成的任务，Agent 会在需要时调用工具并把过程整理给你。"
-            textSize = 14f
+            textSize = 13.5f
             setTextColor(Ui.TextSecondary)
             gravity = Gravity.CENTER
-            setPadding(0, dp(10), 0, dp(18))
+            setPadding(dp(12), dp(8), dp(12), dp(20))
         }
         empty.addView(title, LinearLayout.LayoutParams(
             LinearLayout.LayoutParams.MATCH_PARENT,
@@ -1020,27 +1189,72 @@ class MainActivity : Activity() {
             LinearLayout.LayoutParams.MATCH_PARENT,
             LinearLayout.LayoutParams.WRAP_CONTENT
         ))
-        listOf("帮我检查当前设备状态", "创建一个本地天气页面", "打开一个已安装的 App").forEach { suggestion ->
-            val item = TextView(this).apply {
-                text = suggestion
-                textSize = 14f
-                setTextColor(Ui.MintDark)
-                gravity = Gravity.CENTER
-                setPadding(dp(14), dp(10), dp(14), dp(10))
-                background = Ui.rounded(this@MainActivity, Ui.SurfaceElevated, 14, Ui.Outline)
+
+        val suggestions = listOf(
+            Triple("🛠️", "帮我检查当前设备状态", "查看设备型号、内存与系统环境"),
+            Triple("🌐", "创建一个本地天气页面", "通过 Python/Bash 启动本地 HTTP 服务"),
+            Triple("📱", "打开一个已安装的 App", "通过包名或应用名称启动目标程序")
+        )
+        suggestions.forEach { (icon, prompt, desc) ->
+            val card = LinearLayout(this).apply {
+                orientation = LinearLayout.HORIZONTAL
+                gravity = Gravity.CENTER_VERTICAL
+                setPadding(dp(14), dp(12), dp(14), dp(12))
+                background = Ui.clickableRounded(this@MainActivity, Ui.SurfaceElevated, Ui.SurfaceSubtle, 16, Ui.Outline)
                 isClickable = true
                 isFocusable = true
                 setOnClickListener {
-                    inputField.setText(suggestion)
+                    inputField.setText(prompt)
                     inputField.requestFocus()
                     inputField.setSelection(inputField.length())
                 }
             }
-            empty.addView(item, LinearLayout.LayoutParams(
+            val iconBadge = TextView(this).apply {
+                text = icon
+                textSize = 16f
+                gravity = Gravity.CENTER
+                background = Ui.rounded(this@MainActivity, Ui.SurfaceSubtle, 12, Ui.Outline, 1)
+            }
+            card.addView(iconBadge, LinearLayout.LayoutParams(dp(38), dp(38)).apply {
+                marginEnd = dp(12)
+            })
+
+            val textCol = LinearLayout(this).apply {
+                orientation = LinearLayout.VERTICAL
+                gravity = Gravity.CENTER_VERTICAL
+            }
+            val promptView = TextView(this).apply {
+                text = prompt
+                textSize = 14.5f
+                setTypeface(Typeface.create("sans-serif-medium", Typeface.NORMAL))
+                setTextColor(Ui.TextPrimary)
+            }
+            val descView = TextView(this).apply {
+                text = desc
+                textSize = 12f
+                setTextColor(Ui.TextSecondary)
+                setPadding(0, dp(2), 0, 0)
+            }
+            textCol.addView(promptView)
+            textCol.addView(descView)
+            card.addView(textCol, LinearLayout.LayoutParams(0, LinearLayout.LayoutParams.WRAP_CONTENT, 1f))
+
+            val arrowView = TextView(this).apply {
+                text = "→"
+                textSize = 16f
+                setTypeface(null, Typeface.BOLD)
+                setTextColor(Ui.MintDark)
+                gravity = Gravity.CENTER
+            }
+            card.addView(arrowView, LinearLayout.LayoutParams(dp(24), dp(24)).apply {
+                marginStart = dp(8)
+            })
+
+            empty.addView(card, LinearLayout.LayoutParams(
                 LinearLayout.LayoutParams.MATCH_PARENT,
                 LinearLayout.LayoutParams.WRAP_CONTENT
             ).apply {
-                topMargin = dp(6)
+                topMargin = dp(10)
             })
         }
         messageContainer.addView(empty, LinearLayout.LayoutParams(
@@ -1051,7 +1265,7 @@ class MainActivity : Activity() {
 
     private fun scrollToEnd() {
         messageScrollView.post {
-            messageScrollView.fullScroll(View.FOCUS_DOWN)
+            messageScrollView.smoothScrollTo(0, messageContainer.bottom)
         }
     }
 
@@ -1118,18 +1332,23 @@ class MainActivity : Activity() {
     private fun showConversationHistory() {
         val root = LinearLayout(this).apply {
             orientation = LinearLayout.VERTICAL
-            setPadding(dp(18), dp(4), dp(18), 0)
+            setPadding(dp(18), dp(12), dp(18), dp(8))
+            background = Ui.rounded(this@MainActivity, Ui.SurfaceElevated, 18)
         }
         val newButton = TextView(this).apply {
-            text = "+  新建会话"
-            textSize = 15f
+            text = "+ 新建会话"
+            textSize = 14.5f
+            setTypeface(Typeface.create("sans-serif-medium", Typeface.NORMAL))
             setTextColor(Ui.MintDark)
-            setPadding(dp(4), dp(12), dp(4), dp(12))
+            gravity = Gravity.CENTER
+            setPadding(dp(14), dp(11), dp(14), dp(11))
+            background = Ui.clickableRounded(this@MainActivity, Ui.MintLight, Ui.SurfaceSubtle, 12, Ui.OutlineFocus)
             isClickable = true
             isFocusable = true
         }
         val listContainer = LinearLayout(this).apply {
             orientation = LinearLayout.VERTICAL
+            setPadding(0, dp(10), 0, 0)
         }
         val listScroll = ScrollView(this).apply {
             addView(listContainer)
@@ -1140,21 +1359,24 @@ class MainActivity : Activity() {
         ))
         root.addView(listScroll, LinearLayout.LayoutParams(
             LinearLayout.LayoutParams.MATCH_PARENT,
-            dp(420)
+            dp(400)
         ))
 
         lateinit var dialog: AlertDialog
         fun populate() {
             listContainer.removeAllViews()
             conversationStore.list().forEach { conversation ->
+                val isActive = conversation.id == activeConversation.id
                 val row = LinearLayout(this).apply {
                     orientation = LinearLayout.HORIZONTAL
                     gravity = Gravity.CENTER_VERTICAL
-                    setPadding(dp(4), dp(8), 0, dp(8))
-                    background = Ui.rounded(
+                    setPadding(dp(14), dp(10), dp(8), dp(10))
+                    background = Ui.clickableRounded(
                         this@MainActivity,
-                        if (conversation.id == activeConversation.id) Ui.SurfaceSoft else Ui.SurfaceElevated,
-                        12
+                        if (isActive) Ui.MintLight else Ui.SurfaceElevated,
+                        Ui.SurfaceSubtle,
+                        14,
+                        if (isActive) Ui.OutlineFocus else Ui.Outline
                     )
                     isClickable = true
                     isFocusable = true
@@ -1164,23 +1386,24 @@ class MainActivity : Activity() {
                 }
                 val title = TextView(this).apply {
                     text = conversation.title
-                    textSize = 15f
+                    textSize = 14.5f
+                    setTypeface(Typeface.create("sans-serif-medium", Typeface.NORMAL))
                     setTextColor(Ui.TextPrimary)
                     maxLines = 1
                     ellipsize = android.text.TextUtils.TruncateAt.END
                 }
                 val meta = TextView(this).apply {
                     text = "${conversation.messages.count { it.role == "user" }} 条消息 · ${formatConversationTime(conversation.updatedAt)}"
-                    textSize = 11f
-                    setTextColor(Ui.TextMuted)
-                    setPadding(0, dp(3), 0, 0)
+                    textSize = 11.5f
+                    setTextColor(Ui.TextSecondary)
+                    setPadding(0, dp(2), 0, 0)
                 }
                 info.addView(title)
                 info.addView(meta)
-                row.addView(info, LinearLayout.LayoutParams(0, dp(58), 1f))
+                row.addView(info, LinearLayout.LayoutParams(0, LinearLayout.LayoutParams.WRAP_CONTENT, 1f))
                 val actions = TextView(this).apply {
                     text = "⋯"
-                    textSize = 22f
+                    textSize = 20f
                     gravity = Gravity.CENTER
                     setTextColor(Ui.TextSecondary)
                     contentDescription = "会话操作"
@@ -1190,7 +1413,7 @@ class MainActivity : Activity() {
                         showConversationActions(conversation) { populate() }
                     }
                 }
-                row.addView(actions, LinearLayout.LayoutParams(dp(44), dp(58)))
+                row.addView(actions, LinearLayout.LayoutParams(dp(40), dp(40)))
                 row.setOnClickListener {
                     selectConversation(conversation.id)
                     dialog.dismiss()
@@ -1198,19 +1421,22 @@ class MainActivity : Activity() {
                 listContainer.addView(row, LinearLayout.LayoutParams(
                     LinearLayout.LayoutParams.MATCH_PARENT,
                     LinearLayout.LayoutParams.WRAP_CONTENT
-                ).apply { bottomMargin = dp(6) })
+                ).apply { bottomMargin = dp(8) })
             }
         }
         newButton.setOnClickListener {
             createNewConversation()
             dialog.dismiss()
         }
-        dialog = AlertDialog.Builder(this)
+        dialog = AlertDialog.Builder(this, Ui.dialogTheme())
             .setTitle("会话历史")
             .setView(root)
             .setNegativeButton("关闭", null)
             .create()
-        dialog.setOnShowListener { populate() }
+        dialog.setOnShowListener {
+            dialog.getButton(AlertDialog.BUTTON_NEGATIVE)?.setTextColor(Ui.TextSecondary)
+            populate()
+        }
         dialog.show()
     }
 
@@ -1218,7 +1444,7 @@ class MainActivity : Activity() {
         conversation: DemoConversation,
         onChanged: () -> Unit
     ) {
-        AlertDialog.Builder(this)
+        AlertDialog.Builder(this, Ui.dialogTheme())
             .setItems(arrayOf("重命名", "删除")) { _, which ->
                 if (which == 0) renameConversation(conversation, onChanged)
                 else confirmDeleteConversation(conversation, onChanged)
@@ -1232,8 +1458,9 @@ class MainActivity : Activity() {
             setText(conversation.title)
             setSelection(length())
             setPadding(dp(16), dp(8), dp(16), dp(8))
+            setTextColor(Ui.TextPrimary)
         }
-        AlertDialog.Builder(this)
+        AlertDialog.Builder(this, Ui.dialogTheme())
             .setTitle("重命名会话")
             .setView(input)
             .setNegativeButton("取消", null)
@@ -1249,7 +1476,7 @@ class MainActivity : Activity() {
     }
 
     private fun confirmDeleteConversation(conversation: DemoConversation, onChanged: () -> Unit) {
-        AlertDialog.Builder(this)
+        AlertDialog.Builder(this, Ui.dialogTheme())
             .setTitle("删除会话？")
             .setMessage("删除后无法在本地恢复这段会话。")
             .setNegativeButton("取消", null)
@@ -1433,3 +1660,79 @@ internal fun shouldShowFloatingWindowOnPause(
     overlayPermissionGranted = overlayPermissionGranted,
     activityResumed = false
 )
+
+private class SendActionButton(context: android.content.Context) : View(context) {
+    enum class State {
+        DISABLED,
+        ACTIVE,
+        BUSY
+    }
+
+    var buttonState: State = State.DISABLED
+        set(value) {
+            field = value
+            invalidate()
+        }
+
+    private val bgPaint = Paint(Paint.ANTI_ALIAS_FLAG).apply {
+        style = Paint.Style.FILL
+    }
+    private val iconPaint = Paint(Paint.ANTI_ALIAS_FLAG).apply {
+        style = Paint.Style.STROKE
+        strokeCap = Paint.Cap.ROUND
+        strokeJoin = Paint.Join.ROUND
+    }
+    private val squarePaint = Paint(Paint.ANTI_ALIAS_FLAG).apply {
+        style = Paint.Style.FILL
+    }
+
+    override fun onDraw(canvas: Canvas) {
+        super.onDraw(canvas)
+        val w = width.toFloat()
+        val h = height.toFloat()
+        val cx = w / 2f
+        val cy = h / 2f
+        val radius = minOf(cx, cy)
+
+        // 背景圆（完全受控件自身尺寸约束，100% 圆形绝不发生边缘裁剪）
+        bgPaint.color = when (buttonState) {
+            State.DISABLED -> Ui.SurfaceSoft
+            State.ACTIVE -> Ui.Mint
+            State.BUSY -> Ui.Danger
+        }
+        canvas.drawCircle(cx, cy, radius, bgPaint)
+
+        when (buttonState) {
+            State.DISABLED, State.ACTIVE -> {
+                iconPaint.color = if (buttonState == State.ACTIVE) Color.WHITE else Ui.TextMuted
+                iconPaint.strokeWidth = radius * 0.16f
+
+                val stemHalf = radius * 0.36f
+                val topY = cy - stemHalf
+                val bottomY = cy + stemHalf
+                // 箭头垂直主干
+                canvas.drawLine(cx, bottomY, cx, topY, iconPaint)
+
+                // 箭头两侧翼
+                val wingSpan = radius * 0.32f
+                val wingLen = radius * 0.30f
+                canvas.drawLine(cx - wingSpan, topY + wingLen, cx, topY, iconPaint)
+                canvas.drawLine(cx + wingSpan, topY + wingLen, cx, topY, iconPaint)
+            }
+            State.BUSY -> {
+                squarePaint.color = Color.WHITE
+                val halfSide = radius * 0.30f
+                val corner = radius * 0.08f
+                canvas.drawRoundRect(
+                    cx - halfSide,
+                    cy - halfSide,
+                    cx + halfSide,
+                    cy + halfSide,
+                    corner,
+                    corner,
+                    squarePaint
+                )
+            }
+        }
+    }
+}
