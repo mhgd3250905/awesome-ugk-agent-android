@@ -17,7 +17,8 @@ sealed class AgentEvent {
         val content: String,
         val toolCalls: List<ToolCall>,
         val elapsedMillis: Long? = null,
-        val stopReason: String? = null
+        val stopReason: String? = null,
+        val reasoningContent: String? = null
     ) : AgentEvent()
 
     data class ToolStarted(val call: ToolCall) : AgentEvent()

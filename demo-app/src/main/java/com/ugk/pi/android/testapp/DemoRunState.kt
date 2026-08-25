@@ -2,6 +2,10 @@ package com.ugk.pi.android.testapp
 
 import com.ugk.pi.android.AgentEvent
 import com.ugk.pi.android.ToolCall
+import com.ugk.pi.android.ToolResult
+import kotlinx.serialization.json.JsonObject
+import kotlinx.serialization.json.contentOrNull
+import kotlinx.serialization.json.jsonPrimitive
 
 /**
  * The small set of states that the demo UI needs to render.
@@ -151,6 +155,100 @@ data class DemoRunState(
     }
 }
 
+/**
+ * 语义化工具映射与参数解析器，为过程展示提供直观清晰的 Summary 与 动作描述。
+ */
+object DemoToolSemanticMapper {
+    fun friendlyName(name: String): String = when (name.lowercase()) {
+        "screen_read_ui_tree" -> "读取屏幕 UI 树"
+        "screen_perform_action" -> "执行屏幕控件操作"
+        "screen_launch_app" -> "启动应用"
+        "screen_gesture" -> "执行屏幕手势"
+        "screen_press_key" -> "触发按键"
+        "screen_global_action" -> "系统全局按键"
+        "get_android_accessibility_status" -> "检查无障碍服务状态"
+        "show_user_confirmation_dialog" -> "请求用户确认授权"
+        "bash", "terminal_exec" -> "执行终端命令"
+        "file_read" -> "读取私有文件"
+        "file_write" -> "写入私有文件"
+        "file_list" -> "列出私有目录"
+        "schedule_create" -> "创建定时任务"
+        "schedule_list" -> "查看定时任务"
+        "schedule_cancel" -> "取消定时任务"
+        "system_open_url" -> "打开系统链接"
+        "system_request_permission" -> "请求系统权限"
+        else -> name
+    }
+
+    fun formatInputSummary(name: String, input: JsonObject): String = when (name.lowercase()) {
+        "screen_launch_app" -> {
+            val pkg = input["packageName"]?.jsonPrimitive?.contentOrNull
+            val app = input["appName"]?.jsonPrimitive?.contentOrNull
+            when {
+                !app.isNullOrBlank() -> "应用: $app"
+                !pkg.isNullOrBlank() -> "包名: $pkg"
+                else -> "准备启动应用"
+            }
+        }
+        "screen_perform_action" -> {
+            val action = input["action"]?.jsonPrimitive?.contentOrNull ?: "操作"
+            val text = input["text"]?.jsonPrimitive?.contentOrNull
+            val nodeId = input["nodeId"]?.jsonPrimitive?.contentOrNull
+            when {
+                !text.isNullOrBlank() -> "输入: \"$text\" (节点 $nodeId)"
+                !nodeId.isNullOrBlank() -> "操作: $action (节点 $nodeId)"
+                else -> "操作: $action"
+            }
+        }
+        "screen_gesture" -> {
+            val gesture = input["gesture"]?.jsonPrimitive?.contentOrNull ?: "手势"
+            "手势: $gesture"
+        }
+        "screen_press_key" -> {
+            val key = input["key"]?.jsonPrimitive?.contentOrNull ?: "按键"
+            "按键: $key"
+        }
+        "screen_read_ui_tree" -> "读取当前屏幕可见 UI 元素"
+        "bash", "terminal_exec" -> {
+            val cmd = input["command"]?.jsonPrimitive?.contentOrNull ?: input["cmd"]?.jsonPrimitive?.contentOrNull
+            if (!cmd.isNullOrBlank()) "命令: $cmd" else "执行 Shell 命令"
+        }
+        "file_read", "file_write" -> {
+            val path = input["path"]?.jsonPrimitive?.contentOrNull ?: input["file"]?.jsonPrimitive?.contentOrNull
+            if (!path.isNullOrBlank()) "文件: $path" else "文件操作"
+        }
+        "show_user_confirmation_dialog" -> {
+            val message = input["message"]?.jsonPrimitive?.contentOrNull ?: input["prompt"]?.jsonPrimitive?.contentOrNull
+            if (!message.isNullOrBlank()) "提示: $message" else "等待授权确认"
+        }
+        else -> {
+            val first = input.entries.firstOrNull()
+            if (first != null) "${first.key}: ${first.value}" else "执行工具操作"
+        }
+    }
+
+    fun formatResultSummary(result: ToolResult): String {
+        if (result.isError) {
+            val err = result.content.lines().firstOrNull { it.isNotBlank() } ?: result.content
+            return "执行失败: ${err.take(60)}"
+        }
+        return when (result.name.lowercase()) {
+            "screen_read_ui_tree" -> {
+                val nodeCount = Regex("""nodeCount=(\d+)""").find(result.content)?.groupValues?.get(1)
+                if (nodeCount != null) "已读取屏幕 UI（共 $nodeCount 个节点）" else "已获取屏幕 UI 结构"
+            }
+            "screen_perform_action" -> "控件操作已执行完成"
+            "screen_launch_app" -> "已发起目标应用启动"
+            "screen_gesture" -> "手势操作已完成"
+            "bash", "terminal_exec" -> {
+                val lines = result.content.lines().filter { it.isNotBlank() }
+                if (lines.isNotEmpty()) "输出: ${lines.first().take(60)}" else "命令执行成功"
+            }
+            else -> "工具已返回结果"
+        }
+    }
+}
+
 /** Central event-to-snapshot mapper. It is stateless and safe to call on any thread. */
 object DemoRunStateReducer {
     const val MAX_STEP_COUNT: Int = 50
@@ -206,14 +304,11 @@ object DemoRunStateReducer {
         state: DemoRunState,
         event: AgentEvent.ModelRequestStarted
     ): DemoRunState {
-        val detail = DemoRunText.summarize(
-            text = "第 ${event.iteration} 轮 · 上下文 ${event.messageCount} 条 · 可用工具 ${event.toolCount} 个",
-            maxLength = DemoRunText.MAX_DETAIL_LENGTH
-        ) ?: DemoRunStatus.THINKING.defaultDetail
+        val detail = "第 ${event.iteration} 轮 · 正在分析需求并规划操作"
         val step = DemoRunStep(
             id = "$MODEL_STEP_PREFIX${event.iteration}",
             kind = DemoRunStepKind.MODEL,
-            title = DemoRunStatus.THINKING.label,
+            title = "第 ${event.iteration} 轮 · 思考规划",
             status = DemoRunStatus.THINKING,
             detailLabel = detail
         )
@@ -229,33 +324,68 @@ object DemoRunStateReducer {
         event: AgentEvent.ModelResponded
     ): DemoRunState {
         val toolCount = event.toolCalls.size
-        val detail = if (toolCount > 0) {
-            "已规划 $toolCount 个工具步骤"
-        } else {
-            "正在整理最终回答"
+        val hasTools = toolCount > 0
+
+        // 优先提取大模型输出的意图文案（content）或深度思考（reasoningContent）
+        val rawSummary = event.content.trim().ifBlank {
+            event.reasoningContent?.trim()
         }
+
+        val (title, detail, fullSummary) = if (hasTools) {
+            val toolsDesc = event.toolCalls.joinToString("、") { DemoToolSemanticMapper.friendlyName(it.name) }
+            val intentText = if (!rawSummary.isNullOrBlank()) {
+                rawSummary.lines().firstOrNull { it.isNotBlank() } ?: rawSummary
+            } else {
+                "规划执行 $toolCount 个操作：$toolsDesc"
+            }
+            val compactDetail = DemoRunText.summarize(intentText, DemoRunText.MAX_DETAIL_LENGTH)
+                ?: "已规划 $toolCount 个工具步骤"
+            val modelTurnIndex = (state.steps.count { it.kind == DemoRunStepKind.MODEL }).coerceAtLeast(1)
+            Triple(
+                "第 $modelTurnIndex 轮 · 意图规划",
+                compactDetail,
+                rawSummary ?: "规划调用工具：$toolsDesc"
+            )
+        } else {
+            val isDirectAnswer = state.steps.none { it.kind == DemoRunStepKind.TOOL }
+            val intentText = if (!rawSummary.isNullOrBlank()) {
+                rawSummary.lines().firstOrNull { it.isNotBlank() } ?: rawSummary
+            } else {
+                "已生成最终回答"
+            }
+            val compactDetail = DemoRunText.summarize(intentText, DemoRunText.MAX_DETAIL_LENGTH)
+                ?: if (isDirectAnswer) "已完成需求分析并生成回答" else "已整合工具结果并生成回答"
+            Triple(
+                if (isDirectAnswer) "直接生成回答" else "整合结果并生成回答",
+                compactDetail,
+                rawSummary ?: event.content
+            )
+        }
+
         val currentModelStep = state.steps.asReversed().firstOrNull {
             it.kind == DemoRunStepKind.MODEL && it.status == DemoRunStatus.THINKING
         }
         val step = if (currentModelStep != null) {
             currentModelStep.copy(
-                title = if (toolCount > 0) "已完成分析" else "已生成回答",
+                title = title,
                 status = DemoRunStatus.COMPLETED,
-                detailLabel = detail
+                detailLabel = detail,
+                resultSummary = fullSummary
             )
         } else {
             DemoRunStep(
                 id = "$MODEL_STEP_PREFIX response:${state.steps.count { it.kind == DemoRunStepKind.MODEL }}",
                 kind = DemoRunStepKind.MODEL,
-                title = if (toolCount > 0) "已完成分析" else "已生成回答",
+                title = title,
                 status = DemoRunStatus.COMPLETED,
-                detailLabel = detail
+                detailLabel = detail,
+                resultSummary = fullSummary
             )
         }
         return state.copy(
             status = DemoRunStatus.THINKING,
             detailLabel = detail,
-            resultSummary = null
+            resultSummary = fullSummary
         ).withStep(step)
     }
 
@@ -266,18 +396,20 @@ object DemoRunStateReducer {
         } else {
             DemoRunStatus.TOOL_RUNNING
         }
-        val toolName = toolName(call.name)
-        val detail = if (waiting) "等待用户确认后继续" else "正在执行"
+        val toolFriendly = DemoToolSemanticMapper.friendlyName(call.name)
+        val inputSummary = DemoToolSemanticMapper.formatInputSummary(call.name, call.input)
+        val detail = if (waiting) "等待用户确认: $inputSummary" else inputSummary
         val step = DemoRunStep(
             id = toolStepId(call.id),
             kind = DemoRunStepKind.TOOL,
-            title = toolName,
+            title = "[动作] $toolFriendly",
             status = status,
-            detailLabel = detail
+            detailLabel = detail,
+            resultSummary = "【输入参数】\n${call.input}"
         )
         return state.copy(
             status = status,
-            detailLabel = combinedDetail(toolName, detail),
+            detailLabel = combinedDetail(toolFriendly, detail),
             resultSummary = null
         ).withStep(step)
     }
@@ -295,18 +427,19 @@ object DemoRunStateReducer {
         } else {
             DemoRunStatus.TOOL_RUNNING
         }
-        val toolName = existing?.title ?: toolName(call.name)
+        val toolFriendly = existing?.title ?: "[动作] ${DemoToolSemanticMapper.friendlyName(call.name)}"
         val detail = progressDetail(progress, waiting)
         val step = DemoRunStep(
             id = toolStepId(call.id),
             kind = DemoRunStepKind.TOOL,
-            title = toolName,
+            title = toolFriendly,
             status = status,
-            detailLabel = detail
+            detailLabel = detail,
+            resultSummary = existing?.resultSummary
         )
         return state.copy(
             status = status,
-            detailLabel = combinedDetail(toolName, detail),
+            detailLabel = combinedDetail(toolFriendly, detail),
             resultSummary = null
         ).withStep(step)
     }
@@ -320,40 +453,69 @@ object DemoRunStateReducer {
         } else {
             DemoRunStatus.TOOL_SUCCESS
         }
-        val toolName = toolName(result.name)
-        val summary = DemoRunText.fullText(result.content)
-        val detail = if (result.isError) "工具执行失败" else "工具已完成"
+        val toolFriendly = "[动作] ${DemoToolSemanticMapper.friendlyName(result.name)}"
+        val existing = state.steps.firstOrNull { it.id == toolStepId(result.toolCallId) }
+        val resultDetail = DemoToolSemanticMapper.formatResultSummary(result)
+
+        val fullResultSummary = buildString {
+            if (!existing?.resultSummary.isNullOrBlank()) {
+                append(existing?.resultSummary)
+                append("\n\n")
+            }
+            append("【执行结果】\n")
+            append(result.content)
+        }
         val step = DemoRunStep(
             id = toolStepId(result.toolCallId),
             kind = DemoRunStepKind.TOOL,
-            title = toolName,
+            title = toolFriendly,
             status = status,
-            detailLabel = detail,
-            resultSummary = summary
+            detailLabel = resultDetail,
+            resultSummary = fullResultSummary
         )
         return state.copy(
             status = status,
-            detailLabel = combinedDetail(toolName, detail),
-            resultSummary = summary
+            detailLabel = combinedDetail(toolFriendly, resultDetail),
+            resultSummary = DemoRunText.fullText(result.content)
         ).withStep(step)
     }
 
     private fun onCompleted(state: DemoRunState, content: String): DemoRunState {
         val summary = DemoRunText.fullText(content)
-        val detail = "回答已生成"
-        val step = DemoRunStep(
-            id = OUTCOME_STEP_ID,
-            kind = DemoRunStepKind.OUTCOME,
-            title = DemoRunStatus.COMPLETED.label,
-            status = DemoRunStatus.COMPLETED,
-            detailLabel = detail,
-            resultSummary = summary
-        )
-        return state.copy(
-            status = DemoRunStatus.COMPLETED,
-            detailLabel = detail,
-            resultSummary = summary
-        ).withStep(step)
+        val hasToolSteps = state.steps.any { it.kind == DemoRunStepKind.TOOL }
+
+        if (!hasToolSteps) {
+            // 单轮直接问答（无工具）：保留单个清晰的“直接生成回答”步骤，避免重复
+            val singleStep = DemoRunStep(
+                id = OUTCOME_STEP_ID,
+                kind = DemoRunStepKind.OUTCOME,
+                title = "直接生成回答",
+                status = DemoRunStatus.COMPLETED,
+                detailLabel = "已分析需求并生成回答",
+                resultSummary = summary
+            )
+            return state.copy(
+                status = DemoRunStatus.COMPLETED,
+                detailLabel = "回答已生成",
+                steps = listOf(singleStep),
+                resultSummary = summary
+            )
+        } else {
+            // 多步工具执行：添加最终任务总结完成步骤
+            val outcomeStep = DemoRunStep(
+                id = OUTCOME_STEP_ID,
+                kind = DemoRunStepKind.OUTCOME,
+                title = "任务已完成",
+                status = DemoRunStatus.COMPLETED,
+                detailLabel = "已完成全部工具调用并整合回答",
+                resultSummary = summary
+            )
+            return state.copy(
+                status = DemoRunStatus.COMPLETED,
+                detailLabel = "回答已生成",
+                resultSummary = summary
+            ).withStep(outcomeStep)
+        }
     }
 
     private fun onFailed(state: DemoRunState, message: String): DemoRunState {
@@ -398,7 +560,7 @@ object DemoRunStateReducer {
     }
 
     private fun toolName(name: String): String =
-        DemoRunText.summarize(name, MAX_TITLE_LENGTH) ?: "工具"
+        DemoRunText.summarize(DemoToolSemanticMapper.friendlyName(name), MAX_TITLE_LENGTH) ?: "工具"
 
     private fun combinedDetail(toolName: String, detail: String): String =
         DemoRunText.summarize(

@@ -235,7 +235,8 @@ class AgentRuntime(
                     content = response.content,
                     toolCalls = response.toolCalls,
                     elapsedMillis = System.currentTimeMillis() - startedAt,
-                    stopReason = response.stopReason
+                    stopReason = response.stopReason,
+                    reasoningContent = response.reasoningContent
                 )
             )
 

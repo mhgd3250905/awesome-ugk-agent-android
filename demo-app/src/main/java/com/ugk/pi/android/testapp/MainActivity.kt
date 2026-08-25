@@ -977,9 +977,6 @@ class MainActivity : Activity() {
                 DemoActivityState.runCoordinator.setDetailsExpanded(expanded)
                 runState = DemoActivityState.runCoordinator.snapshot().state
             }
-            setOnStepExpandedChangeListener { _, expanded ->
-                if (expanded) scrollToEnd()
-            }
         }
         processCard = card
         messageContainer.addView(card, LinearLayout.LayoutParams(
