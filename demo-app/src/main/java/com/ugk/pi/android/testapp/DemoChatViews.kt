@@ -1,5 +1,7 @@
 package com.ugk.pi.android.testapp
 
+import android.content.ClipData
+import android.content.ClipboardManager
 import android.content.Context
 import android.graphics.Color
 import android.graphics.Typeface
@@ -10,10 +12,14 @@ import android.os.Build
 import android.util.AttributeSet
 import android.util.TypedValue
 import android.view.Gravity
+import android.view.MotionEvent
 import android.view.View
+import android.view.ViewGroup
 import android.widget.FrameLayout
 import android.widget.LinearLayout
+import android.widget.ScrollView
 import android.widget.TextView
+import android.widget.Toast
 import kotlin.math.roundToInt
 
 /**
@@ -86,7 +92,8 @@ class DemoChatMessageView @JvmOverloads constructor(
         setTextSize(TypedValue.COMPLEX_UNIT_SP, 15f)
         setTextColor(DemoChatPalette.textPrimary)
         typeface = Typeface.create("sans-serif", Typeface.NORMAL)
-        setLineSpacing(0f, 1.25f)
+        setLineSpacing(0f, 1.18f)
+        letterSpacing = 0.012f
         includeFontPadding = false
         minHeight = context.chatDp(40)
         setPadding(
@@ -112,11 +119,11 @@ class DemoChatMessageView @JvmOverloads constructor(
         text = "✦"
         textSize = 13f
         gravity = Gravity.CENTER
-        setTextColor(DemoChatPalette.mintDark)
+        setTextColor(DemoChatPalette.accentDark)
         background = roundedBackground(
             context,
-            DemoChatPalette.mintSoft,
-            DemoChatPalette.mintStroke,
+            DemoChatPalette.accentSoft,
+            DemoChatPalette.accentStroke,
             15
         )
         importantForAccessibility = View.IMPORTANT_FOR_ACCESSIBILITY_NO
@@ -126,18 +133,15 @@ class DemoChatMessageView @JvmOverloads constructor(
         text = "UGK Agent"
         textSize = 11.5f
         typeface = Typeface.create("sans-serif-medium", Typeface.NORMAL)
+        letterSpacing = 0.015f
         setTextColor(DemoChatPalette.textSecondary)
         setPadding(context.chatDp(4), 0, 0, context.chatDp(4))
         importantForAccessibility = View.IMPORTANT_FOR_ACCESSIBILITY_NO
     }
 
-    private val assistantBubble = TextView(context).apply {
-        setTextSize(TypedValue.COMPLEX_UNIT_SP, 15f)
-        setTextColor(DemoChatPalette.textPrimary)
-        typeface = Typeface.create("sans-serif", Typeface.NORMAL)
-        setLineSpacing(0f, 1.28f)
-        includeFontPadding = false
-        minHeight = context.chatDp(40)
+    private val assistantBubble = LinearLayout(context).apply {
+        orientation = LinearLayout.VERTICAL
+        minimumHeight = context.chatDp(40)
         setPadding(
             context.chatDp(16),
             context.chatDp(12),
@@ -153,10 +157,35 @@ class DemoChatMessageView @JvmOverloads constructor(
             bottomRightDp = 18,
             bottomLeftDp = 18
         )
+        importantForAccessibility = View.IMPORTANT_FOR_ACCESSIBILITY_NO
+    }
+
+    private fun createAssistantTextView(): TextView = TextView(context).apply {
+        setTextSize(TypedValue.COMPLEX_UNIT_SP, 15f)
+        setTextColor(DemoChatPalette.textPrimary)
+        typeface = Typeface.create("sans-serif", Typeface.NORMAL)
+        setLineSpacing(0f, 1.16f)
+        letterSpacing = 0.012f
+        includeFontPadding = false
         setTextIsSelectable(true)
         importantForAccessibility = View.IMPORTANT_FOR_ACCESSIBILITY_NO
     }
 
+    private var role: DemoChatMessageRole = DemoChatMessageRole.ASSISTANT
+    private var messageText: String = ""
+
+    private val userCopyButton = createCopyButton()
+    private val userMessageColumn = LinearLayout(context).apply {
+        orientation = LinearLayout.VERTICAL
+        gravity = Gravity.END
+        addView(userBubble, LinearLayout.LayoutParams(
+            LinearLayout.LayoutParams.WRAP_CONTENT,
+            LinearLayout.LayoutParams.WRAP_CONTENT
+        ))
+        addView(userCopyButton, copyButtonLayoutParams(Gravity.END))
+    }
+
+    private val assistantCopyButton = createCopyButton()
     private val assistantContainer = LinearLayout(context).apply {
         orientation = LinearLayout.HORIZONTAL
         gravity = Gravity.TOP
@@ -176,12 +205,10 @@ class DemoChatMessageView @JvmOverloads constructor(
                 LinearLayout.LayoutParams.WRAP_CONTENT,
                 LinearLayout.LayoutParams.WRAP_CONTENT
             ))
+            addView(assistantCopyButton, copyButtonLayoutParams(Gravity.START))
         }
         addView(rightColumn, LinearLayout.LayoutParams(0, LinearLayout.LayoutParams.WRAP_CONTENT, 1f))
     }
-
-    private var role: DemoChatMessageRole = DemoChatMessageRole.ASSISTANT
-    private var messageText: String = ""
 
     init {
         clipChildren = false
@@ -194,7 +221,7 @@ class DemoChatMessageView @JvmOverloads constructor(
         )
         importantForAccessibility = View.IMPORTANT_FOR_ACCESSIBILITY_YES
         addView(
-            userBubble,
+            userMessageColumn,
             LayoutParams(LayoutParams.WRAP_CONTENT, LayoutParams.WRAP_CONTENT).apply {
                 gravity = Gravity.END
             }
@@ -213,13 +240,36 @@ class DemoChatMessageView @JvmOverloads constructor(
         this.role = role
         messageText = text.toString()
         if (role == DemoChatMessageRole.USER) {
-            userBubble.visibility = View.VISIBLE
+            userMessageColumn.visibility = View.VISIBLE
             assistantContainer.visibility = View.GONE
+            userBubble.setTextColor(DemoChatPalette.textPrimary)
+            userBubble.background = asymmetricRoundedBackground(
+                context = context,
+                fillColor = DemoChatPalette.userBubble,
+                strokeColor = DemoChatPalette.userStroke,
+                topLeftDp = 18,
+                topRightDp = 4,
+                bottomRightDp = 18,
+                bottomLeftDp = 18
+            )
+            userCopyButton.background = pressedCardBackground(context)
+            userCopyButton.setTextColor(DemoChatPalette.textSecondary)
             userBubble.text = messageText
         } else {
-            userBubble.visibility = View.GONE
+            userMessageColumn.visibility = View.GONE
             assistantContainer.visibility = View.VISIBLE
-            assistantBubble.text = DemoMarkdownFormatter.format(messageText)
+            assistantBubble.background = asymmetricRoundedBackground(
+                context = context,
+                fillColor = DemoChatPalette.assistantBubble,
+                strokeColor = DemoChatPalette.assistantStroke,
+                topLeftDp = 4,
+                topRightDp = 18,
+                bottomRightDp = 18,
+                bottomLeftDp = 18
+            )
+            assistantCopyButton.background = pressedCardBackground(context)
+            assistantCopyButton.setTextColor(DemoChatPalette.textSecondary)
+            renderAssistantContent(messageText)
         }
         contentDescription = buildString {
             append(role.accessibilityLabel)
@@ -231,6 +281,93 @@ class DemoChatMessageView @JvmOverloads constructor(
     /** 只更新消息正文，保留当前角色。 */
     fun updateText(text: CharSequence) {
         bind(role, text)
+    }
+
+    /**
+     * 流式吐字过程中更新文本，使用复合分块渲染支持正文 Markdown 与横向滑动代码块。
+     */
+    fun updateStreamingText(text: CharSequence) {
+        messageText = text.toString()
+        if (role == DemoChatMessageRole.ASSISTANT) {
+            assistantContainer.visibility = View.VISIBLE
+            userMessageColumn.visibility = View.GONE
+            renderAssistantContent(messageText)
+        } else {
+            userMessageColumn.visibility = View.VISIBLE
+            assistantContainer.visibility = View.GONE
+            userBubble.text = messageText
+        }
+    }
+
+    private fun renderAssistantContent(text: String) {
+        val blocks = DemoCodeBlockParser.splitBlocks(text)
+        if (blocks.isEmpty()) {
+            assistantBubble.removeAllViews()
+            return
+        }
+
+        // 快速路径：单文本块（无代码块）
+        if (blocks.size == 1 && blocks[0] is DemoContentBlock.Text) {
+            val textContent = (blocks[0] as DemoContentBlock.Text).markdown
+            val tv = if (assistantBubble.childCount == 1 && assistantBubble.getChildAt(0) is TextView) {
+                (assistantBubble.getChildAt(0) as TextView).apply {
+                    setTextColor(DemoChatPalette.textPrimary)
+                }
+            } else {
+                assistantBubble.removeAllViews()
+                createAssistantTextView().also { assistantBubble.addView(it) }
+            }
+            DemoMarkdownFormatter.setMarkdown(tv, textContent)
+            return
+        }
+
+        // 复合块模式：包含代码块
+        var childIndex = 0
+        for (block in blocks) {
+            when (block) {
+                is DemoContentBlock.Text -> {
+                    val existing = assistantBubble.getChildAt(childIndex)
+                    val tv = if (existing is TextView) {
+                        existing.apply { setTextColor(DemoChatPalette.textPrimary) }
+                    } else {
+                        val newTv = createAssistantTextView()
+                        if (childIndex < assistantBubble.childCount) {
+                            assistantBubble.removeViewAt(childIndex)
+                        }
+                        assistantBubble.addView(newTv, childIndex)
+                        newTv
+                    }
+                    DemoMarkdownFormatter.setMarkdown(tv, block.markdown)
+                    childIndex++
+                }
+                is DemoContentBlock.Code -> {
+                    val existing = assistantBubble.getChildAt(childIndex) as? DemoCodeBlockView
+                    val codeView = existing ?: DemoCodeBlockView(context).apply {
+                        val lp = LinearLayout.LayoutParams(
+                            LinearLayout.LayoutParams.MATCH_PARENT,
+                            LinearLayout.LayoutParams.WRAP_CONTENT
+                        ).apply {
+                            topMargin = context.chatDp(6)
+                            bottomMargin = context.chatDp(6)
+                        }
+                        layoutParams = lp
+                    }
+                    codeView.bind(block.language, block.code)
+                    if (existing == null) {
+                        if (childIndex < assistantBubble.childCount) {
+                            assistantBubble.removeViewAt(childIndex)
+                        }
+                        assistantBubble.addView(codeView, childIndex)
+                    }
+                    childIndex++
+                }
+            }
+        }
+
+        // 清理末尾多余视图
+        while (assistantBubble.childCount > childIndex) {
+            assistantBubble.removeViewAt(assistantBubble.childCount - 1)
+        }
     }
 
     /** 只更新消息角色，保留当前正文。 */
@@ -251,8 +388,41 @@ class DemoChatMessageView @JvmOverloads constructor(
             context.chatDp(DEFAULT_BUBBLE_MAX_WIDTH_DP)
         }
         userBubble.maxWidth = maxBubbleWidth
-        assistantBubble.maxWidth = maxBubbleWidth
         super.onMeasure(widthMeasureSpec, heightMeasureSpec)
+    }
+
+    private fun createCopyButton(): TextView = TextView(context).apply {
+        text = "复制"
+        setTextSize(TypedValue.COMPLEX_UNIT_SP, 12f)
+        setTextColor(DemoChatPalette.textSecondary)
+        gravity = Gravity.CENTER
+        minWidth = context.chatDp(52)
+        minHeight = context.chatDp(28)
+        setPadding(context.chatDp(10), 0, context.chatDp(10), 0)
+        background = pressedCardBackground(context)
+        isClickable = true
+        isFocusable = true
+        contentDescription = "复制这条消息"
+        setOnClickListener { copyVisibleMessageToClipboard() }
+    }
+
+    private fun copyButtonLayoutParams(gravity: Int): LinearLayout.LayoutParams =
+        LinearLayout.LayoutParams(
+            LinearLayout.LayoutParams.WRAP_CONTENT,
+            LinearLayout.LayoutParams.WRAP_CONTENT
+        ).apply {
+            this.gravity = gravity
+            topMargin = context.chatDp(4)
+        }
+
+    private fun copyVisibleMessageToClipboard() {
+        val text = messageText
+        if (text.isBlank()) return
+
+        val clipboard = context.getSystemService(Context.CLIPBOARD_SERVICE) as? ClipboardManager
+            ?: return
+        clipboard.setPrimaryClip(ClipData.newPlainText("UGK Agent", text))
+        Toast.makeText(context, "已复制到剪贴板", Toast.LENGTH_SHORT).show()
     }
 
     private companion object {
@@ -268,10 +438,68 @@ class DemoChatMessageView @JvmOverloads constructor(
  * 工具名（如有）和外层展开状态；步骤默认只展示状态和一行摘要，详情由步骤自己的
  * 点击目标按需展开。
  */
+/**
+ * 步骤展开详情专用的固定高度内嵌滚动容器。
+ *
+ * 采用固定高度确保大段思考在流式增长时外部页面零抖动；
+ * 显式禁用原生系统滚动条，从根本上消除流式刷新时滚动条因滑块重算而引发的上下跳动与闪烁。
+ */
+class StepDetailScrollView @JvmOverloads constructor(
+    context: Context,
+    attrs: AttributeSet? = null
+) : ScrollView(context, attrs) {
+    init {
+        isNestedScrollingEnabled = true
+        isVerticalScrollBarEnabled = false      // 彻底禁用原生滚动条，消除高频追加文本时的滑块闪烁与跳动
+        isHorizontalScrollBarEnabled = false
+        overScrollMode = View.OVER_SCROLL_NEVER // 禁用边缘拉伸泛光
+    }
+
+    /**
+     * 极简平滑沉底：直接计算目标底部 offset，避免 fullScroll() 触发的焦点抢占与平滑插值跳跃。
+     */
+    fun scrollToBottom() {
+        post {
+            val child = getChildAt(0) ?: return@post
+            val targetY = child.bottom - (height - paddingBottom)
+            if (targetY > 0) {
+                scrollTo(0, targetY)
+            }
+        }
+    }
+
+    override fun onInterceptTouchEvent(ev: MotionEvent): Boolean {
+        if (canScrollVertically(1) || canScrollVertically(-1)) {
+            parent?.requestDisallowInterceptTouchEvent(true)
+        }
+        return super.onInterceptTouchEvent(ev)
+    }
+}
+
+/**
+ * Agent 过程卡片。
+ *
+ * 卡片默认收起，外层卡片和每个过程步骤拥有独立的展开状态。标题行始终展示阶段、
+ * 工具名（如有）和外层展开状态；步骤默认只展示状态和一行摘要，详情由步骤自己的
+ * 点击目标按需展开。
+ */
 class DemoChatProcessCardView @JvmOverloads constructor(
     context: Context,
     attrs: AttributeSet? = null
 ) : LinearLayout(context, attrs) {
+
+    private class StepRowHolder(
+        val rowView: View,
+        val indicatorView: TextView,
+        val titleView: TextView,
+        val compactDetailView: TextView?,
+        val detailScrollView: StepDetailScrollView?,
+        val detailTextView: TextView?,
+        val disclosureView: TextView,
+        val isExpanded: Boolean
+    )
+
+    private val stepHolders = mutableMapOf<String, StepRowHolder>()
 
     private val header = LinearLayout(context)
     private val headerIcon = TextView(context)
@@ -453,6 +681,7 @@ class DemoChatProcessCardView @JvmOverloads constructor(
             setTextSize(TypedValue.COMPLEX_UNIT_SP, 14f)
             setTextColor(DemoChatPalette.textPrimary)
             typeface = Typeface.create("sans-serif-medium", Typeface.NORMAL)
+            letterSpacing = 0.012f
             importantForAccessibility = View.IMPORTANT_FOR_ACCESSIBILITY_NO
         }
     }
@@ -461,6 +690,7 @@ class DemoChatProcessCardView @JvmOverloads constructor(
         headerMeta.apply {
             setTextSize(TypedValue.COMPLEX_UNIT_SP, 12f)
             setTextColor(DemoChatPalette.textSecondary)
+            letterSpacing = 0.01f
             maxLines = 1
             importantForAccessibility = View.IMPORTANT_FOR_ACCESSIBILITY_NO
         }
@@ -469,14 +699,15 @@ class DemoChatProcessCardView @JvmOverloads constructor(
     private fun configureExpansionView() {
         expansionView.apply {
             setTextSize(TypedValue.COMPLEX_UNIT_SP, 11.5f)
-            setTextColor(DemoChatPalette.mintDark)
+            setTextColor(DemoChatPalette.accentDark)
             typeface = Typeface.create("sans-serif-medium", Typeface.NORMAL)
+            letterSpacing = 0.015f
             maxLines = 1
             setPadding(context.chatDp(9), context.chatDp(3), context.chatDp(9), context.chatDp(3))
             background = roundedBackground(
                 context,
-                DemoChatPalette.mintSoft,
-                DemoChatPalette.mintStroke,
+                DemoChatPalette.accentSoft,
+                DemoChatPalette.accentStroke,
                 999
             )
             importantForAccessibility = View.IMPORTANT_FOR_ACCESSIBILITY_NO
@@ -488,6 +719,7 @@ class DemoChatProcessCardView @JvmOverloads constructor(
             setTextSize(TypedValue.COMPLEX_UNIT_SP, 13.5f)
             setTextColor(DemoChatPalette.textSecondary)
             typeface = Typeface.create("sans-serif", Typeface.NORMAL)
+            letterSpacing = 0.01f
             maxLines = 1
             setPadding(0, context.chatDp(6), 0, context.chatDp(2))
             importantForAccessibility = View.IMPORTANT_FOR_ACCESSIBILITY_NO
@@ -599,7 +831,57 @@ class DemoChatProcessCardView @JvmOverloads constructor(
     }
 
     private fun renderSteps() {
+        val currentIds = currentState.steps.map { it.id }
+        val existingIds = stepHolders.keys.toList()
+
+        // 检查能否进行轻量原位复用：步骤 ID 集合一致且各步骤展开状态保持不变
+        val canReuse = currentIds == existingIds && currentState.steps.all { step ->
+            val isExpanded = expandedStepIds.contains(step.id)
+            stepHolders[step.id]?.isExpanded == isExpanded
+        }
+
+        if (canReuse) {
+            currentState.steps.forEach { step ->
+                val holder = stepHolders[step.id] ?: return@forEach
+                holder.titleView.text = step.title
+                holder.indicatorView.text = stepIndicator(step.status)
+                holder.indicatorView.setTextColor(stepIndicatorTextColor(step.status))
+                holder.indicatorView.background = roundedBackground(
+                    context,
+                    stepIndicatorFill(step.status),
+                    stepIndicatorStroke(step.status),
+                    12
+                )
+
+                val detailParts = listOfNotNull(
+                    step.detail?.toString()?.takeIf { it.isNotBlank() },
+                    step.resultSummary?.toString()?.takeIf { it.isNotBlank() }
+                )
+                val hasDetails = detailParts.isNotEmpty()
+                holder.disclosureView.visibility = if (hasDetails) View.VISIBLE else View.GONE
+
+                if (holder.isExpanded) {
+                    val fullDetail = detailParts.joinToString("\n\n")
+                    if (holder.detailTextView?.text?.toString() != fullDetail) {
+                        holder.detailTextView?.text = fullDetail
+                        // 内容流式更新时自动向下方滚动，最新思考保持可见
+                        holder.detailScrollView?.scrollToBottom()
+                    }
+                } else {
+                    val compactDetail = detailParts.firstOrNull() ?: if (hasDetails) {
+                        "点击展开查看完整结果"
+                    } else {
+                        null
+                    }
+                    holder.compactDetailView?.text = compactDetail ?: ""
+                }
+            }
+            return
+        }
+
+        // 结构变动或展开状态变化时重建
         stepsContainer.removeAllViews()
+        stepHolders.clear()
         currentState.steps.forEachIndexed { index, step ->
             if (index > 0) {
                 stepsContainer.addView(View(context).apply {
@@ -611,11 +893,13 @@ class DemoChatProcessCardView @JvmOverloads constructor(
                     marginStart = context.chatDp(12)
                 })
             }
-            stepsContainer.addView(buildStepRow(step))
+            val holder = buildStepRow(step)
+            stepHolders[step.id] = holder
+            stepsContainer.addView(holder.rowView)
         }
     }
 
-    private fun buildStepRow(step: DemoChatProcessStep): View {
+    private fun buildStepRow(step: DemoChatProcessStep): StepRowHolder {
         val detailParts = listOfNotNull(
             step.detail?.toString()?.takeIf { it.isNotBlank() },
             step.resultSummary?.toString()?.takeIf { it.isNotBlank() }
@@ -665,26 +949,45 @@ class DemoChatProcessCardView @JvmOverloads constructor(
             importantForAccessibility = View.IMPORTANT_FOR_ACCESSIBILITY_NO
         }
         textColumn.addView(title, LayoutParams(LayoutParams.MATCH_PARENT, LayoutParams.WRAP_CONTENT))
+
+        var compactDetailView: TextView? = null
+        var detailScrollView: StepDetailScrollView? = null
+        var detailTextView: TextView? = null
+
         if (isStepExpanded) {
             val fullDetail = detailParts.joinToString("\n\n")
-            textColumn.addView(TextView(context).apply {
-                text = fullDetail
-                setTextSize(TypedValue.COMPLEX_UNIT_SP, 12f)
-                setTextColor(DemoChatPalette.textSecondary)
-                typeface = Typeface.create("sans-serif", Typeface.NORMAL)
-                setLineSpacing(0f, 1.25f)
-                setPadding(context.chatDp(10), context.chatDp(8), context.chatDp(10), context.chatDp(8))
+            val scrollView = StepDetailScrollView(context).apply {
                 background = roundedBackground(
                     context,
                     DemoChatPalette.surfaceSubtle,
                     DemoChatPalette.outline,
                     8
                 )
+            }
+            val detailTv = TextView(context).apply {
+                text = fullDetail
+                setTextSize(TypedValue.COMPLEX_UNIT_SP, 12.5f)
+                setTextColor(DemoChatPalette.textSecondary)
+                typeface = Typeface.create("sans-serif", Typeface.NORMAL)
+                setLineSpacing(0f, 1.22f)
+                letterSpacing = 0.01f
+                setPadding(context.chatDp(12), context.chatDp(9), context.chatDp(12), context.chatDp(9))
                 setTextIsSelectable(true)
                 importantForAccessibility = View.IMPORTANT_FOR_ACCESSIBILITY_NO
-            }, LayoutParams(LayoutParams.MATCH_PARENT, LayoutParams.WRAP_CONTENT).apply {
+            }
+            scrollView.addView(
+                detailTv,
+                ViewGroup.LayoutParams(ViewGroup.LayoutParams.MATCH_PARENT, ViewGroup.LayoutParams.WRAP_CONTENT)
+            )
+
+            // 固定高度 170dp：锁定详情高度，避免大段思考将卡片撑满，彻底杜绝外部页面重排抖动
+            val fixedHeight = context.chatDp(170)
+            textColumn.addView(scrollView, LayoutParams(LayoutParams.MATCH_PARENT, fixedHeight).apply {
                 topMargin = context.chatDp(6)
             })
+            scrollView.scrollToBottom()
+            detailScrollView = scrollView
+            detailTextView = detailTv
         } else {
             val compactDetail = detailParts.firstOrNull() ?: if (hasDetails) {
                 "点击展开查看完整结果"
@@ -692,7 +995,7 @@ class DemoChatProcessCardView @JvmOverloads constructor(
                 null
             }
             if (compactDetail != null) {
-                textColumn.addView(TextView(context).apply {
+                val tv = TextView(context).apply {
                     text = compactDetail
                     setTextSize(TypedValue.COMPLEX_UNIT_SP, 12f)
                     setTextColor(DemoChatPalette.textSecondary)
@@ -701,7 +1004,9 @@ class DemoChatProcessCardView @JvmOverloads constructor(
                     ellipsize = android.text.TextUtils.TruncateAt.END
                     setPadding(0, context.chatDp(2), 0, 0)
                     importantForAccessibility = View.IMPORTANT_FOR_ACCESSIBILITY_NO
-                }, LayoutParams(LayoutParams.MATCH_PARENT, LayoutParams.WRAP_CONTENT))
+                }
+                textColumn.addView(tv, LayoutParams(LayoutParams.MATCH_PARENT, LayoutParams.WRAP_CONTENT))
+                compactDetailView = tv
             }
         }
         row.addView(textColumn, LayoutParams(0, LayoutParams.WRAP_CONTENT, 1f))
@@ -735,7 +1040,17 @@ class DemoChatProcessCardView @JvmOverloads constructor(
                 sendAccessibilityEvent(android.view.accessibility.AccessibilityEvent.TYPE_WINDOW_CONTENT_CHANGED)
             }
         }
-        return row
+
+        return StepRowHolder(
+            rowView = row,
+            indicatorView = indicator,
+            titleView = title,
+            compactDetailView = compactDetailView,
+            detailScrollView = detailScrollView,
+            detailTextView = detailTextView,
+            disclosureView = disclosure,
+            isExpanded = isStepExpanded
+        )
     }
 
     private fun stepStatusLabel(status: DemoChatProcessStepStatus): String = when (status) {
@@ -756,23 +1071,23 @@ class DemoChatProcessCardView @JvmOverloads constructor(
 
     private fun stepIndicatorTextColor(status: DemoChatProcessStepStatus): Int = when (status) {
         DemoChatProcessStepStatus.COMPLETE -> DemoChatPalette.surface
-        DemoChatProcessStepStatus.ACTIVE -> DemoChatPalette.mintDark
+        DemoChatProcessStepStatus.ACTIVE -> DemoChatPalette.accentDark
         DemoChatProcessStepStatus.WAITING -> DemoChatPalette.amber
         DemoChatProcessStepStatus.ERROR -> DemoChatPalette.danger
         DemoChatProcessStepStatus.PENDING -> DemoChatPalette.textMuted
     }
 
     private fun stepIndicatorFill(status: DemoChatProcessStepStatus): Int = when (status) {
-        DemoChatProcessStepStatus.COMPLETE -> DemoChatPalette.mintDark
-        DemoChatProcessStepStatus.ACTIVE -> DemoChatPalette.mintSoft
+        DemoChatProcessStepStatus.COMPLETE -> DemoChatPalette.sage
+        DemoChatProcessStepStatus.ACTIVE -> DemoChatPalette.accentSoft
         DemoChatProcessStepStatus.WAITING -> DemoChatPalette.amberSoft
         DemoChatProcessStepStatus.ERROR -> DemoChatPalette.dangerSoft
         DemoChatProcessStepStatus.PENDING -> DemoChatPalette.surface
     }
 
     private fun stepIndicatorStroke(status: DemoChatProcessStepStatus): Int = when (status) {
-        DemoChatProcessStepStatus.COMPLETE -> DemoChatPalette.mintDark
-        DemoChatProcessStepStatus.ACTIVE -> DemoChatPalette.mintDark
+        DemoChatProcessStepStatus.COMPLETE -> DemoChatPalette.sage
+        DemoChatProcessStepStatus.ACTIVE -> DemoChatPalette.accent
         DemoChatProcessStepStatus.WAITING -> DemoChatPalette.amber
         DemoChatProcessStepStatus.ERROR -> DemoChatPalette.danger
         DemoChatProcessStepStatus.PENDING -> DemoChatPalette.outline
@@ -789,6 +1104,12 @@ private object DemoChatPalette {
     val cardSurface get() = Ui.SurfaceElevated
     val cardPressed get() = Ui.SurfaceSoft
     val cardStroke get() = Ui.Outline
+    val accent get() = Ui.Accent
+    val accentDark get() = Ui.AccentDark
+    val accentSoft get() = Ui.AccentLight
+    val accentStroke get() = Ui.AccentStroke
+    val sage get() = Ui.Sage
+    val sageSoft get() = Ui.SageSoft
     val mintDark get() = Ui.MintDark
     val mintSoft get() = Ui.MintLight
     val mintStroke get() = Ui.MintStroke
@@ -854,4 +1175,3 @@ private fun pressedCardBackground(context: Context): Drawable = StateListDrawabl
         )
     )
 }
-
