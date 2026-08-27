@@ -18,6 +18,7 @@ rootProject.name = "ugk-agent-sdk"
 include(":ugk-pi-android")
 include(":pi-file-skill-android")
 include(":pi-schedule-skill-android")
+include(":ugk-agent-task-runtime-android")
 include(":pi-system-skill-android")
 include(":pi-terminal-skill-android")
 include(":demo-app")

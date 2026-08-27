@@ -1,7 +1,6 @@
 package com.ugk.pi.android.testapp
 
 import android.app.AlertDialog
-import android.content.ComponentName
 import android.content.Context
 import android.content.Intent
 import android.provider.Settings
@@ -30,17 +29,8 @@ import android.widget.LinearLayout
 import android.widget.ScrollView
 import android.widget.TextView
 import com.ugk.pi.android.AgentEvent
-import com.ugk.pi.android.AgentMessage
 import com.ugk.pi.android.AgentRuntime
 import com.ugk.pi.android.AgentSession
-import com.ugk.pi.android.AccessibilityScreenAutomationBackend
-import com.ugk.pi.android.AccessibilityServiceProvider
-import com.ugk.pi.android.AndroidAutomationAgentPlugin
-import com.ugk.pi.android.AnthropicMessagesProvider
-import com.ugk.pi.android.LLMProvider
-import com.ugk.pi.android.ModelRequest
-import com.ugk.pi.android.ModelResponse
-import com.ugk.pi.terminal.skill.TerminalAgentPlugin
 import android.Manifest
 import android.content.pm.PackageManager
 import android.graphics.BitmapFactory
@@ -53,7 +43,8 @@ import android.widget.ImageView
 import androidx.core.app.ActivityCompat
 import androidx.core.content.ContextCompat
 import com.ugk.pi.android.AgentImageContent
-import com.ugk.pi.android.OpenAiChatCompletionsProvider
+import com.ugk.pi.task.runtime.AlarmManagerAgentTaskScheduler
+import com.ugk.pi.task.runtime.AndroidAgentTaskStore
 import java.io.File
 import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.Dispatchers
@@ -72,6 +63,8 @@ class MainActivity : Activity() {
     private val conversationStore by lazy { DemoActivityState.conversationStore(applicationContext) }
     private val traceStore by lazy { DemoAgentTraceStore(applicationContext) }
     private val fileImportStore by lazy { DemoFileImportStore(applicationContext) }
+    private val scheduledTaskStore by lazy { AndroidAgentTaskStore(applicationContext) }
+    private val scheduledTaskScheduler by lazy { AlarmManagerAgentTaskScheduler(applicationContext) }
     private var runtime: AgentRuntime? = null
     private lateinit var activeConversation: DemoConversation
     private lateinit var session: AgentSession
@@ -159,7 +152,7 @@ class MainActivity : Activity() {
         DemoActivityState.activeConversationId = activeConversation.id
         conversationStore.setActive(activeConversation.id)
         session = DemoActivityState.sessionFor(activeConversation.id)
-            ?: createSession(activeConversation).also {
+            ?: createDemoAgentSession(activeConversation).also {
                 DemoActivityState.rememberSession(activeConversation.id, it)
             }
         setContentView(buildUi())
@@ -184,11 +177,13 @@ class MainActivity : Activity() {
         restoreDraft(savedInstanceState)
         rebuildRuntime()
         attachRunCoordinator()
+        requestNotificationPermissionIfNeeded()
     }
 
     override fun onNewIntent(intent: Intent?) {
         super.onNewIntent(intent)
         setIntent(intent)
+        if (::activeConversation.isInitialized) refreshActiveConversationFromStore()
     }
 
     @Deprecated("Use the file picker callback when the Activity Result API is adopted.")
@@ -324,6 +319,7 @@ class MainActivity : Activity() {
         super.onResume()
         activityResumed = true
         confirmationPresenter.onActivityResumed()
+        refreshActiveConversationFromStore()
         updateCapabilityBanner()
         if (::inputField.isInitialized && inputField.text.toString() != DemoActivityState.draft) {
             inputField.setText(DemoActivityState.draft)
@@ -905,48 +901,38 @@ class MainActivity : Activity() {
         stopAgent(clearQueuedMessages = true)
         runtime?.close()
         val config = apiStore.activeConfig()
-        val provider: LLMProvider = if (config != null) {
-            AnthropicMessagesProvider(
-                apiKey = config.apiKey,
-                model = config.model,
-                baseUrl = config.baseUrl
-            )
-        } else {
-            PlaceholderProvider
-        }
-        val nextTerminalPlugin = TerminalAgentPlugin(
+        runtime = DemoAgentRuntimeFactory.create(
             context = applicationContext,
-            shouldBypassConfirmation = { authorizationStore.isFullAuthorizationEnabled() },
-            shouldBlockForScreenAutomation = { screenAutomationActive.get() }
+            scheduleStore = scheduledTaskStore,
+            scheduleScheduler = scheduledTaskScheduler,
+            confirmationPresenter = confirmationPresenter,
+            shouldBypassConfirmation = {
+                authorizationStore.isFullAuthorizationEnabled()
+            },
+            shouldBlockForScreenAutomation = { screenAutomationActive.get() },
+            // The Demo now owns a real Application-level executor used by
+            // JobScheduler when RUN_AGENT_PROMPT reaches its trigger time.
+            supportsBackgroundPromptExecution = true
         )
-        runtime = AgentRuntime.Builder()
-            .llmProvider(provider)
-            .register(DemoImportedFilePlugin(fileImportStore.workspaceRoot))
-            .register(
-                AndroidAutomationAgentPlugin(
-                    context = applicationContext,
-                    confirmationPresenter = confirmationPresenter,
-                    accessibilityServiceComponent = ComponentName(
-                        this,
-                        AgentAccessibilityService::class.java
-                    ),
-                    accessibilityStateProvider = AgentAccessibilityService.runtimeStateProvider,
-                    shouldBypassConfirmation = {
-                        authorizationStore.isFullAuthorizationEnabled()
-                    },
-                    screenAutomationBackend = AccessibilityScreenAutomationBackend(
-                        serviceProvider = AccessibilityServiceProvider {
-                            AgentAccessibilityService.instance
-                        },
-                        ownPackageName = applicationContext.packageName
-                    )
-                )
-            )
-            .register(nextTerminalPlugin)
-            .build()
         providerLabel.text = config?.displayName() ?: "未配置 API 源"
         updateCapabilityBanner()
         renderConversation()
+    }
+
+    private fun requestNotificationPermissionIfNeeded() {
+        if (
+            Build.VERSION.SDK_INT >= Build.VERSION_CODES.TIRAMISU &&
+            ContextCompat.checkSelfPermission(
+                this,
+                Manifest.permission.POST_NOTIFICATIONS
+            ) != PackageManager.PERMISSION_GRANTED
+        ) {
+            ActivityCompat.requestPermissions(
+                this,
+                arrayOf(Manifest.permission.POST_NOTIFICATIONS),
+                REQUEST_NOTIFICATION_PERMISSION
+            )
+        }
     }
 
     private fun sendMessage() {
@@ -1680,6 +1666,27 @@ class MainActivity : Activity() {
         }
     }
 
+    /**
+     * A JobService may append a scheduled turn while this Activity is alive.
+     * Reload the durable conversation when returning to the foreground so the
+     * result is visible without requiring a process restart.
+     */
+    private fun refreshActiveConversationFromStore() {
+        if (!::activeConversation.isInitialized) return
+        if (runState.isBusy || DemoActivityState.runCoordinator.isRunning()) return
+        val latest = conversationStore.get(activeConversation.id) ?: return
+        if (latest.updatedAt == activeConversation.updatedAt &&
+            latest.messages == activeConversation.messages
+        ) {
+            return
+        }
+        activeConversation = latest
+        session = createDemoAgentSession(latest)
+        DemoActivityState.rememberSession(latest.id, session)
+        syncTranscript()
+        renderConversation()
+    }
+
     private fun updateAppBar() {
         if (::appBarTitle.isInitialized) appBarTitle.text = activeConversation.title
     }
@@ -1692,7 +1699,7 @@ class MainActivity : Activity() {
         DemoActivityState.activeConversationId = conversation.id
         DemoActivityState.runCoordinator.resetForConversation(conversation.id)
         session = DemoActivityState.sessionFor(conversation.id)
-            ?: createSession(conversation).also {
+            ?: createDemoAgentSession(conversation).also {
                 DemoActivityState.rememberSession(conversation.id, it)
             }
         runState = DemoActivityState.runCoordinator.snapshot().state
@@ -1708,7 +1715,7 @@ class MainActivity : Activity() {
         activeConversation = conversation
         DemoActivityState.activeConversationId = conversation.id
         DemoActivityState.runCoordinator.resetForConversation(conversation.id)
-        session = createSession(conversation)
+        session = createDemoAgentSession(conversation)
         DemoActivityState.rememberSession(conversation.id, session)
         runState = DemoActivityState.runCoordinator.snapshot().state
         floatingWindow.clear()
@@ -1880,27 +1887,6 @@ class MainActivity : Activity() {
     private fun formatConversationTime(timestamp: Long): String =
         DateFormat.getDateTimeInstance(DateFormat.SHORT, DateFormat.SHORT).format(Date(timestamp))
 
-    private fun createSession(conversation: DemoConversation): AgentSession {
-        val messages = mutableListOf<AgentMessage>(
-            AgentMessage.System(
-                "你是一个有用的 AI 助手。直接回答用户问题，简洁明了；如果需要调用工具，先说明下一步并在工具完成后给出清晰结果。"
-            )
-        )
-        conversation.messages.forEach { stored ->
-            when (stored.role) {
-                "user" -> messages += AgentMessage.User(stored.content)
-                "assistant" -> messages += AgentMessage.Assistant(stored.content)
-            }
-        }
-        return AgentSession(conversation.id, messages)
-    }
-
-    private object PlaceholderProvider : LLMProvider {
-        override suspend fun generate(request: ModelRequest): ModelResponse {
-            return ModelResponse(content = "请先在设置中配置 API 源（URL、模型名称、API Key）。")
-        }
-    }
-
     private companion object {
         const val KEY_DRAFT = "demo_draft"
         const val MAX_VISIBLE_CHAT_MESSAGES = 100
@@ -1908,6 +1894,7 @@ class MainActivity : Activity() {
         const val REQUEST_TAKE_PHOTO = 4102
         const val REQUEST_PICK_IMAGE = 4103
         const val REQUEST_CAMERA_PERMISSION = 4104
+        const val REQUEST_NOTIFICATION_PERMISSION = 4105
         const val MAX_PENDING_IMPORTED_FILES = 3
     }
 

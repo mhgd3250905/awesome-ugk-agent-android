@@ -4,6 +4,7 @@ import android.content.Context
 import org.json.JSONArray
 import org.json.JSONObject
 import java.util.concurrent.Executors
+import java.util.concurrent.ExecutionException
 import java.util.UUID
 
 data class DemoStoredMessage(
@@ -98,6 +99,7 @@ class DemoConversationStore(context: Context) {
         return conversation
     }
 
+    @Synchronized
     fun save(conversation: DemoConversation) {
         val normalized = normalize(conversation)
         // Keep the caller's in-memory object bounded as well as the JSON
@@ -109,6 +111,25 @@ class DemoConversationStore(context: Context) {
         val all = readAll().filterNot { it.id == normalized.id } + normalized
         writeAll(keepNewestDemoConversations(all, MAX_CONVERSATIONS))
         setActive(normalized.id)
+    }
+
+    /**
+     * Persists a background-run result before its JobService is allowed to
+     * finish. The ordinary UI path remains asynchronous; this method waits
+     * behind the same single writer so a process kill cannot discard the last
+     * scheduled result merely because the write was queued.
+     */
+    @Synchronized
+    fun saveAndFlush(conversation: DemoConversation) {
+        save(conversation)
+        try {
+            writeExecutor.submit { drainPendingWrites() }.get()
+        } catch (error: InterruptedException) {
+            Thread.currentThread().interrupt()
+            throw error
+        } catch (error: ExecutionException) {
+            throw error.cause ?: error
+        }
     }
 
     fun update(conversation: DemoConversation) = save(conversation)

@@ -51,6 +51,7 @@ object DemoActivityState {
         }
     }
 
+    @Synchronized
     fun conversationStore(context: Context): DemoConversationStore {
         return sharedConversationStore ?: DemoConversationStore(context.applicationContext).also {
             sharedConversationStore = it

@@ -8,6 +8,7 @@ Android Agent Runtime SDK — 通用 AI Agent 工具循环框架，附带无障�
 :ugk-pi-android              — Agent Runtime 核心（AgentRuntime, AgentSession, AgentTool, LLMProvider, AndroidSkill）
 :pi-file-skill-android       — 应用私有文件工具 skill
 :pi-schedule-skill-android   — 定时任务 skill
+:ugk-agent-task-runtime-android — Android 定时任务持久化、AlarmManager/JobScheduler 与通知运行时
 :pi-system-skill-android     — 系统设置 / 权限 / Intent skill
 :demo-app                    — 无障碍屏幕操控 demo（包名 com.ugk.pi.android.testapp）
 :ugk-terminal-runtime-android — 无 UI 原生终端 Runtime 基础设施
@@ -44,6 +45,7 @@ API 内容不得复制进源码、文档或提交；Release 默认不嵌入 API 
   :ugk-pi-android:testDebugUnitTest `
   :pi-file-skill-android:testDebugUnitTest `
   :pi-schedule-skill-android:testDebugUnitTest `
+  :ugk-agent-task-runtime-android:testDebugUnitTest `
   :pi-system-skill-android:testDebugUnitTest `
   :ugk-terminal-runtime-android:testDebugUnitTest `
   :pi-terminal-skill-android:testDebugUnitTest `

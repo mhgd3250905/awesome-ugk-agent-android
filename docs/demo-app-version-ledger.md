@@ -1,18 +1,36 @@
 # demo-app 版本与变更台账
 
 更新时间：2026-08-27
-当前版本：`0.4.0`（`versionCode 5`）
+当前保存版本：`0.5.0`（`versionCode 6`）
 版本范围：仅 `:demo-app`；SDK/AAR 模块版本继续独立维护。
-当前阶段：`0.4.0` 本地版本基线已完成真机体验验证；远端推送和正式分发仍需单独执行。
+当前阶段：`0.5.0` 定时任务已完成后台 Agent 执行链路、JVM 验证、APK 构建和第二台小米真机体验验收；本次提交将创建并同步 `demo-app-v0.5.0` 标签。
 
 ## 版本规则
 
 - `versionCode` 只递增，不因重新打包或覆盖安装回退。
 - `versionName` 使用面向测试交付的 SemVer 风格；聊天、会话和悬浮窗等一组可感知能力完成后提升 minor 版本。
 - 稳定性修复、生命周期恢复和验收证据整理使用 patch 版本递增，不与新的用户可感知 UI 能力混用。
-- 当前版本 Git 标签为 `demo-app-v0.4.0`；上一版 `demo-app-v0.3.0` 只代表前一阶段 Demo 交付物，不代表 Terminal Runtime 已达到最终发布状态。
+- 最近已保存版本 Git 标签为 `demo-app-v0.5.0`；`demo-app-v0.4.0` 和 `demo-app-v0.3.0` 保留为历史 Demo 交付标签，不代表 Terminal Runtime 已达到最终发布状态。
 - Debug APK 允许本机从被 Git 忽略的配置读取 API 默认值，不能作为对外分发包；API Key 不进入源码、文档或提交。
 - 真机迭代使用固定 Debug 签名和 `adb install -r -d`，不以卸载、清数据作为常规版本升级步骤。
+
+## 0.5.0 · 2026-08-27 · 通用 Android 定时任务（已保存）
+
+### 变更范围
+
+- 新增独立模块 `ugk-agent-task-runtime-android`，把 `AgentTaskStore`、`AgentTaskScheduler` 适配为 Android 持久化 Store、通知任务的 `AlarmManager`、Prompt 任务的 `JobScheduler`、开机/升级恢复广播和通知 Sink。
+- Demo 注册定时任务 Skill/Tool，并在 Android 13+ 启动时申请 `POST_NOTIFICATIONS`；`NOTIFY_USER` 用于提醒，`RUN_AGENT_PROMPT` 会通过 `AgentTaskJobService` 真正唤醒一轮 AgentRuntime。
+- Demo 前后台共用 Runtime 工厂；后台按任务的 `sessionId` 恢复会话，使用 `AgentRunSource.SCHEDULED_TASK` 执行 Provider、无障碍屏幕、视觉、剪贴板和终端 Tool，并把任务输入与结果持久化回同一会话。
+- 无交互确认窗口时，受保护动作默认安全拒绝；仅当用户显式开启全授权时，后台才允许执行这些动作。
+- 增加重复任务状态迁移、失败收敛、Prompt 结果通知、时间算术溢出校验、会话重建和后台确认兜底测试。
+
+### 当前证据与边界
+
+- 全工程 JVM 单元测试共 198 个、0 个失败；`:demo-app:assembleDebug` 已通过；APK 元数据为 `versionCode 6 / versionName 0.5.0`，合并 Manifest 已包含 `AgentTaskJobService`。
+- APK 已安装并启动于第二台授权小米 `e0b93f2f`（型号 `2304FPN6DC`）；用户已完成一次性 `RUN_AGENT_PROMPT` 后台唤醒/读屏体验验证并反馈可用。主目标小米 `QSG6Q8IFDMDELVGQ` 当时离线，三星设备 `R5CRB11B2AW` 未操作。
+- 本版本标签为 `demo-app-v0.5.0`，随本次提交推送至 `origin`；`0.4.0` 和 `0.3.0` 标签一并补齐远端版本基线。
+- 普通 `AlarmManager` 与 `JobScheduler` 都是系统尽力而为调度，可能受 Doze、网络状态和小米省电策略延迟；本版不是事件订阅或常驻监听服务。
+- `RUN_AGENT_PROMPT` 是系统尽力而为的一次有限后台回合，不是微信事件订阅或常驻监听；执行时仍受网络、Doze、小米省电策略、无障碍连接和前台目标界面限制。
 
 ## 0.4.0 · 2026-08-27 · 视觉屏幕兜底与文本剪贴板
 
@@ -33,7 +51,7 @@
 
 ### 当前边界
 
-- `0.4.0` 标签和提交是本地版本管理基线，尚未推送远端；Release/AAB、API 配置和正式分发仍按发布清单单独验收。
+- `0.4.0` 标签和提交已作为历史版本基线同步至远端；Release/AAB、API 配置和正式分发仍按发布清单单独验收。
 - 剪贴板后台读取仍受 Android 焦点/默认 IME 策略约束；写入剪贴板不等于自动向其他 App 粘贴。
 
 ## 0.2.0 · 2026-08-13

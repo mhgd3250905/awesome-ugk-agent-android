@@ -13,7 +13,7 @@ Android Agent Runtime SDK：提供通用 Agent 工具循环、Android Skill，�
 - v1 不支持、不打包、不宣称 Node.js、Git、OpenSSH、jq。
 - Runtime 无 UI，不要求安装 Termux 或第二个 App；它与宿主共享 Android UID，不是安全沙箱。
 - `pi-system-skill-android` 提供白名单 Android 原生 Intent Tool；打开网页、相机、拨号、地图、分享等动作不通过终端执行。
-- `demo-app` 当前本地版本基线为 `0.4.0`（`versionCode 5`）；包含视觉屏幕兜底和文本剪贴板能力，发布标签为 `demo-app-v0.4.0`。
+- `demo-app` 当前保存版本为 `0.5.0`（`versionCode 6`），标签为 `demo-app-v0.5.0`；包含可持久化的 `RUN_AGENT_PROMPT` 后台 Agent 回合，上一版本 `demo-app-v0.4.0` 保留为历史基线。
 
 ## 模块
 
@@ -23,6 +23,7 @@ Android Agent Runtime SDK：提供通用 Agent 工具循环、Android Skill，�
 :pi-terminal-skill-android   terminal_bash_execute Agent Tool
 :pi-file-skill-android       应用私有文件 Skill
 :pi-schedule-skill-android   定时任务 Skill
+:ugk-agent-task-runtime-android Android 定时任务持久化、AlarmManager/JobScheduler 与通知运行时
 :pi-system-skill-android     系统设置/权限/Intent/剪贴板 Skill
 :terminal-probe-demo-a/b     不同 applicationId 的 Runtime 验证 App
 :demo-app                    无障碍屏幕操控示例（前后台切换保留测试会话/草稿）
@@ -40,7 +41,7 @@ Windows PowerShell：
 
 完整单元测试、双宿主仪器测试和 Runtime 静态验收见 [`AGENTS.md`](AGENTS.md) 与 [`docs/terminal-runtime-validation.md`](docs/terminal-runtime-validation.md)。
 
-当前真机基线：`SM-A526U1`、Android 14/API 34、arm64-v8a、4 KB page size；`:demo-app:connectedDebugAndroidTest` 为 `14/14`，两个 Runtime Probe 的本地能力测试通过，联网用例因设备当前 VPN 无可用上游网络而未通过。
+当前授权真机以 [`HANDOVER.md`](HANDOVER.md) 为准，仅允许操作小米设备；`0.5.0` 已在第二台小米 `e0b93f2f`（`2304FPN6DC`）安装启动并完成一次性后台 Agent 唤醒体验验证，主目标 `QSG6Q8IFDMDELVGQ` 本轮离线。
 
 ## 文档入口
 
@@ -55,6 +56,7 @@ Windows PowerShell：
 - [`docs/terminal-runtime-release-checklist.md`](docs/terminal-runtime-release-checklist.md)：发布清单；
 - [`docs/demo-app-ui-redesign.md`](docs/demo-app-ui-redesign.md)：demo-app 聊天、过程、输入和悬浮窗的当前交互基线与验收记录；
 - [`docs/demo-app-version-ledger.md`](docs/demo-app-version-ledger.md)：demo-app 版本、变更和验收台账。
+- [`docs/android-scheduled-tasks.md`](docs/android-scheduled-tasks.md)：定时任务控制面、Android 运行时适配、能力边界和验收方法。
 
 历史过程记录保存在 [`docs/archive/`](docs/archive/) 中，不作为当前状态依据。
 
@@ -99,6 +101,10 @@ Android 原生 Intent 和跨 App 自动化接入：轻量宿主可注册
 
 剪贴板 Tool/Skill 的 API 限制、原文短暂传递策略和宿主接入方式见
 [`docs/android-clipboard.md`](docs/android-clipboard.md)。
+
+定时任务由 `pi-schedule-skill-android` 和 `ugk-agent-task-runtime-android` 分层提供：前者注册
+`agent_task_create/list/get/update/cancel`，后者对通知任务使用 `AlarmManager`，对 Agent Prompt 使用
+`JobScheduler` 启动后台执行窗口。Demo 已接入 `RUN_AGENT_PROMPT`，会恢复关联会话并实际运行一轮 Agent；整体设计与限制见 [`docs/android-scheduled-tasks.md`](docs/android-scheduled-tasks.md)。
 
 跨 App 读屏和点击仍由宿主提供的 `screen_*` Tool 完成，Agent 必须先确认
 `readyForScreenAutomation=true`，每次动作后重新读取屏幕验证。所有外部可见动作默认仍需先通过

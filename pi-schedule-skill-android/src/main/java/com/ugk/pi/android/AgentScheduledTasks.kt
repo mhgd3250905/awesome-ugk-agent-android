@@ -148,13 +148,14 @@ fun agentScheduledTaskTools(
     store: AgentTaskStore,
     scheduler: AgentTaskScheduler,
     clock: AgentTaskClock = SystemAgentTaskClock,
-    idGenerator: AgentTaskIdGenerator = UuidAgentTaskIdGenerator()
+    idGenerator: AgentTaskIdGenerator = UuidAgentTaskIdGenerator(),
+    supportsBackgroundPromptExecution: Boolean = false
 ): List<AgentTool> {
     return listOf(
-        AgentTaskCreateTool(store, scheduler, clock, idGenerator),
+        AgentTaskCreateTool(store, scheduler, clock, idGenerator, supportsBackgroundPromptExecution = supportsBackgroundPromptExecution),
         AgentTaskListTool(store),
         AgentTaskGetTool(store),
-        AgentTaskUpdateTool(store, scheduler, clock),
+        AgentTaskUpdateTool(store, scheduler, clock, supportsBackgroundPromptExecution),
         AgentTaskCancelTool(store, scheduler, clock)
     )
 }
@@ -163,7 +164,8 @@ class ScheduleTaskAgentPlugin(
     private val store: AgentTaskStore,
     private val scheduler: AgentTaskScheduler,
     private val clock: AgentTaskClock = SystemAgentTaskClock,
-    private val idGenerator: AgentTaskIdGenerator = UuidAgentTaskIdGenerator()
+    private val idGenerator: AgentTaskIdGenerator = UuidAgentTaskIdGenerator(),
+    private val supportsBackgroundPromptExecution: Boolean = false
 ) : AgentCapabilityPlugin {
     override val id: String = "agent-scheduled-tasks"
 
@@ -172,14 +174,22 @@ class ScheduleTaskAgentPlugin(
             store = store,
             scheduler = scheduler,
             clock = clock,
-            idGenerator = idGenerator
+            idGenerator = idGenerator,
+            supportsBackgroundPromptExecution = supportsBackgroundPromptExecution
         )
     }
 
-    override fun skills(): List<AndroidSkill> = listOf(agentScheduledTasksSkill())
+    override fun skills(): List<AndroidSkill> = listOf(
+        agentScheduledTasksSkill(supportsBackgroundPromptExecution)
+    )
 }
 
-fun agentScheduledTasksSkill(): AndroidSkill {
+fun agentScheduledTasksSkill(supportsBackgroundPromptExecution: Boolean = false): AndroidSkill {
+    val actionInstructions = if (supportsBackgroundPromptExecution) {
+        "Use NOTIFY_USER only for a pure reminder. Use RUN_AGENT_PROMPT when the trigger time must wake the Agent to inspect state, call Tools, reason about the result, or perform the user's requested work."
+    } else {
+        "This host currently supports NOTIFY_USER only. Do not create RUN_AGENT_PROMPT tasks."
+    }
     return AndroidSkill(
         id = "agent-scheduled-tasks",
         description = "Use when the user asks for future execution, delayed reminders, repeated reminders, periodic checks, or continuing work after this chat turn.",
@@ -210,7 +220,7 @@ fun agentScheduledTasksSkill(): AndroidSkill {
             Use ONE_SHOT for one future execution.
             Use REPEATING_UNTIL for repeated execution over a time window.
             Use NOTIFY_USER for pure reminders.
-            Use RUN_AGENT_PROMPT for checks that require tool use or reasoning at trigger time.
+            $actionInstructions
             Use list/get/update/cancel for follow-up user commands about existing tasks.
         """.trimIndent(),
         methods = listOf(
@@ -253,13 +263,20 @@ class AgentTaskCreateTool(
     private val scheduler: AgentTaskScheduler,
     private val clock: AgentTaskClock = SystemAgentTaskClock,
     private val idGenerator: AgentTaskIdGenerator = UuidAgentTaskIdGenerator(),
+    private val supportsBackgroundPromptExecution: Boolean = false,
     override val name: String = "agent_task_create"
 ) : AgentTool {
     override val description: String = "Creates a one-shot or repeating scheduled agent task."
     override val inputSchema: JsonObject = taskInputSchema(requireTaskId = false)
 
     override suspend fun execute(call: ToolCall, context: ToolExecutionContext): ToolResult {
-        val parsed = parseTaskCreate(call, context.sessionId, clock, idGenerator)
+        val parsed = parseTaskCreate(
+            call = call,
+            sessionId = context.sessionId,
+            clock = clock,
+            idGenerator = idGenerator,
+            supportsBackgroundPromptExecution = supportsBackgroundPromptExecution
+        )
         if (parsed is TaskParseResult.Error) return errorResult(call, name, parsed.code, parsed.message)
         val task = (parsed as TaskParseResult.Success).task
         store.upsert(task)
@@ -333,6 +350,7 @@ class AgentTaskUpdateTool(
     private val store: AgentTaskStore,
     private val scheduler: AgentTaskScheduler,
     private val clock: AgentTaskClock = SystemAgentTaskClock,
+    private val supportsBackgroundPromptExecution: Boolean = false,
     override val name: String = "agent_task_update"
 ) : AgentTool {
     override val description: String = "Updates title, schedule, or action for an active scheduled agent task."
@@ -355,7 +373,10 @@ class AgentTaskUpdateTool(
             existing.schedule
         }
         val action = if (call.input["action"] != null) {
-            when (val parsed = parseAction(call.input["action"]?.jsonObject)) {
+            when (val parsed = parseAction(
+                call.input["action"]?.jsonObject,
+                supportsBackgroundPromptExecution
+            )) {
                 is ActionParseResult.Error -> return errorResult(call, name, parsed.code, parsed.message)
                 is ActionParseResult.Success -> parsed.action
             }
@@ -420,7 +441,8 @@ private fun parseTaskCreate(
     call: ToolCall,
     sessionId: String,
     clock: AgentTaskClock,
-    idGenerator: AgentTaskIdGenerator
+    idGenerator: AgentTaskIdGenerator,
+    supportsBackgroundPromptExecution: Boolean
 ): TaskParseResult {
     val title = call.input.string("title")?.takeIf { it.isNotBlank() }
         ?: return TaskParseResult.Error("MISSING_TITLE", "title is required.")
@@ -429,7 +451,10 @@ private fun parseTaskCreate(
         is ScheduleParseResult.Error -> return TaskParseResult.Error(parsed.code, parsed.message)
         is ScheduleParseResult.Success -> parsed.schedule
     }
-    val action = when (val parsed = parseAction(call.input["action"]?.jsonObject)) {
+    val action = when (val parsed = parseAction(
+        call.input["action"]?.jsonObject,
+        supportsBackgroundPromptExecution
+    )) {
         is ActionParseResult.Error -> return TaskParseResult.Error(parsed.code, parsed.message)
         is ActionParseResult.Success -> parsed.action
     }
@@ -453,7 +478,9 @@ private fun parseSchedule(input: JsonObject?, nowMillis: Long): ScheduleParseRes
         "ONE_SHOT" -> {
             val startAfterSeconds = input.long("startAfterSeconds") ?: return ScheduleParseResult.Error("INVALID_SCHEDULE", "startAfterSeconds is required.")
             if (startAfterSeconds < 0) return ScheduleParseResult.Error("INVALID_SCHEDULE", "startAfterSeconds must be >= 0.")
-            ScheduleParseResult.Success(AgentTaskSchedule.OneShot(nowMillis + startAfterSeconds * 1_000L))
+            val runAtMillis = offsetMillis(nowMillis, startAfterSeconds)
+                ?: return ScheduleParseResult.Error("INVALID_SCHEDULE", "startAfterSeconds is too large.")
+            ScheduleParseResult.Success(AgentTaskSchedule.OneShot(runAtMillis))
         }
         "REPEATING_UNTIL" -> {
             val startAfterSeconds = input.long("startAfterSeconds") ?: 0L
@@ -462,11 +489,18 @@ private fun parseSchedule(input: JsonObject?, nowMillis: Long): ScheduleParseRes
             if (startAfterSeconds < 0 || intervalSeconds <= 0 || endAfterSeconds <= startAfterSeconds) {
                 return ScheduleParseResult.Error("INVALID_SCHEDULE", "Repeating tasks require startAfterSeconds >= 0, intervalSeconds > 0, and endAfterSeconds > startAfterSeconds.")
             }
+            val startAtMillis = offsetMillis(nowMillis, startAfterSeconds)
+                ?: return ScheduleParseResult.Error("INVALID_SCHEDULE", "startAfterSeconds is too large.")
+            val endAtMillis = offsetMillis(nowMillis, endAfterSeconds)
+                ?: return ScheduleParseResult.Error("INVALID_SCHEDULE", "endAfterSeconds is too large.")
+            val intervalMillis = runCatching { Math.multiplyExact(intervalSeconds, 1_000L) }
+                .getOrNull()
+                ?: return ScheduleParseResult.Error("INVALID_SCHEDULE", "intervalSeconds is too large.")
             ScheduleParseResult.Success(
                 AgentTaskSchedule.RepeatingUntil(
-                    startAtMillis = nowMillis + startAfterSeconds * 1_000L,
-                    intervalMillis = intervalSeconds * 1_000L,
-                    endAtMillis = nowMillis + endAfterSeconds * 1_000L
+                    startAtMillis = startAtMillis,
+                    intervalMillis = intervalMillis,
+                    endAtMillis = endAtMillis
                 )
             )
         }
@@ -474,7 +508,10 @@ private fun parseSchedule(input: JsonObject?, nowMillis: Long): ScheduleParseRes
     }
 }
 
-private fun parseAction(input: JsonObject?): ActionParseResult {
+private fun parseAction(
+    input: JsonObject?,
+    supportsBackgroundPromptExecution: Boolean
+): ActionParseResult {
     if (input == null) return ActionParseResult.Error("MISSING_ACTION", "action is required.")
     return when (input.string("type")) {
         "NOTIFY_USER" -> {
@@ -483,6 +520,12 @@ private fun parseAction(input: JsonObject?): ActionParseResult {
             ActionParseResult.Success(AgentTaskAction.NotifyUser(message))
         }
         "RUN_AGENT_PROMPT" -> {
+            if (!supportsBackgroundPromptExecution) {
+                return ActionParseResult.Error(
+                    "UNSUPPORTED_ACTION",
+                    "This host does not support background Agent Prompt execution. Use NOTIFY_USER instead."
+                )
+            }
             val prompt = input.string("prompt")?.takeIf { it.isNotBlank() }
                 ?: return ActionParseResult.Error("INVALID_ACTION", "RUN_AGENT_PROMPT requires prompt.")
             val notifyPolicy = input.string("notifyPolicy")
@@ -492,6 +535,12 @@ private fun parseAction(input: JsonObject?): ActionParseResult {
         }
         else -> ActionParseResult.Error("INVALID_ACTION", "action.type must be NOTIFY_USER or RUN_AGENT_PROMPT.")
     }
+}
+
+private fun offsetMillis(nowMillis: Long, offsetSeconds: Long): Long? {
+    return runCatching {
+        Math.addExact(nowMillis, Math.multiplyExact(offsetSeconds, 1_000L))
+    }.getOrNull()
 }
 
 fun AgentTaskSchedule.nextRunAtMillis(nowMillis: Long): Long? {

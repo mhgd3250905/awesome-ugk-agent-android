@@ -74,6 +74,84 @@ class AgentScheduledTaskToolsTest {
     }
 
     @Test
+    fun createRejectsScheduleArithmeticOverflow() = runBlocking {
+        val tools = tools().associateBy { it.name }
+
+        val invalid = tools["agent_task_create"]!!.execute(
+            call(
+                "agent_task_create",
+                "title" to JsonPrimitive("too far"),
+                "schedule" to buildJsonObject {
+                    put("type", JsonPrimitive("ONE_SHOT"))
+                    put("startAfterSeconds", JsonPrimitive(Long.MAX_VALUE))
+                },
+                "action" to buildJsonObject {
+                    put("type", JsonPrimitive("NOTIFY_USER"))
+                    put("message", JsonPrimitive("future"))
+                }
+            ),
+            context()
+        )
+
+        assertTrue(invalid.isError)
+        assertEquals("INVALID_SCHEDULE", invalid.metadata["code"]!!.jsonPrimitive.content)
+    }
+
+    @Test
+    fun createRejectsBackgroundPromptWhenHostHasNoExecutor() = runBlocking {
+        val tools = tools().associateBy { it.name }
+
+        val invalid = tools["agent_task_create"]!!.execute(
+            call(
+                "agent_task_create",
+                "title" to JsonPrimitive("background check"),
+                "schedule" to buildJsonObject {
+                    put("type", JsonPrimitive("ONE_SHOT"))
+                    put("startAfterSeconds", JsonPrimitive(60))
+                },
+                "action" to buildJsonObject {
+                    put("type", JsonPrimitive("RUN_AGENT_PROMPT"))
+                    put("prompt", JsonPrimitive("check the screen"))
+                }
+            ),
+            context()
+        )
+
+        assertTrue(invalid.isError)
+        assertEquals("UNSUPPORTED_ACTION", invalid.metadata["code"]!!.jsonPrimitive.content)
+    }
+
+    @Test
+    fun hostCanExplicitlyEnableBackgroundPromptTasks() = runBlocking {
+        val tools = agentScheduledTaskTools(
+            store = InMemoryAgentTaskStore(),
+            scheduler = RecordingAgentTaskScheduler(),
+            clock = FixedClock(1_000L),
+            idGenerator = SequentialTaskIdGenerator("task"),
+            supportsBackgroundPromptExecution = true
+        ).associateBy { it.name }
+
+        val result = tools["agent_task_create"]!!.execute(
+            call(
+                "agent_task_create",
+                "title" to JsonPrimitive("background check"),
+                "schedule" to buildJsonObject {
+                    put("type", JsonPrimitive("ONE_SHOT"))
+                    put("startAfterSeconds", JsonPrimitive(60))
+                },
+                "action" to buildJsonObject {
+                    put("type", JsonPrimitive("RUN_AGENT_PROMPT"))
+                    put("prompt", JsonPrimitive("check the screen"))
+                }
+            ),
+            context()
+        )
+
+        assertFalse(result.isError)
+        assertEquals("SCHEDULED", result.metadata["status"]!!.jsonPrimitive.content)
+    }
+
+    @Test
     fun listGetUpdateAndCancelUsePersistedTaskState() = runBlocking {
         val store = InMemoryAgentTaskStore()
         val scheduler = RecordingAgentTaskScheduler()

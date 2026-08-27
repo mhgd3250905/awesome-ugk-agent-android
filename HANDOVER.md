@@ -1,7 +1,7 @@
 ﻿# awesome-ugk-agent-android 项目交接文档 (Handover Document)
 
-> **最新版本**：`0.4.0` (`versionCode 5`)
-> **Git 标签**：`demo-app-v0.4.0`（本地）
+> **最新保存版本**：`0.5.0` (`versionCode 6`，通用 Android 定时任务)
+> **最近已保存标签**：`demo-app-v0.5.0`（已同步 `origin`）
 > **分支**：`main`  
 > **交接时间**：2026-08-27  
 > **目标真机**：小米 15（序列号 `QSG6Q8IFDMDELVGQ`，型号 `2602BRT18C`，Android 15）和第二台小米（序列号 `e0b93f2f`，型号 `2304FPN6DC`）
@@ -19,6 +19,7 @@
 :ugk-pi-android              — Agent Runtime 核心（AgentRuntime, AgentSession, AgentTool, LLMProvider, AndroidSkill）
 :pi-file-skill-android       — 应用私有文件工具 skill
 :pi-schedule-skill-android   — 定时任务 skill
+:ugk-agent-task-runtime-android — Android 定时任务持久化、AlarmManager/JobScheduler 与通知运行时
 :pi-system-skill-android     — 系统设置 / 权限 / Intent skill / 屏幕自动化工具下沉
 :ugk-terminal-runtime-android — 无 UI 原生终端 Runtime 基础设施 (C++/NDK + Bash/curl/CPython)
 :pi-terminal-skill-android  — Bash Agent Tool（默认逐次用户确认）
@@ -30,7 +31,7 @@
 
 ---
 
-## 2. 最近完成的核心优化与交付成果 (0.4.0)
+## 2. 最近完成的核心优化与交付成果 (0.5.0)
 
 ### ① 多模态视觉识图交互体系
 1. **双输入源接入**：
@@ -81,14 +82,23 @@
 - 模型返回 `0..1` 归一化目标区域后，新增 `screen_visual_gesture` 使用最新 `observationId` 执行 tap、long press 或方向 swipe；后端校验 15 秒有效期、前台包名、屏幕尺寸、旋转和边界。
 - 视觉截图和视觉手势均走精确输入确认；默认图片长边限制 1280、JPEG quality 80。Android API 30 以下返回不支持，受保护/DRM/动态画面仍可能不可用。
 - demo 的无障碍服务配置已加入 `android:canTakeScreenshot="true"`。宿主若使用默认后端，也必须在自己的 service XML 中声明该能力。
-- 视觉兜底已纳入本地 `0.4.0` 版本：`versionName=0.4.0`、`versionCode=5`，标签为 `demo-app-v0.4.0`；当前仅保存于本地，未推送远端。
+- 视觉兜底已纳入 `0.4.0` 版本：`versionName=0.4.0`、`versionCode=5`，标签为 `demo-app-v0.4.0`；本次版本同步已补齐远端标签。
 
 ### ⑧ 0.4.0：Android 文本剪贴板 Tool/Skill
 - `pi-system-skill-android` 新增 `clipboard_read_text`、`clipboard_write_text`、`clipboard_clear`，由现有 `AndroidSystemAgentPlugin` 和 `AndroidAutomationAgentPlugin` 自动注册，不新增独立插件。
 - 按 Android 10（API 29）设计，模块 `minSdk` 仍为 24；API 28 及以下返回 `CLIPBOARD_UNSUPPORTED`。第一版仅暴露第一个纯文本剪贴板项，不处理图片和 URI。
 - 读取原文只通过 `ToolResult.transientModelContent` 传给紧邻的下一次模型请求，持久化 `AgentSession`、`AgentEvent.ToolFinished` 和 demo 过程摘要只保留元数据；无焦点读取失败返回 `CLIPBOARD_READ_UNAVAILABLE`，不伪报为空。
 - 读取、写入、清空默认均使用现有精确确认票据；写入默认设置 `sensitive=true`，写入/清空成功只表示 Android 接受请求，不代表目标 App 已粘贴或消费。
-- 剪贴板能力已纳入本地 `0.4.0` 版本；与视觉兜底共同使用标签 `demo-app-v0.4.0`，未推送远端。
+- 剪贴板能力已纳入 `0.4.0` 版本；与视觉兜底共同使用标签 `demo-app-v0.4.0`，本次版本同步已补齐远端标签。
+
+### ⑨ 0.5.0 已保存：通用 Android 定时任务运行时
+
+- `pi-schedule-skill-android` 继续只负责任务模型和 `agent_task_*` 控制 Tool；`ugk-agent-task-runtime-android` 负责 Android 持久化、通知任务的 `AlarmManager`、Prompt 任务的 `JobScheduler`、广播恢复和通知投递。
+- Demo 已注册定时任务插件。`NOTIFY_USER` 仍用于纯提醒；`RUN_AGENT_PROMPT` 到点后由 `AgentTaskJobService` 创建无 UI 的宿主 Runtime，恢复 `sessionId` 对应会话，调用 `AgentRuntime` 完成一轮模型/Tool 执行，并把任务和结果追加回该会话。
+- 前后台共用 `DemoAgentRuntimeFactory` 的 Provider、无障碍屏幕、视觉、剪贴板和终端能力图；后台使用无 UI 的确认 Presenter。无交互确认时，受保护动作只有显式开启全授权才会执行，默认安全失败。
+- 使用普通非精确 `AlarmManager` 和系统 `JobScheduler`，不申请精确闹钟权限、不启动 Bash 常驻循环；Prompt 任务需要系统提供网络条件；Android 13+ 需要 `POST_NOTIFICATIONS`。
+- 当前保存版本为 `versionCode 6 / versionName 0.5.0`；后台 Prompt 代码已完成 JVM/编译验证，并在第二台小米 `e0b93f2f`（`2304FPN6DC`）完成安装启动和一次性 `RUN_AGENT_PROMPT` 后台唤醒/读屏体验验收，用户反馈可用。
+- 版本标签为 `demo-app-v0.5.0`，与 `main` 提交一并同步到 `origin`；主目标小米 `QSG6Q8IFDMDELVGQ` 本轮离线，三星设备 `R5CRB11B2AW` 未操作。
 
 ---
 
@@ -112,6 +122,7 @@
 | `:pi-system-skill-android` | `AccessibilityScreenAutomationBackend.kt` | 无障碍服务后端、快照校验、截图编码、视觉观察 freshness 与节点生命周期安全回收 |
 | `:pi-system-skill-android` | `AndroidClipboardTools.kt` | Android 10+ 文本剪贴板后端与三个系统 Tool |
 | `:pi-system-skill-android` | `AndroidSystemSkills.kt` | 剪贴板 Skill、确认和系统限制说明 |
+| `:ugk-agent-task-runtime-android` | `AndroidAgentTaskRuntime.kt` | Android 定时任务 Store、AlarmManager/JobScheduler、JobService、广播恢复、通知 Sink 与宿主 Prompt 执行扩展点 |
 
 ---
 
@@ -138,6 +149,12 @@
 
 ---
 
+4. **定时任务已保存版本（0.5.0）**：
+   - 后台 Prompt 执行链路已接入：`JobScheduler -> AgentTaskJobService -> DemoScheduledTaskPromptExecutor -> AgentRuntime`；前后台共用 Demo Runtime 工厂，会话结果持久化回同一会话。
+   - 全工程 JVM 单元测试共 198 个、0 个失败；`:demo-app:assembleDebug` 已通过；APK 元数据为 `versionCode 6 / versionName 0.5.0`，合并 Manifest 已确认 `AgentTaskJobService`。
+   - APK 已安装并启动到 `e0b93f2f`（`2304FPN6DC`），用户已完成 `RUN_AGENT_PROMPT` 后台唤醒/读屏体验测试并反馈可用；任务运行仍受网络、Doze、小米省电策略、无障碍连接和前台目标页面影响。
+   - 后续 ADB 只允许显式指定两台小米设备 `QSG6Q8IFDMDELVGQ` 或 `e0b93f2f`，严禁操作三星 `R5CRB11B2AW`。
+
 ## 5. 常用开发与调试命令速查
 
 ```powershell
@@ -147,9 +164,9 @@
 # 2. 构建 demo-app Debug APK
 .\gradlew.bat :demo-app:assembleDebug --console=plain
 
-# 3. 覆盖安装并启动应用至小米真机（QSG6Q8IFDMDELVGQ 为唯一目标设备）
-adb -s QSG6Q8IFDMDELVGQ install -r -d D:\AII\ugk-android\demo-app\build\outputs\apk\debug\demo-app-debug.apk
-adb -s QSG6Q8IFDMDELVGQ shell am start -n com.ugk.pi.android.testapp/.MainActivity
+# 3. 覆盖安装并启动应用至在线授权小米（示例使用第二台小米 e0b93f2f）
+adb -s e0b93f2f install -r -d D:\AII\ugk-android\demo-app\build\outputs\apk\debug\demo-app-debug.apk
+adb -s e0b93f2f shell am start -n com.ugk.pi.android.testapp/.MainActivity
 
 # 4. 截取真机屏幕并拉取查看
 adb -s QSG6Q8IFDMDELVGQ shell screencap -p /sdcard/screen_debug.png
@@ -161,7 +178,7 @@ adb -s QSG6Q8IFDMDELVGQ pull /sdcard/screen_debug.png C:\Users\shengk\.gemini\an
 ## 6. 新会话接手注意事项
 
 1. **语言规则**：严格使用**简体中文**进行技术解释、代码注释与对话交互。
-2. **设备边界**：ADB 命令必须显式带上 `-s QSG6Q8IFDMDELVGQ`，严禁操作三星手机（`R5CRB11B2AW`）。
+2. **设备边界**：ADB 命令必须显式带上 `-s QSG6Q8IFDMDELVGQ` 或 `-s e0b93f2f`，严禁操作三星手机（`R5CRB11B2AW`）。
 3. **两类 AGENTS.md 区分**：
    - 根目录 `AGENTS.md`：仅供开发者/助手协作，不打包进 APK。
    - 运行时 `pi-terminal-skill-android/src/main/assets/ugk/AGENTS.md`：随 APK 打包，作为模型全局环境提示词。
