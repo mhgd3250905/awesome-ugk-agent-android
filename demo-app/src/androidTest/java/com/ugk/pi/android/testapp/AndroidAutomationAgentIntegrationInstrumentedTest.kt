@@ -11,10 +11,18 @@ import com.ugk.pi.android.AgentRuntime
 import com.ugk.pi.android.AgentSession
 import com.ugk.pi.android.AndroidAccessibilityServiceState
 import com.ugk.pi.android.AndroidAutomationAgentPlugin
+import com.ugk.pi.android.ScreenActionRequest
+import com.ugk.pi.android.ScreenAutomationBackend
+import com.ugk.pi.android.ScreenGlobalActionRequest
+import com.ugk.pi.android.ScreenGestureRequest
+import com.ugk.pi.android.ScreenKeyRequest
+import com.ugk.pi.android.ScreenOperationResult
+import com.ugk.pi.android.ScreenReadResult
 import com.ugk.pi.android.LLMProvider
 import com.ugk.pi.android.ModelRequest
 import com.ugk.pi.android.ModelResponse
 import com.ugk.pi.android.ToolCall
+import com.ugk.pi.android.UserConfirmationRequiredTool
 import com.ugk.pi.android.UserConfirmationDialogPresenter
 import com.ugk.pi.android.UserConfirmationDialogRequest
 import com.ugk.pi.android.UserConfirmationDialogResult
@@ -33,6 +41,90 @@ import org.junit.runner.RunWith
 
 @RunWith(AndroidJUnit4::class)
 class AndroidAutomationAgentIntegrationInstrumentedTest {
+    @Test
+    fun injectedScreenBackendRegistersSdkToolsAndSkill() {
+        val context = InstrumentationRegistry.getInstrumentation().targetContext
+        val plugin = AndroidAutomationAgentPlugin(
+            context = context,
+            confirmationPresenter = ConfirmingPresenter(),
+            accessibilityServiceComponent = ComponentName(
+                context,
+                AgentAccessibilityService::class.java
+            ),
+            accessibilityStateProvider = {
+                AndroidAccessibilityServiceState(connected = false)
+            },
+            screenAutomationBackend = EmptyScreenBackend
+        )
+
+        val tools = plugin.tools()
+        assertTrue(tools.any { it.name == "screen_read_ui_tree" })
+        assertTrue(tools.any { it.name == "screen_find_ui_element" })
+        assertTrue(tools.any { it.name == "screen_perform_action" && it is UserConfirmationRequiredTool })
+        assertTrue(tools.any { it.name == "screen_gesture" && it is UserConfirmationRequiredTool })
+        assertTrue(tools.any { it.name == "screen_press_key" && it is UserConfirmationRequiredTool })
+        assertTrue(tools.any { it.name == "screen_global_action" && it is UserConfirmationRequiredTool })
+        assertTrue(tools.any { it.name == "screen_read_ui_tree" && it !is UserConfirmationRequiredTool })
+        assertTrue(plugin.skills().any { it.id == "android-accessibility-screen-automation" })
+        assertTrue(plugin.agentInstructions().any { it.contains("snapshot-first") })
+    }
+
+    @Test
+    fun fullAuthorizationRunsProtectedLaunchWithoutConfirmationRound() = runBlocking {
+        val baseContext = InstrumentationRegistry.getInstrumentation().targetContext
+        val recordingContext = RecordingContext(baseContext)
+        val provider = ScriptedProvider(
+            listOf(
+                ModelResponse(
+                    content = "finding app",
+                    toolCalls = listOf(findAppCall(baseContext.packageName))
+                ),
+                ModelResponse(
+                    content = "launching app",
+                    toolCalls = listOf(launchAppCall(baseContext.packageName))
+                ),
+                ModelResponse(content = "app launch requested")
+            )
+        )
+        val plugin = AndroidAutomationAgentPlugin(
+            context = recordingContext,
+            confirmationPresenter = ConfirmingPresenter(),
+            accessibilityServiceComponent = ComponentName(
+                baseContext,
+                AgentAccessibilityService::class.java
+            ),
+            accessibilityStateProvider = {
+                AndroidAccessibilityServiceState(connected = false)
+            },
+            shouldBypassConfirmation = { true },
+            screenAutomationBackend = EmptyScreenBackend
+        )
+        val runtime = AgentRuntime.Builder()
+            .llmProvider(provider)
+            .register(plugin)
+            .build()
+
+        val events = runtime.run(
+            AgentSession("android-automation-full-authorization"),
+            "鎵撳紑杩欎釜搴旂敤"
+        ).toList()
+        val finishedTools = events
+            .filterIsInstance<AgentEvent.ToolFinished>()
+            .map { it.result.name }
+
+        assertEquals(listOf("find_android_app", "launch_android_app"), finishedTools)
+        assertTrue(provider.requests.all { request ->
+            request.tools.none { it.name == "show_user_confirmation_dialog" }
+        })
+        assertTrue(plugin.skills().all { skill ->
+            skill.methods.none { it.toolName == "show_user_confirmation_dialog" }
+        })
+        assertTrue(plugin.agentInstructions().any {
+            it.contains("Do not call show_user_confirmation_dialog")
+        })
+        assertFalse(events.any { it is AgentEvent.Failed })
+    }
+
     @Test
     fun agentResolvesAppRequestsConfirmationAndLaunchesByPackage() = runBlocking {
         val baseContext = InstrumentationRegistry.getInstrumentation().targetContext
@@ -174,5 +266,21 @@ class AndroidAutomationAgentIntegrationInstrumentedTest {
             requests += request
             return responses[nextResponse++]
         }
+    }
+
+    private object EmptyScreenBackend : ScreenAutomationBackend {
+        override fun readUiTree(sessionId: String, maxDepth: Int, maxNodes: Int) = ScreenReadResult()
+
+        override suspend fun performAction(sessionId: String, request: ScreenActionRequest) =
+            ScreenOperationResult(false, "EMPTY")
+
+        override suspend fun performGesture(request: ScreenGestureRequest) =
+            ScreenOperationResult(false, "EMPTY")
+
+        override suspend fun pressKey(request: ScreenKeyRequest) =
+            ScreenOperationResult(false, "EMPTY")
+
+        override fun performGlobalAction(request: ScreenGlobalActionRequest) =
+            ScreenOperationResult(false, "EMPTY")
     }
 }

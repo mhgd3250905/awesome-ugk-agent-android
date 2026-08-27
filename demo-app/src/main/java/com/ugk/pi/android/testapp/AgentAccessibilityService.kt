@@ -7,7 +7,7 @@ import com.ugk.pi.android.AndroidAccessibilityServiceStateProvider
 
 class AgentAccessibilityService : AccessibilityService() {
     override fun onAccessibilityEvent(event: AccessibilityEvent?) {
-        event?.packageName?.toString()?.takeIf { it.isNotBlank() }?.let {
+        trackedExternalAccessibilityPackage(event?.packageName, packageName)?.let {
             activePackageName = it
         }
     }
@@ -34,6 +34,7 @@ class AgentAccessibilityService : AccessibilityService() {
 
     override fun onServiceConnected() {
         super.onServiceConnected()
+        activePackageName = null
         running = true
         instance = this
     }
@@ -45,3 +46,10 @@ class AgentAccessibilityService : AccessibilityService() {
         activePackageName = null
     }
 }
+
+internal fun trackedExternalAccessibilityPackage(
+    eventPackageName: CharSequence?,
+    ownPackageName: String
+): String? = eventPackageName
+    ?.toString()
+    ?.takeIf { it.isNotBlank() && it != ownPackageName }

@@ -160,6 +160,7 @@ data class DemoRunState(
  */
 object DemoToolSemanticMapper {
     fun friendlyName(name: String): String = when (name.lowercase()) {
+        "screen_find_ui_element" -> "查找屏幕 UI 元素"
         "screen_read_ui_tree" -> "读取屏幕 UI 树"
         "screen_perform_action" -> "执行屏幕控件操作"
         "screen_launch_app" -> "启动应用"
@@ -181,6 +182,12 @@ object DemoToolSemanticMapper {
     }
 
     fun formatInputSummary(name: String, input: JsonObject): String = when (name.lowercase()) {
+        "screen_find_ui_element" -> {
+            val selector = input.entries
+                .filter { (key, value) -> key in setOf("text", "content_desc", "view_id", "type") && value.toString().isNotBlank() }
+                .joinToString(", ") { (key, value) -> "$key=${value.toString()}" }
+            if (selector.isNotBlank()) "查找: $selector" else "查找屏幕 UI 元素"
+        }
         "screen_launch_app" -> {
             val pkg = input["packageName"]?.jsonPrimitive?.contentOrNull
             val app = input["appName"]?.jsonPrimitive?.contentOrNull
@@ -233,6 +240,7 @@ object DemoToolSemanticMapper {
             return "执行失败: ${err.take(60)}"
         }
         return when (result.name.lowercase()) {
+            "screen_find_ui_element" -> "屏幕 UI 查找已完成"
             "screen_read_ui_tree" -> {
                 val nodeCount = Regex("""nodeCount=(\d+)""").find(result.content)?.groupValues?.get(1)
                 if (nodeCount != null) "已读取屏幕 UI（共 $nodeCount 个节点）" else "已获取屏幕 UI 结构"
@@ -271,6 +279,8 @@ object DemoRunStateReducer {
         )
 
         is AgentEvent.ModelRequestStarted -> onModelRequestStarted(state, event)
+        is AgentEvent.ModelThinkingDelta -> onModelThinkingDelta(state, event.delta)
+        is AgentEvent.ModelContentDelta -> state
         is AgentEvent.ModelResponded -> onModelResponded(state, event)
         is AgentEvent.ToolStarted -> onToolStarted(state, event.call)
         is AgentEvent.ToolProgress -> onToolProgress(state, event.call, event.progress)
@@ -317,6 +327,25 @@ object DemoRunStateReducer {
             detailLabel = detail,
             resultSummary = null
         ).withStep(step)
+    }
+
+    private fun onModelThinkingDelta(state: DemoRunState, delta: String): DemoRunState {
+        val currentStep = state.steps.asReversed().firstOrNull {
+            it.kind == DemoRunStepKind.MODEL && it.status == DemoRunStatus.THINKING
+        } ?: return state
+
+        val nextSummary = (currentStep.resultSummary.orEmpty() + delta)
+        val firstLine = nextSummary.lines().firstOrNull { it.isNotBlank() } ?: "正在深度分析需求..."
+        val detail = DemoRunText.summarize(firstLine, DemoRunText.MAX_DETAIL_LENGTH) ?: "正在深度分析需求..."
+
+        val updatedStep = currentStep.copy(
+            detailLabel = detail,
+            resultSummary = nextSummary
+        )
+
+        return state.copy(
+            detailLabel = detail
+        ).withStep(updatedStep)
     }
 
     private fun onModelResponded(

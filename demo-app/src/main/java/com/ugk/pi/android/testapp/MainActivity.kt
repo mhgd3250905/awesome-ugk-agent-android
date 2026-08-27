@@ -118,6 +118,10 @@ class MainActivity : Activity() {
     private var processCard: DemoChatProcessCardView? = null
     private var assistantMessageView: DemoChatMessageView? = null
     private var streamingAssistantText: StringBuilder? = null
+    private var lastStreamingRenderTime = 0L
+    private var hasPendingStreamingRender = false
+    private val streamingRenderHandler = android.os.Handler(android.os.Looper.getMainLooper())
+    private val streamingRenderRunnable = Runnable { flushStreamingAssistantText() }
     private var lastImeInsetBottom = 0
     private val themeListener: (Boolean) -> Unit = { runOnUiThread { applyTheme() } }
     private val floatingWindow by lazy {
@@ -340,6 +344,7 @@ class MainActivity : Activity() {
     }
 
     override fun onDestroy() {
+        cancelPendingStreamingRender()
         val finishing = isFinishing && !isChangingConfigurations
         if (finishing) {
             DemoActivityState.runCoordinator.stop()
@@ -1161,12 +1166,43 @@ class MainActivity : Activity() {
     }
 
     private fun finishAgentRun() {
+        cancelPendingStreamingRender()
         runState = DemoActivityState.runCoordinator.snapshot().state
         updateComposerState()
         floatingWindow.setSending(false)
         floatingWindow.setStatus(runState.statusLabel)
         setScreenAutomationActive(false)
         startNextQueuedOverlayMessage()
+    }
+
+    private fun cancelPendingStreamingRender() {
+        streamingRenderHandler.removeCallbacks(streamingRenderRunnable)
+        hasPendingStreamingRender = false
+    }
+
+    private fun scheduleStreamingRender() {
+        val now = android.os.SystemClock.uptimeMillis()
+        val elapsed = now - lastStreamingRenderTime
+        val minInterval = 64L // 约 15fps，流式打字极其平滑且消除高频重排版与网格闪烁抖动
+        if (elapsed >= minInterval) {
+            cancelPendingStreamingRender()
+            flushStreamingAssistantText()
+        } else if (!hasPendingStreamingRender) {
+            hasPendingStreamingRender = true
+            streamingRenderHandler.postDelayed(streamingRenderRunnable, minInterval - elapsed)
+        }
+    }
+
+    private fun flushStreamingAssistantText() {
+        hasPendingStreamingRender = false
+        lastStreamingRenderTime = android.os.SystemClock.uptimeMillis()
+        val text = streamingAssistantText?.toString() ?: return
+        if (assistantMessageView == null) {
+            assistantMessageView = addChatMessage(DemoChatMessageRole.ASSISTANT, text)
+        } else {
+            assistantMessageView?.updateStreamingText(text)
+        }
+        scrollToEnd()
     }
 
     private fun handleAgentEvent(event: AgentEvent) {
@@ -1187,6 +1223,7 @@ class MainActivity : Activity() {
             }
             is AgentEvent.ToolFinished -> {
                 val resultCode = event.result.metadata["code"]
+                // 屏幕工具错误恢复与日志
                     ?.toString()
                     ?.trim('"')
                     ?.takeIf { it.isNotBlank() }
@@ -1213,15 +1250,10 @@ class MainActivity : Activity() {
                     streamingAssistantText = StringBuilder()
                 }
                 streamingAssistantText?.append(event.delta)
-                val text = streamingAssistantText.toString()
-                if (assistantMessageView == null) {
-                    assistantMessageView = addChatMessage(DemoChatMessageRole.ASSISTANT, text)
-                } else {
-                    assistantMessageView?.updateStreamingText(text)
-                }
-                scrollToEnd()
+                scheduleStreamingRender()
             }
             is AgentEvent.ModelResponded -> {
+                cancelPendingStreamingRender()
                 val content = event.content
                 if (content.isNotBlank()) {
                     streamingAssistantText = null
@@ -1234,6 +1266,7 @@ class MainActivity : Activity() {
                 }
             }
             is AgentEvent.Completed -> {
+                cancelPendingStreamingRender()
                 setScreenAutomationActive(false)
                 streamingAssistantText = null
                 persistAssistantMessage(event.content)
@@ -1242,6 +1275,7 @@ class MainActivity : Activity() {
                 floatingWindow.addLog("回答已完成")
             }
             is AgentEvent.Failed -> {
+                cancelPendingStreamingRender()
                 setScreenAutomationActive(false)
                 streamingAssistantText = null
                 if (event.message.isNotBlank()) {

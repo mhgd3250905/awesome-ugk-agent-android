@@ -148,14 +148,91 @@ object DemoMarkdownFormatter {
     }
 
     /**
-     * 将 Markdown 直接高效渲染到 TextView 上。
+     * 对流式生成中的 Markdown 进行表格结构平稳化。
+     *
+     * 大模型流式输出表格时，最后一行通常尚未闭合（缺少结尾 '|' 或列数暂时少于表头），
+     * 这会导致 CommonMark 无法稳定识别表格、在每一字符输出时引起列宽剧烈跳变和网格重叠抖动。
+     * 本方法在流式渲染前临时补齐未完成表格行的单元格与闭合符，使表格在流式全过程中保持列数恒定、稳定平滑。
      */
-    fun setMarkdown(textView: TextView, markdown: String) {
+    fun stabilizeStreamingMarkdown(markdown: String): String {
+        if (!markdown.contains('|')) return markdown
+
+        val lines = markdown.lines()
+        if (lines.size < 2) return markdown
+
+        // 寻找最后一个表格的分隔行（如 |---|---| 或 |:---:|---:|）
+        var sepIndex = -1
+        val separatorRegex = Regex("""^\s*\|?\s*[-:]+\s*\|[\s-:|]*$""")
+        for (i in lines.indices.reversed()) {
+            if (separatorRegex.matches(lines[i])) {
+                sepIndex = i
+                break
+            }
+        }
+        if (sepIndex <= 0) return markdown
+
+        val headerLine = lines[sepIndex - 1].trim()
+        val headerCells = headerLine.split('|')
+            .map { it.trim() }
+            .filter { it.isNotEmpty() }
+        val colCount = headerCells.size
+        if (colCount <= 0) return markdown
+
+        val lastIndex = lines.lastIndex
+        if (lastIndex <= sepIndex) {
+            return markdown
+        }
+
+        val lastLine = lines[lastIndex]
+        val trimmedLast = lastLine.trim()
+        if (trimmedLast.isEmpty()) return markdown
+
+        if (trimmedLast.startsWith("|")) {
+            val currentCells = trimmedLast.split('|')
+                .map { it.trim() }
+                .filter { it.isNotEmpty() }
+            val currentCount = currentCells.size
+            val isClosed = trimmedLast.endsWith("|")
+
+            val neededPadding = colCount - currentCount
+            if (neededPadding > 0 || !isClosed) {
+                val sb = StringBuilder()
+                for (i in 0 until lastIndex) {
+                    sb.append(lines[i]).append("\n")
+                }
+                sb.append(lastLine)
+                if (!isClosed) {
+                    sb.append(" |")
+                }
+                if (neededPadding > 0) {
+                    repeat(neededPadding) {
+                        sb.append("  |")
+                    }
+                }
+                sb.append("\n")
+                return sb.toString()
+            }
+        }
+
+        return markdown
+    }
+
+    /**
+     * 将 Markdown 直接高效渲染到 TextView 上。
+     *
+     * @param isStreaming 是否处于流式打字生成中；若为 true 则开启表格平稳化补齐，防止网格重叠抖动
+     */
+    fun setMarkdown(textView: TextView, markdown: String, isStreaming: Boolean = false) {
         if (markdown.isBlank()) {
             textView.text = ""
             return
         }
-        getMarkwon(textView.context).setMarkdown(textView, compactSpacing(markdown))
+        val textToRender = if (isStreaming) {
+            stabilizeStreamingMarkdown(compactSpacing(markdown))
+        } else {
+            compactSpacing(markdown)
+        }
+        getMarkwon(textView.context).setMarkdown(textView, textToRender)
     }
 
     /**

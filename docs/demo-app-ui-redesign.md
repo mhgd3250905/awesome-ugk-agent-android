@@ -1,8 +1,8 @@
 # Demo App 对话体验与悬浮窗基线
 
-更新时间：2026-08-14
-当前版本：`0.2.1`（`versionCode 3`）
-适用范围：`:demo-app` 的聊天主界面、过程展示、输入交互、本地会话管理和悬浮窗摘要。
+更新时间：2026-08-27
+当前版本：`0.3.0`（`versionCode 4`）
+适用范围：`:demo-app` 的聊天主界面、过程展示、多模态识图交互、代码与表格原生卡片组件、美学设计、输入交互、本地会话管理和悬浮窗摘要。
 
 ## 需求结论
 
@@ -74,6 +74,15 @@ OpenAI 官方 Android 帮助中心把聊天历史、删除会话和设置作为�
 - 过程和历史都使用有界列表，防止长期测试导致布局无限增长。
 - 该界面不把 Terminal Runtime 描述为安全沙箱；工具确认和共享 UID 边界继续由 SDK 负责。
 
+## 2026-08-25 屏幕自动化调优
+
+- `screen_read_ui_tree` 现在返回 `screenWidth`、`screenHeight`、非自身 `windowCount` 和 `truncated`，并支持有界的 `max_nodes`（默认 200，最多 500）。Agent 必须在 `truncated=true` 时继续滚动或请求更大的有界结果，不能据此直接判断目标不存在。
+- UI 树读取和屏幕动作路径补齐 `AccessibilityNodeInfo` 回收，减少连续读屏/操作时的节点资源积累；`screen_perform_action` 对未知 action 和缺少 `set_text.text` fail-closed，避免误清空输入框。
+- `screen_gesture` 根据当前屏幕尺寸计算滑动终点，拒绝缺少或越界的起点，不再依赖固定 `1080×2400` 坐标；手势回调等待改为可取消的协程等待，超时不会阻塞 Tool 执行线程。
+- Agent instructions 改为使用最近一次读屏返回的屏幕尺寸和相对位置计算手势坐标。
+
+本轮已在 Pixel 8 / Android 17 Preview 与 SM-A526U1 / Android 14 上完成 Debug 仪器回归，各 `14/14`；坐标计算、边界拒绝和输入保护由 JVM 测试覆盖。两台设备当时均未启用本 Demo 的 AccessibilityService，因此微信/设置/浏览器等跨 App 的真实无障碍操作仍需用户手动开启服务后另行验收。
+
 ## 验收命令
 
 ```powershell
@@ -120,3 +129,14 @@ OpenAI 官方 Android 帮助中心把聊天历史、删除会话和设置作为�
 - `:demo-app:compileDebugKotlin`：通过；未调用付费 API。
 - 代码级审查已修复第一轮 P1/P2 清单；独立审查线程最终复验通过，未发现 P1/P2 代码阻塞，仅保留后续自动化覆盖补强建议。
 - 本轮稳定化验证已在 source checkpoint `28bc352622458d29e090656ae42fd32f057e9196` 的 `SM-A526U1`（Android 14/API 34、`arm64-v8a`、4 KB）执行 `:demo-app:connectedDebugAndroidTest`，结果为 `14/14`；该结果是自动化 Demo/Runtime 证据，不替代人工悬浮窗、Activity 重建、键盘触控和无障碍操作验收。
+
+## 2026-08-25 Accessibility screen automation SDK migration
+
+屏幕自动化已经从 demo 私有实现下沉到 `pi-system-skill-android`：
+
+- `AndroidAutomationAgentPlugin` 可选注入 `ScreenAutomationBackend`，demo 注入
+  `AccessibilityScreenAutomationBackend` 和当前 `AgentAccessibilityService`。
+- demo 不再注册私有 `Screen*Tool` 或重复的屏幕 Skill；SDK 统一提供 read/find/action/gesture/IME/global tools。
+- 所有节点动作使用最新 `snapshotId + nodeId`，backend 会重新解析并校验目标；过期节点、窗口变化、目标不可交互和不支持的 action 都 fail-closed。
+- 读屏/查找为只读；点击、输入、滚动、手势、按键和全局动作继续经过精确 input confirmation。
+- 详细接入契约见 `android-accessibility-screen-automation.md`；真机跨 App 联调仍需用户手动开启 AccessibilityService。
