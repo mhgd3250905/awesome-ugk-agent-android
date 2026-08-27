@@ -10,6 +10,7 @@ Android Agent Runtime SDK — 通用 AI Agent 工具循环框架，附带无障�
 :pi-schedule-skill-android   — 定时任务 skill
 :ugk-agent-task-runtime-android — Android 定时任务持久化、AlarmManager/JobScheduler 与通知运行时
 :pi-system-skill-android     — 系统设置 / 权限 / Intent skill
+:pi-agent-skill-runtime-android — 文件型 skill 运行时（SKILL.md 发现/解析/按加载策略注入）+ agent-memory 预制记忆 skill
 :demo-app                    — 无障碍屏幕操控 demo（包名 com.ugk.pi.android.testapp）
 :ugk-terminal-runtime-android — 无 UI 原生终端 Runtime 基础设施
 :pi-terminal-skill-android  — Bash Agent Tool（默认逐次用户确认）

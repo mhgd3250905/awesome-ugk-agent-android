@@ -169,3 +169,14 @@
 - 决策：SDK 的读屏回退、焦点输入解析和节点窗口解析统一拒绝宿主包名；仅有宿主窗口时返回 `WINDOW_UNAVAILABLE`，不得把空树或宿主树交给 Agent。Demo AccessibilityService 同时忽略自身包名事件，避免悬浮窗刷新污染外部活动包名。
 - 兼容性：保留悬浮窗可输入、可显示的交互方式；语义节点 action 继续按非宿主窗口执行。坐标手势仍应避开悬浮窗覆盖区域。
 - 验证要求：补充宿主事件过滤单测，运行 SDK/Demo 单测和 Debug APK 构建，并在小米设备复核悬浮窗权限、无障碍服务和外部目标窗口状态。
+
+## D-022：文件型 skill 运行时（pi-agent-skill-runtime-android）
+
+- 日期：2026-08-27
+- 背景：SDK 此前的 skill 只能由 `AgentCapabilityPlugin` 在代码里静态注册；宿主与 Agent 无法在运行期以文件形式增补行为契约，也没有跨会话的用户记忆能力。改造 `ugk-pi-android` 注入管线会触碰受控的 API surface 基线。
+- 决策：新建独立模块 `pi-agent-skill-runtime-android`，`ugk-pi-android` 核心零改动。skill 以 SKILL.md 文件放在 `<filesDir>/agent-skills/<skill-name>/`，frontmatter 用手写扁平解析（不引入 YAML 依赖），标准字段为 `name`/`description`，扩展语义走 `x-ugk-load`、`x-ugk-embed-files`、`triggers`，未知 key 忽略以保前向兼容。加载策略三级：`always`（body+embed 全文每轮注入）、`indexed`（仅元数据桩，模型用 `skill_read` 按需拉全文）、`triggered`（关键词匹配，语义对齐 `KeywordAndroidSkillResolver`）。因 `AgentRuntime.Builder.skillProvider(x)` 会清空已注册 plugin 的静态 skills，宿主必须用合并式 `FileBackedSkillProvider(plugins, repository)` 并配合 `LoadPolicySkillResolver` 接线；demo-app 4 个既有 plugin 的 skills 行为保持零变化。
+- 记忆 = 第一个预制 skill：`agent-memory` 以 `always` 策略注入捕获/回放协议（先征询同意 → memory_read → 合并不得丢条目 → overwrite 覆写 → 简短确认），记忆沙箱限定 `filesDir/agent-memory` 下四个白名单分类（user-profile/preferences/facts/rules），单文件 16KB 上限；种子机制幂等、绝不覆盖已有目标。
+- 高影响边界：`memory_delete` 销毁用户数据，默认由 `UserConfirmationRequiredTool` 包装，须先经 `show_user_confirmation_dialog` 确认；full authorization 模式沿用宿主既有 bypass 开关。解析/校验失败的 skill 不注入但以 invalid 状态带原因出现在 `skill_list`，不静默丢弃。
+- 勘误（2026-08-27）：D-022 初版把 `x-ugk-embed-files` 描述为"skill 目录静态文件"，导致记忆回放链路断裂——静态种子 `preferences.md`/`rules.md` 作为嵌入对象，而 `memory_*` 工具把真实用户记忆写到另一个根目录，用户偏好不会常驻生效。embed 语义修正为"支持命名根实时嵌入"：条目支持 `别名:相对路径.md` 形式（别名 `[a-z][a-z0-9-]*`），解析到宿主在 `FileBackedSkillProvider(embedRoots)` 注册的命名根，路径校验与 skill 目录条目一致（仅 .md、拒绝绝对路径与 `..`、canonical 必须落在该根内），嵌入内容每次 `skills()` 调用实时读取。`agent-memory` 改用 `memory:preferences.md` / `memory:rules.md` 并删除静态种子模板；命名根机制为通用能力，不限于记忆。事实源见 `docs/android-agent-skills.md` 的"命名根嵌入"。
+- 勘误二（2026-08-27）：验收发现 `AgentRuntime.Builder.skillProvider(x)` 原实现把 `x.skills()` 立即拍平进静态快照，Runtime 每 run 查询的只是快照——同进程内新写入的记忆/新放入的文件 skill 要等宿主重建 Runtime 才生效，跨会话回放主链路实际断裂。核心做最小行为修正（公共 API 签名零变化，API surface 基线不受影响）：Builder 持有 Provider 引用，`build()` 有自定义 Provider 时直接传入，Runtime 维持既有"每 run 调 `skills()`"的拉取语义；`skillProvider()` 清空 plugin 静态 skills 的既有语义保留。生效粒度由此变为"下一次 run"，且 Provider 实现须并发调用安全（`AgentRuntimeBuilderLiveSkillProviderTest` 锁定该行为）。行为差异记录：旧实现下 `skillProvider(x)` 之后再 `register(plugin)` 会把 plugin 静态 skills 追加进快照；新实现下自定义 Provider 全权接管，其后 `register` 的静态 skills 不再进入注入列表（宿主应先 register 再 skillProvider，并把 plugin 列表传给合并式 Provider——demo 即如此接线）。
+- 影响：`docs/android-agent-skills.md` 为该运行时的事实源；`skill_save`（Agent 自沉淀 skill）列为 v2 展望，不在本期 scope。

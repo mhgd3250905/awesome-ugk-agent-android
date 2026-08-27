@@ -1,0 +1,142 @@
+package com.ugk.pi.android
+
+import java.io.File
+import java.io.IOException
+
+/**
+ * Merged [AndroidSkillProvider] that keeps plugin-provided static skills while
+ * adding valid file-backed skills discovered by [SkillRepository].
+ *
+ * `AgentRuntime.Builder.skillProvider` replaces the static skills collected
+ * from `register(plugin)`, so the host must pass the registered plugins here
+ * to preserve the original plugin skill behavior unchanged.
+ *
+ * [embedRoots] registers named root directories that `x-ugk-embed-files`
+ * entries may reference as `alias:file.md` (alias matching `[a-z][a-z0-9-]*`).
+ * The mechanism is generic: any skill can embed live `.md` files from any
+ * host-registered root, which is what lets the agent-memory skill replay the
+ * real memory store instead of static seed templates. Aliased entries whose
+ * alias is not registered are skipped with an "unknown embed root" note.
+ */
+class FileBackedSkillProvider(
+    private val plugins: List<AgentCapabilityPlugin>,
+    private val repository: SkillRepository,
+    private val embedRoots: Map<String, File> = emptyMap()
+) : AndroidSkillProvider {
+
+    override fun skills(): List<AndroidSkill> {
+        val fileSkills = repository.load()
+            .filter { it.status == ScannedSkillStatus.VALID }
+            .map { scanned ->
+                val manifest = requireNotNull(scanned.manifest)
+                AndroidSkill(
+                    id = manifest.name,
+                    description = manifest.description,
+                    instructions = buildInstructions(manifest, scanned),
+                    triggers = manifest.triggers
+                )
+            }
+        return fileSkills + plugins.flatMap { it.skills() }
+    }
+
+    private fun buildInstructions(
+        manifest: SkillManifest,
+        scanned: ScannedSkill
+    ): String {
+        return when (manifest.loadPolicy) {
+            SkillLoadPolicy.ALWAYS -> buildAlwaysInstructions(manifest, scanned)
+            SkillLoadPolicy.INDEXED -> INDEXED_STUB_INSTRUCTIONS
+            SkillLoadPolicy.TRIGGERED -> scanned.body
+        }
+    }
+
+    /**
+     * Always skills embed the referenced files behind the body so their full
+     * guidance is present on every run. Bare entries resolve against the
+     * skill directory; `alias:path` entries resolve against the embed root
+     * registered under [embedRoots]. Each embed is capped at
+     * [MAX_EMBED_FILE_BYTES]; oversized embeds are truncated with a note,
+     * missing embed files and unknown embed roots are skipped with a note.
+     * Files are re-read on every [skills] call, so embeds always reflect the
+     * current on-disk content (live data, not a build-time snapshot).
+     */
+    private fun buildAlwaysInstructions(
+        manifest: SkillManifest,
+        scanned: ScannedSkill
+    ): String {
+        val builder = StringBuilder(scanned.body.trimEnd())
+        manifest.embedFiles.forEach { entry ->
+            val reference = SkillEmbedReference.parse(entry)
+            if (reference == null) {
+                // The parser already rejects invalid entries; this only
+                // guards against regressions leaking through the manifest.
+                builder.append("\n\n### Embedded: ").append(entry).append('\n')
+                builder.append("(invalid embed entry; skipped)")
+                return@forEach
+            }
+            builder.append("\n\n### Embedded: ").append(reference.display).append('\n')
+
+            if (reference.alias != null && reference.alias !in embedRoots) {
+                builder.append("(unknown embed root '${reference.alias}'; skipped)")
+                return@forEach
+            }
+            val root = if (reference.alias == null) {
+                scanned.directory
+            } else {
+                embedRoots.getValue(reference.alias)
+            }
+            val embedFile = resolveInsideRoot(root, reference.path)
+            if (embedFile == null) {
+                builder.append("(embed file resolves outside its root; skipped)")
+                return@forEach
+            }
+            if (!embedFile.isFile) {
+                builder.append("(embed file not found; skipped)")
+                return@forEach
+            }
+            val bytes = try {
+                embedFile.readBytes()
+            } catch (error: IOException) {
+                builder.append("(embed file could not be read; skipped)")
+                return@forEach
+            }
+            if (bytes.size > MAX_EMBED_FILE_BYTES) {
+                // Trim the trailing replacement char so a cut multi-byte sequence stays valid text.
+                builder.append(
+                    String(bytes.copyOf(MAX_EMBED_FILE_BYTES), Charsets.UTF_8).trimEnd('\uFFFD')
+                )
+                builder.append("\n(embed file truncated at ${MAX_EMBED_FILE_BYTES / 1024} KB)")
+            } else {
+                builder.append(String(bytes, Charsets.UTF_8))
+            }
+        }
+        return builder.toString()
+    }
+
+    /**
+     * Resolves [path] against [root] the same way `AppPrivateFileTools` guards
+     * the app-private workspace: only relative `.md` paths whose canonical
+     * form stays inside [root] are accepted; everything else returns null.
+     */
+    private fun resolveInsideRoot(root: File, path: String): File? {
+        if (File(path).isAbsolute || path.startsWith("/") || path.contains('\\')) return null
+        val segments = path.split('/').filter { it.isNotBlank() }
+        if (segments.any { it == "." || it == ".." }) return null
+        return try {
+            val canonicalRoot = root.canonicalFile
+            val file = File(canonicalRoot, segments.joinToString(File.separator)).canonicalFile
+            if (file.toPath().startsWith(canonicalRoot.toPath())) file else null
+        } catch (error: IOException) {
+            null
+        }
+    }
+
+    companion object {
+        const val MAX_EMBED_FILE_BYTES = 16 * 1024
+
+        /** Fixed instructions for indexed skills; `skill_read` loads the body. */
+        const val INDEXED_STUB_INSTRUCTIONS =
+            "Metadata-only skill. Invoke the `skill_read` tool with this skill's name " +
+                "to load full instructions before relying on it."
+    }
+}

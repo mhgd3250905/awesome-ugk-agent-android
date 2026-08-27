@@ -49,8 +49,8 @@ android {
         applicationId = "com.ugk.pi.android.testapp"
         minSdk = 24
         targetSdk = 36
-        versionCode = 6
-        versionName = "0.5.0"
+        versionCode = 7
+        versionName = "0.6.0"
         testInstrumentationRunner = "androidx.test.runner.AndroidJUnitRunner"
     }
 
@@ -98,6 +98,7 @@ dependencies {
     implementation(project(":pi-schedule-skill-android"))
     implementation(project(":ugk-agent-task-runtime-android"))
     implementation(project(":pi-system-skill-android"))
+    implementation(project(":pi-agent-skill-runtime-android"))
     implementation(project(":pi-terminal-skill-android"))
     implementation("org.jetbrains.kotlinx:kotlinx-coroutines-android:1.7.3")
     implementation("androidx.core:core-ktx:1.12.0")

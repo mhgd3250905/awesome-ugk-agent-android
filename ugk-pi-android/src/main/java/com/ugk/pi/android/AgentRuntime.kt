@@ -31,6 +31,7 @@ class AgentRuntime(
         private var skillPromptBuilder: AndroidSkillPromptBuilder = AndroidSkillPromptBuilder()
         private var timeContextProvider: AgentTimeContextProvider = SystemAgentTimeContextProvider
         private val skills = mutableListOf<AndroidSkill>()
+        private var customSkillProvider: AndroidSkillProvider? = null
         private val agentInstructions = mutableListOf<String>()
         private val plugins = mutableListOf<AgentCapabilityPlugin>()
 
@@ -49,9 +50,19 @@ class AgentRuntime(
             return this
         }
 
+        /**
+         * Sets the skill provider that the runtime queries on every run.
+         *
+         * The provider is held by reference: its [AndroidSkillProvider.skills]
+         * is invoked per run, so a dynamic implementation can return updated
+         * skills without rebuilding the runtime. As before, this replaces any
+         * plugin-registered skills; a custom provider takes full ownership of
+         * the skill list and must merge static plugin skills itself if needed.
+         * Implementations must be safe to call from concurrent runs.
+         */
         fun skillProvider(skillProvider: AndroidSkillProvider): Builder {
             this.skills.clear()
-            this.skills += skillProvider.skills()
+            this.customSkillProvider = skillProvider
             return this
         }
 
@@ -94,7 +105,7 @@ class AgentRuntime(
                 llmProvider = requireNotNull(llmProvider) { "LLMProvider is required" },
                 toolRegistry = toolRegistry,
                 maxIterations = maxIterations,
-                skillProvider = StaticAndroidSkillProvider(skills.toList()),
+                skillProvider = customSkillProvider ?: StaticAndroidSkillProvider(skills.toList()),
                 skillResolver = skillResolver,
                 skillPromptBuilder = skillPromptBuilder,
                 timeContextProvider = timeContextProvider,
