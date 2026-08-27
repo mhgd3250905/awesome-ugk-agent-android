@@ -165,6 +165,9 @@ object DemoToolSemanticMapper {
         "screen_perform_action" -> "执行屏幕控件操作"
         "screen_capture_visual" -> "获取屏幕视觉观察"
         "screen_visual_gesture" -> "执行视觉定位手势"
+        "clipboard_read_text" -> "读取剪贴板文本"
+        "clipboard_write_text" -> "写入剪贴板文本"
+        "clipboard_clear" -> "清空剪贴板"
         "screen_launch_app" -> "启动应用"
         "screen_gesture" -> "执行屏幕手势"
         "screen_press_key" -> "触发按键"
@@ -191,6 +194,14 @@ object DemoToolSemanticMapper {
             if (selector.isNotBlank()) "查找: $selector" else "查找屏幕 UI 元素"
         }
         "screen_capture_visual" -> "获取当前屏幕截图并交给视觉模型"
+        "clipboard_read_text" -> "读取当前剪贴板文本"
+        "clipboard_write_text" -> {
+            val textLength = input["text"]?.jsonPrimitive?.contentOrNull?.length
+            val sensitive = input["sensitive"]?.jsonPrimitive?.contentOrNull != "false"
+            val sensitivityLabel = if (sensitive) "敏感" else "普通"
+            if (textLength != null) "写入剪贴板（${textLength} 字符，$sensitivityLabel）" else "写入剪贴板"
+        }
+        "clipboard_clear" -> "清空当前剪贴板"
         "screen_visual_gesture" -> {
             val action = input["action"]?.jsonPrimitive?.contentOrNull ?: "手势"
             val description = input["targetDescription"]?.jsonPrimitive?.contentOrNull
@@ -256,6 +267,9 @@ object DemoToolSemanticMapper {
             "screen_perform_action" -> "控件操作已执行完成"
             "screen_capture_visual" -> "屏幕视觉观察已获取"
             "screen_visual_gesture" -> "视觉定位手势已执行完成"
+            "clipboard_read_text" -> "剪贴板文本已读取（内容仅供本轮模型使用）"
+            "clipboard_write_text" -> "剪贴板文本已写入"
+            "clipboard_clear" -> "剪贴板已清空"
             "screen_launch_app" -> "已发起目标应用启动"
             "screen_gesture" -> "手势操作已完成"
             "bash", "terminal_exec" -> {

@@ -17,7 +17,9 @@ data class ToolResult(
     /** Tool 返回、仅供紧邻下一次模型请求使用的多模态附件。 */
     val images: List<AgentImageContent> = emptyList(),
     /** 图片附件对应的模型上下文说明；不会进入持久化 Tool 结果。 */
-    val imageContext: String? = null
+    val imageContext: String? = null,
+    /** 仅供紧邻下一次模型请求使用的敏感文本；不会进入持久化 Tool 结果。 */
+    val transientModelContent: String? = null
 )
 
 data class ToolProgress(

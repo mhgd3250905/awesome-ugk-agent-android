@@ -69,6 +69,7 @@ class AndroidAutomationAgentPlugin(
                 shouldBypassConfirmation = shouldBypassConfirmation
             )
         )
+        addAll(clipboardTools(appContext, shouldBypassConfirmation))
 
         val backend = screenAutomationBackend ?: return@buildList
         add(ScreenReadUiTreeTool(backend))
@@ -118,6 +119,7 @@ class AndroidAutomationAgentPlugin(
         val requireUserConfirmation = !shouldBypassConfirmation()
         add(AndroidSystemSkills.androidAutomationControl(requireUserConfirmation))
         add(AndroidSystemSkills.appFacingIntentControl(requireUserConfirmation))
+        add(AndroidSystemSkills.clipboardControl(requireUserConfirmation))
         if (screenAutomationBackend != null) {
             add(
                 ScreenAutomationSkills.accessibilityScreenControl(

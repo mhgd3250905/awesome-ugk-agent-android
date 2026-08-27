@@ -68,12 +68,37 @@ class AndroidSystemSkillsTest {
         val automation = AndroidSystemSkills.androidAutomationControl(requireUserConfirmation = false)
         val permission = AndroidSystemSkills.permissionSettingsControl(requireUserConfirmation = false)
         val intent = AndroidSystemSkills.appFacingIntentControl(requireUserConfirmation = false)
+        val clipboard = AndroidSystemSkills.clipboardControl(requireUserConfirmation = false)
 
         assertFalse(permission.methods.any { it.toolName == "show_user_confirmation_dialog" })
         assertFalse(intent.methods.any { it.toolName == "show_user_confirmation_dialog" })
+        assertFalse(clipboard.methods.any { it.toolName == "show_user_confirmation_dialog" })
         assertTrue(automation.instructions.contains("Do not call show_user_confirmation_dialog"))
         assertTrue(permission.instructions.contains("Do not call show_user_confirmation_dialog"))
         assertTrue(intent.instructions.contains("Do not call show_user_confirmation_dialog"))
+        assertTrue(clipboard.instructions.contains("Do not call show_user_confirmation_dialog"))
+    }
+
+    @Test
+    fun clipboardControlExposesTextMethodsAndPrivacyBoundaries() {
+        val skill = AndroidSystemSkills.clipboardControl()
+
+        assertEquals("android-clipboard-control", skill.id)
+        assertTrue(skill.triggers.contains("clipboard"))
+        assertTrue(skill.triggers.contains("剪贴板"))
+        assertEquals(
+            setOf(
+                "clipboard_read_text",
+                "clipboard_write_text",
+                "clipboard_clear",
+                "show_user_confirmation_dialog"
+            ),
+            skill.methods.map { it.toolName }.toSet()
+        )
+        assertTrue(skill.instructions.contains("CLIPBOARD_READ_UNAVAILABLE"))
+        assertTrue(skill.instructions.contains("next model request"))
+        assertTrue(skill.instructions.contains("sensitive"))
+        assertBoundConfirmationInstructions(skill.instructions)
     }
 
     private fun assertBoundConfirmationInstructions(instructions: String) {

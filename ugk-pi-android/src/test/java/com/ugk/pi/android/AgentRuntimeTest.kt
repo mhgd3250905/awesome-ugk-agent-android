@@ -11,6 +11,7 @@ import kotlinx.serialization.json.JsonObject
 import kotlinx.serialization.json.JsonPrimitive
 import org.junit.Assert.assertEquals
 import org.junit.Assert.assertFalse
+import org.junit.Assert.assertNull
 import org.junit.Assert.assertTrue
 import org.junit.Test
 
@@ -276,6 +277,48 @@ class AgentRuntimeTest {
             .result
         assertTrue(storedToolResult.images.isEmpty())
         assertTrue(session.messages.filterIsInstance<AgentMessage.User>().none { it.images.isNotEmpty() })
+    }
+
+    @Test
+    fun `forwards transient tool text without persisting the raw content`() = runBlocking {
+        val secret = "clipboard-secret-value"
+        val call = ToolCall(
+            id = "clipboard-1",
+            name = "transient_text_tool",
+            input = JsonObject(emptyMap())
+        )
+        val provider = ScriptedLLMProvider(
+            ModelResponse(content = "read clipboard", toolCalls = listOf(call)),
+            ModelResponse(content = "used clipboard")
+        )
+        val runtime = AgentRuntime(
+            llmProvider = provider,
+            toolRegistry = ToolRegistry().register(TransientTextTool(secret))
+        )
+        val session = AgentSession(id = "transient-clipboard")
+
+        val events = runtime.run(session, "inspect clipboard").toList()
+
+        val transientMessage = provider.requests[1].messages
+            .filterIsInstance<AgentMessage.User>()
+            .single { it.content.contains(secret) }
+        assertTrue(transientMessage.content.contains("clipboardText"))
+        assertTrue(transientMessage.content.contains(secret))
+
+        val storedToolResult = session.messages
+            .filterIsInstance<AgentMessage.Tool>()
+            .single()
+            .result
+        assertNull(storedToolResult.transientModelContent)
+        assertFalse(storedToolResult.content.contains(secret))
+        assertTrue(session.messages.none { it.toString().contains(secret) })
+
+        val finishedResult = events
+            .filterIsInstance<AgentEvent.ToolFinished>()
+            .single()
+            .result
+        assertNull(finishedResult.transientModelContent)
+        assertFalse(finishedResult.content.contains(secret))
     }
 
     @Test
@@ -729,6 +772,24 @@ class AgentRuntimeTest {
             content = "observation metadata",
             images = listOf(AgentImageContent("AQID")),
             imageContext = "The screen image is attached."
+        )
+    }
+
+    private class TransientTextTool(
+        private val secret: String
+    ) : AgentTool {
+        override val name = "transient_text_tool"
+        override val description = "Returns sensitive text for the next request only."
+        override val inputSchema = JsonObject(emptyMap())
+
+        override suspend fun execute(
+            call: ToolCall,
+            context: ToolExecutionContext
+        ): ToolResult = ToolResult(
+            toolCallId = call.id,
+            name = name,
+            content = "{\"success\":true,\"textLength\":${secret.length}}",
+            transientModelContent = "{\"source\":\"clipboard\",\"clipboardText\":\"$secret\"}"
         )
     }
 

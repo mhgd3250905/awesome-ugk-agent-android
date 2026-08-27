@@ -13,7 +13,7 @@ Android Agent Runtime SDK：提供通用 Agent 工具循环、Android Skill，�
 - v1 不支持、不打包、不宣称 Node.js、Git、OpenSSH、jq。
 - Runtime 无 UI，不要求安装 Termux 或第二个 App；它与宿主共享 Android UID，不是安全沙箱。
 - `pi-system-skill-android` 提供白名单 Android 原生 Intent Tool；打开网页、相机、拨号、地图、分享等动作不通过终端执行。
-- `demo-app` 当前开发版本为 `0.2.1`（`versionCode 3`）；聊天过程、会话管理和跨 App 悬浮窗的当前验收以 [`docs/demo-app-ui-redesign.md`](docs/demo-app-ui-redesign.md) 为准。
+- `demo-app` 当前本地版本基线为 `0.4.0`（`versionCode 5`）；包含视觉屏幕兜底和文本剪贴板能力，发布标签为 `demo-app-v0.4.0`。
 
 ## 模块
 
@@ -23,7 +23,7 @@ Android Agent Runtime SDK：提供通用 Agent 工具循环、Android Skill，�
 :pi-terminal-skill-android   terminal_bash_execute Agent Tool
 :pi-file-skill-android       应用私有文件 Skill
 :pi-schedule-skill-android   定时任务 Skill
-:pi-system-skill-android     系统设置/权限/Intent Skill
+:pi-system-skill-android     系统设置/权限/Intent/剪贴板 Skill
 :terminal-probe-demo-a/b     不同 applicationId 的 Runtime 验证 App
 :demo-app                    无障碍屏幕操控示例（前后台切换保留测试会话/草稿）
 ```
@@ -94,7 +94,11 @@ Android 原生 Intent 和跨 App 自动化接入：轻量宿主可注册
 - `launch_android_app`：通过包名的 launcher Activity 启动 App，不依赖无障碍；
 - `get_android_accessibility_status`：检查无障碍是否由用户开启、服务是否已连接；
 - `open_android_accessibility_settings`：打开系统设置，由用户手动授权；
-- `launch_android_app_intent`：执行白名单的 URL、相机、拨号、地图和分享等 Intent。
+- `launch_android_app_intent`：执行白名单的 URL、相机、拨号、地图和分享等 Intent；
+- `clipboard_read_text` / `clipboard_write_text` / `clipboard_clear`：在 Android 10+ 上读取、写入和清空文本剪贴板，默认均经过确认。
+
+剪贴板 Tool/Skill 的 API 限制、原文短暂传递策略和宿主接入方式见
+[`docs/android-clipboard.md`](docs/android-clipboard.md)。
 
 跨 App 读屏和点击仍由宿主提供的 `screen_*` Tool 完成，Agent 必须先确认
 `readyForScreenAutomation=true`，每次动作后重新读取屏幕验证。所有外部可见动作默认仍需先通过

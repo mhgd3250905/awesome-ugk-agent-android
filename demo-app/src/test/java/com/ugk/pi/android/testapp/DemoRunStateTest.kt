@@ -1,6 +1,8 @@
 package com.ugk.pi.android.testapp
 
 import com.ugk.pi.android.AgentEvent
+import com.ugk.pi.android.ToolResult
+import kotlinx.serialization.json.put
 import org.junit.Assert.assertEquals
 import org.junit.Assert.assertTrue
 import org.junit.Test
@@ -59,5 +61,31 @@ class DemoRunStateTest {
         assertTrue(state.steps[1].resultSummary?.contains("nodeCount=28") == true)
 
         assertEquals("任务已完成", state.steps.last().title)
+    }
+
+    @Test
+    fun clipboardTraceSummariesDoNotExposeClipboardText() {
+        val rawText = "secret-clipboard-value"
+        val writeCall = com.ugk.pi.android.ToolCall(
+            id = "clipboard-write",
+            name = "clipboard_write_text",
+            input = kotlinx.serialization.json.buildJsonObject {
+                put("text", rawText)
+                put("sensitive", true)
+            }
+        )
+        val writeResult = ToolResult(
+            toolCallId = writeCall.id,
+            name = writeCall.name,
+            content = "{\"success\":true,\"textLength\":${rawText.length}}"
+        )
+
+        val inputSummary = DemoToolSemanticMapper.formatInputSummary(writeCall.name, writeCall.input)
+        val resultSummary = DemoToolSemanticMapper.formatResultSummary(writeResult)
+
+        assertTrue(inputSummary.contains("${rawText.length}"))
+        org.junit.Assert.assertFalse(inputSummary.contains(rawText))
+        org.junit.Assert.assertFalse(resultSummary.contains(rawText))
+        assertEquals("剪贴板文本已写入", resultSummary)
     }
 }

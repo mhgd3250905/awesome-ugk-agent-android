@@ -36,6 +36,7 @@ class AndroidSystemAgentPlugin(
                     shouldBypassConfirmation = shouldBypassConfirmation
                 )
             )
+            addAll(clipboardTools(appContext, shouldBypassConfirmation))
         }
     }
 
@@ -44,7 +45,8 @@ class AndroidSystemAgentPlugin(
         return listOf(
             AndroidSystemSkills.appSettingsInspection(),
             AndroidSystemSkills.permissionSettingsControl(requireUserConfirmation),
-            AndroidSystemSkills.appFacingIntentControl(requireUserConfirmation)
+            AndroidSystemSkills.appFacingIntentControl(requireUserConfirmation),
+            AndroidSystemSkills.clipboardControl(requireUserConfirmation)
         )
     }
 }

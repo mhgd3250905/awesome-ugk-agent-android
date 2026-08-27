@@ -69,8 +69,12 @@ class AndroidAutomationAgentIntegrationInstrumentedTest {
         assertTrue(tools.any { it.name == "screen_global_action" && it is UserConfirmationRequiredTool })
         assertTrue(tools.any { it.name == "screen_capture_visual" && it is UserConfirmationRequiredTool })
         assertTrue(tools.any { it.name == "screen_visual_gesture" && it is UserConfirmationRequiredTool })
+        assertTrue(tools.any { it.name == "clipboard_read_text" && it is UserConfirmationRequiredTool })
+        assertTrue(tools.any { it.name == "clipboard_write_text" && it is UserConfirmationRequiredTool })
+        assertTrue(tools.any { it.name == "clipboard_clear" && it is UserConfirmationRequiredTool })
         assertTrue(tools.any { it.name == "screen_read_ui_tree" && it !is UserConfirmationRequiredTool })
         assertTrue(plugin.skills().any { it.id == "android-accessibility-screen-automation" })
+        assertTrue(plugin.skills().any { it.id == "android-clipboard-control" })
         assertTrue(plugin.agentInstructions().any { it.contains("snapshot-first") })
         assertTrue(plugin.agentInstructions().any { it.contains("screen_capture_visual") })
     }

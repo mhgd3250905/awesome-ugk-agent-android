@@ -1,18 +1,40 @@
 # demo-app 版本与变更台账
 
-更新时间：2026-08-25
-当前版本：`0.2.1`（`versionCode 3`）
+更新时间：2026-08-27
+当前版本：`0.4.0`（`versionCode 5`）
 版本范围：仅 `:demo-app`；SDK/AAR 模块版本继续独立维护。
-当前阶段：稳定化测试期；本次 `sdk-stabilization-baseline-2026-08-14` 是工程 checkpoint，不是新的 Demo 发布版本。
+当前阶段：`0.4.0` 本地版本基线已完成真机体验验证；远端推送和正式分发仍需单独执行。
 
 ## 版本规则
 
 - `versionCode` 只递增，不因重新打包或覆盖安装回退。
 - `versionName` 使用面向测试交付的 SemVer 风格；聊天、会话和悬浮窗等一组可感知能力完成后提升 minor 版本。
 - 稳定性修复、生命周期恢复和验收证据整理使用 patch 版本递增，不与新的用户可感知 UI 能力混用。
-- 本版本 Git 标签为 `demo-app-v0.2.1`；上一版 `demo-app-v0.2.0` 只代表 demo-app UI 版本，不代表 Terminal Runtime 已达到最终发布状态。
+- 当前版本 Git 标签为 `demo-app-v0.4.0`；上一版 `demo-app-v0.3.0` 只代表前一阶段 Demo 交付物，不代表 Terminal Runtime 已达到最终发布状态。
 - Debug APK 允许本机从被 Git 忽略的配置读取 API 默认值，不能作为对外分发包；API Key 不进入源码、文档或提交。
 - 真机迭代使用固定 Debug 签名和 `adb install -r -d`，不以卸载、清数据作为常规版本升级步骤。
+
+## 0.4.0 · 2026-08-27 · 视觉屏幕兜底与文本剪贴板
+
+### 变更范围
+
+- 视觉屏幕兜底：无障碍 UI 树无法暴露可靠目标时，通过 `screen_capture_visual` 提供短暂截图上下文，并以最新 `observationId` 和归一化区域驱动 `screen_visual_gesture`；截图和观察结果不进入持久化会话。
+- Android 文本剪贴板：新增 `clipboard_read_text`、`clipboard_write_text`、`clipboard_clear`，由现有 Android 插件自动注册；第一版只处理纯文本，Android 10（API 29）以下明确返回不支持。
+- 剪贴板读取原文只进入紧邻的下一次模型请求，持久化 Tool 结果、事件和 Demo 过程仅保留元数据；读/写/清空默认使用精确确认，写入默认标记敏感内容。
+- `demo-app` 版本提升为 `versionCode 5` / `versionName 0.4.0`；本地 Git 标签为 `demo-app-v0.4.0`。
+
+### 验收证据
+
+- 全工程 JVM 单元测试：186 个通过，0 个失败。
+- `:demo-app:assembleDebug`：通过。
+- `:demo-app:compileDebugAndroidTestKotlin`：通过。
+- 第二台小米 `e0b93f2f`（型号 `2304FPN6DC`）已安装并启动包含剪贴板功能的 Debug APK，用户完成剪贴板体验验证并反馈正常。
+- 主目标小米 `QSG6Q8IFDMDELVGQ` 在本轮部署时不在线；三星设备 `R5CRB11B2AW` 未操作。
+
+### 当前边界
+
+- `0.4.0` 标签和提交是本地版本管理基线，尚未推送远端；Release/AAB、API 配置和正式分发仍按发布清单单独验收。
+- 剪贴板后台读取仍受 Android 焦点/默认 IME 策略约束；写入剪贴板不等于自动向其他 App 粘贴。
 
 ## 0.2.0 · 2026-08-13
 

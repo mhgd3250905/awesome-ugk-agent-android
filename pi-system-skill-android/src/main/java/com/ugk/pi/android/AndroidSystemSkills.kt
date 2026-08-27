@@ -72,6 +72,81 @@ object AndroidSystemSkills {
         )
     }
 
+    fun clipboardControl(requireUserConfirmation: Boolean = true): AndroidSkill {
+        val confirmationInstruction = if (requireUserConfirmation) {
+            "Before clipboard_read_text, clipboard_write_text, or clipboard_clear, call show_user_confirmation_dialog immediately before the exact next Tool. Set target.toolName to that Tool name and target.input to its complete JSON input, then invoke the Tool with identical input. Reading exposes clipboard content to the configured model; writing or clearing changes global device state. selectedButtonId only records which dialog button the user chose; it does not authorize a protected Tool by itself, and a missing or mismatched target ticket must be treated as not authorized."
+        } else {
+            AgentConfirmationPolicy.FULL_AUTHORIZATION_AGENT_INSTRUCTION
+        }
+        return AndroidSkill(
+            id = "android-clipboard-control",
+            description = "Use the Android system clipboard for explicit text read, write, and clear operations.",
+            triggers = listOf(
+                "clipboard",
+                "copy to clipboard",
+                "paste from clipboard",
+                "剪贴板",
+                "复制到剪贴板",
+                "读取剪贴板",
+                "写入剪贴板",
+                "粘贴剪贴板"
+            ),
+            instructions = """
+                This Android-Skill owns the global text clipboard, not an app's visible copy/paste buttons.
+                $confirmationInstruction
+
+                - Use clipboard_read_text only when the current task needs clipboard text. The raw text is delivered
+                  only to the next model request and is omitted from the durable Tool result and demo trace. Never
+                  reveal, repeat, or store it unless the user explicitly asks for that result.
+                - Android 10+ may return CLIPBOARD_READ_UNAVAILABLE when the host app is not focused and is not the
+                  default IME. This does not prove that the clipboard is empty. Ask the user to bring the host app
+                  forward or use the target app's visible copy flow; never bypass this with shell commands.
+                - Use clipboard_write_text for exact plain text. It does not paste into another app. The sensitive
+                  flag defaults to true; keep it true for passwords, tokens, codes, payment or personal data.
+                - Use clipboard_clear only when the user explicitly asks to remove the current clipboard. To paste
+                  into another app, write/read the clipboard as needed and then use that app's screen UI action.
+                - This first version supports text only, not image or URI clipboard items. Treat success as Android
+                  accepting the request, not proof that another app has consumed the clipboard.
+            """.trimIndent(),
+            methods = buildList {
+                add(
+                    AndroidSkillMethod(
+                        toolName = "clipboard_read_text",
+                        purpose = "Reads the current text clipboard for the user's active task.",
+                        whenToUse = "Use only when clipboard content is needed; it may require the host app to have input focus and always requires confirmation in the default mode.",
+                        resultSemantics = "The durable result contains metadata only; the text is available to the next model request when success=true. CLIPBOARD_READ_UNAVAILABLE is not proof of an empty clipboard."
+                    )
+                )
+                add(
+                    AndroidSkillMethod(
+                        toolName = "clipboard_write_text",
+                        purpose = "Writes exact plain text to the global Android clipboard.",
+                        whenToUse = "Use when the user explicitly asks to copy or prepare text for pasting into another app.",
+                        resultSemantics = "success=true means Android accepted the clipboard write; it does not paste the text or prove another app consumed it."
+                    )
+                )
+                add(
+                    AndroidSkillMethod(
+                        toolName = "clipboard_clear",
+                        purpose = "Removes the current primary clipboard content.",
+                        whenToUse = "Use only after the user explicitly asks to clear or remove clipboard content.",
+                        resultSemantics = "success=true means Android accepted the clear request."
+                    )
+                )
+                if (requireUserConfirmation) {
+                    add(
+                        AndroidSkillMethod(
+                            toolName = "show_user_confirmation_dialog",
+                            purpose = "Confirms the exact clipboard Tool call and its privacy or state-change impact.",
+                            whenToUse = "Immediately before clipboard_read_text, clipboard_write_text, or clipboard_clear.",
+                            resultSemantics = "The confirmation target must match the next Tool name and complete JSON input; a button id alone is not authorization."
+                        )
+                    )
+                }
+            }
+        )
+    }
+
     fun appSettingsInspection(): AndroidSkill {
         return AndroidSkill(
             id = "app-settings-inspection",

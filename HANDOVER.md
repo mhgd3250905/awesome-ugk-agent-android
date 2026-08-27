@@ -1,10 +1,10 @@
 ﻿# awesome-ugk-agent-android 项目交接文档 (Handover Document)
 
-> **最新版本**：`0.3.0` (`versionCode 4`)  
-> **Git 标签**：`demo-app-v0.3.0`  
+> **最新版本**：`0.4.0` (`versionCode 5`)
+> **Git 标签**：`demo-app-v0.4.0`（本地）
 > **分支**：`main`  
 > **交接时间**：2026-08-27  
-> **目标真机**：小米 15（序列号 `QSG6Q8IFDMDELVGQ`，型号 `2602BRT18C`，Android 15）  
+> **目标真机**：小米 15（序列号 `QSG6Q8IFDMDELVGQ`，型号 `2602BRT18C`，Android 15）和第二台小米（序列号 `e0b93f2f`，型号 `2304FPN6DC`）
 > **注意**：设备列表中若有三星手机（`R5CRB11B2AW`），**严禁对其执行任何操作**，唯一下发与调试设备为小米手机。
 
 ---
@@ -30,7 +30,7 @@
 
 ---
 
-## 2. 最近完成的核心优化与交付成果 (0.3.0)
+## 2. 最近完成的核心优化与交付成果 (0.4.0)
 
 ### ① 多模态视觉识图交互体系
 1. **双输入源接入**：
@@ -76,12 +76,19 @@
 - demo 通过 `AccessibilityScreenAutomationBackend` 注入当前无障碍服务；
 - 统一全授权确认策略 `AgentConfirmationPolicy`。
 
-### ⑦ 当前未发布工作区：视觉屏幕兜底
+### ⑦ 0.4.0：视觉屏幕兜底
 - 当无障碍 UI 树无法暴露可靠目标时，新增 `screen_capture_visual` 截取当前屏幕，并通过 `ToolResult` 的短暂多模态附件传给紧邻的下一次模型请求；截图不写入持久化会话记录。
 - 模型返回 `0..1` 归一化目标区域后，新增 `screen_visual_gesture` 使用最新 `observationId` 执行 tap、long press 或方向 swipe；后端校验 15 秒有效期、前台包名、屏幕尺寸、旋转和边界。
 - 视觉截图和视觉手势均走精确输入确认；默认图片长边限制 1280、JPEG quality 80。Android API 30 以下返回不支持，受保护/DRM/动态画面仍可能不可用。
 - demo 的无障碍服务配置已加入 `android:canTakeScreenshot="true"`。宿主若使用默认后端，也必须在自己的 service XML 中声明该能力。
-- 这是 `0.3.0` 之后的未发布实现：`versionName=0.3.0`、`versionCode=4` 和标签 `demo-app-v0.3.0` 均未修改；已保存为本地基线提交，未推送远端，待真机体验评估后再决定正式版本化。
+- 视觉兜底已纳入本地 `0.4.0` 版本：`versionName=0.4.0`、`versionCode=5`，标签为 `demo-app-v0.4.0`；当前仅保存于本地，未推送远端。
+
+### ⑧ 0.4.0：Android 文本剪贴板 Tool/Skill
+- `pi-system-skill-android` 新增 `clipboard_read_text`、`clipboard_write_text`、`clipboard_clear`，由现有 `AndroidSystemAgentPlugin` 和 `AndroidAutomationAgentPlugin` 自动注册，不新增独立插件。
+- 按 Android 10（API 29）设计，模块 `minSdk` 仍为 24；API 28 及以下返回 `CLIPBOARD_UNSUPPORTED`。第一版仅暴露第一个纯文本剪贴板项，不处理图片和 URI。
+- 读取原文只通过 `ToolResult.transientModelContent` 传给紧邻的下一次模型请求，持久化 `AgentSession`、`AgentEvent.ToolFinished` 和 demo 过程摘要只保留元数据；无焦点读取失败返回 `CLIPBOARD_READ_UNAVAILABLE`，不伪报为空。
+- 读取、写入、清空默认均使用现有精确确认票据；写入默认设置 `sensitive=true`，写入/清空成功只表示 Android 接受请求，不代表目标 App 已粘贴或消费。
+- 剪贴板能力已纳入本地 `0.4.0` 版本；与视觉兜底共同使用标签 `demo-app-v0.4.0`，未推送远端。
 
 ---
 
@@ -100,15 +107,18 @@
 | `:ugk-pi-android` | `AnthropicMessagesProvider.kt` | Anthropic 标准协议提供者（支持多模态 image 块与 baseUrl 自定义） |
 | `:ugk-pi-android` | `OpenAiChatCompletionsProvider.kt` | OpenAI 兼容协议提供者（支持 image_url 与 baseUrl 自定义） |
 | `:ugk-pi-android` | `AgentConfirmationPolicy.kt` | 全授权模式跳过确认策略与工具调用安全边界 |
+| `:ugk-pi-android` | `Tool.kt` / `AgentRuntime.kt` | 临时敏感 Tool 文本只发送到下一次模型请求，不进入持久化会话 |
 | `:pi-system-skill-android` | `ScreenAutomationTools.kt` | SDK 统一的屏幕读/查/动作/视觉观察/视觉手势/IME/全局 Tools |
 | `:pi-system-skill-android` | `AccessibilityScreenAutomationBackend.kt` | 无障碍服务后端、快照校验、截图编码、视觉观察 freshness 与节点生命周期安全回收 |
+| `:pi-system-skill-android` | `AndroidClipboardTools.kt` | Android 10+ 文本剪贴板后端与三个系统 Tool |
+| `:pi-system-skill-android` | `AndroidSystemSkills.kt` | 剪贴板 Skill、确认和系统限制说明 |
 
 ---
 
 ## 4. 验证与质量基线
 
 1. **自动化测试**：
-   - 全工程 163 个单元测试全部通过：
+   - 全工程 186 个单元测试全部通过：
      `.\gradlew.bat testDebugUnitTest --console=plain` （SUCCESS）
    - 覆盖多模态数据编解码、表格分块与结构化解析、屏幕自动化策略、文件导入与会话管理。
 2. **真机部署与验证（小米 15 · `QSG6Q8IFDMDELVGQ`）**：
@@ -120,7 +130,11 @@
 
 2. **本次视觉兜底实现验证（未发布）**：
    - 全量 JVM 单元测试通过；`demo-app` Debug APK 构建通过；`demo-app` 仪器测试 Kotlin 源码编译通过。
-   - 尚未安装到小米真机执行真实跨应用截图、模型识别和坐标点击；下一步只允许使用小米 `QSG6Q8IFDMDELVGQ` 做体验验证，不能触碰三星设备。
+   - Debug APK 已安装到两台授权小米设备 `QSG6Q8IFDMDELVGQ` 和 `e0b93f2f`；视觉兜底尚未完成真实跨应用截图、模型识别和坐标点击验收。后续 ADB 仍只能显式指定这两台小米设备，不能触碰三星设备。
+
+3. **剪贴板 Tool/Skill 验证（0.4.0）**：
+   - 全工程 JVM 单元测试通过，共 186 个测试、0 个失败；`demo-app` Debug APK 构建和仪器测试 Kotlin 源码编译通过。
+   - 包含剪贴板能力的 Debug APK 已安装并启动于在线小米 `e0b93f2f`（`2304FPN6DC`），用户完成体验验证并反馈正常；主目标小米 `QSG6Q8IFDMDELVGQ` 当时不在线。`0.4.0` 版本仅在本地保存，未推送远端。
 
 ---
 

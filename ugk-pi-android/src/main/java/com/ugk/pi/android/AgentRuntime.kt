@@ -302,11 +302,18 @@ class AgentRuntime(
                     )
                     // Tool 附件只供紧邻的下一次模型请求使用。持久化 transcript
                     // 和事件保持纯文本，避免截图在 AgentSession 中累积或进入诊断输出。
-                    val durableResult = result.copy(images = emptyList(), imageContext = null)
+                    // 临时附件和敏感文本只发送到下一次模型请求；持久化会话和事件只保留元数据，
+                    // 避免屏幕原图或剪贴板原文进入 AgentSession 或诊断输出。
+                    val durableResult = result.copy(
+                        images = emptyList(),
+                        imageContext = null,
+                        transientModelContent = null
+                    )
                     session.messages += AgentMessage.Tool(durableResult)
-                    if (result.images.isNotEmpty()) {
+                    if (result.images.isNotEmpty() || result.transientModelContent != null) {
                         nextTransientModelMessages += AgentMessage.User(
-                            content = result.imageContext
+                            content = result.transientModelContent
+                                ?: result.imageContext
                                 ?: "The previous tool returned a screen image. Use only the visible screen content when reasoning about the next step.",
                             images = result.images
                         )

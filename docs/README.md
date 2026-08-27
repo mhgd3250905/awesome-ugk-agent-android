@@ -39,6 +39,7 @@
 | [demo-app-ui-redesign.md](demo-app-ui-redesign.md) | demo-app 聊天、过程、输入和跨 App 悬浮窗的当前交互基线 |
 | [demo-app-version-ledger.md](demo-app-version-ledger.md) | demo-app 版本、变更范围和验收台账 |
 | [android-accessibility-screen-automation.md](android-accessibility-screen-automation.md) | Android Accessibility 屏幕自动化 Skill、Tool 协议、宿主接入和验证边界 |
+| [android-clipboard.md](android-clipboard.md) | Android 文本剪贴板 Tool/Skill、确认策略、隐私和 API 限制 |
 | [sdk-optimization-ledger.md](sdk-optimization-ledger.md) | SDK 架构优化步骤、验证结果和版本影响台账 |
 | [sdk-core-consumer-contract.md](sdk-core-consumer-contract.md) | Core AAR 外部消费边界、版本策略和 API/ABI gate 触发条件 |
 | [sdk-stabilization-baseline.md](sdk-stabilization-baseline.md) | SDK 稳定化测试期、版本封存点、验证快照和退出条件 |
