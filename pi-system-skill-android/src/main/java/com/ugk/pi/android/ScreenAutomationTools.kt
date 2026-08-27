@@ -4,6 +4,7 @@ import kotlinx.serialization.json.JsonObject
 import kotlinx.serialization.json.JsonPrimitive
 import kotlinx.serialization.json.buildJsonObject
 import kotlinx.serialization.json.contentOrNull
+import kotlinx.serialization.json.jsonObject
 import kotlinx.serialization.json.jsonPrimitive
 import kotlinx.serialization.json.put
 import kotlinx.serialization.json.putJsonArray
@@ -33,12 +34,25 @@ private fun screenErrorResult(
 private fun screenRecoveryHint(code: String): String = when (code) {
     ScreenAutomationErrorCodes.ACCESSIBILITY_UNAVAILABLE ->
         "Call get_android_accessibility_status, then read the screen again when readyForScreenAutomation is true."
+    ScreenAutomationErrorCodes.VISUAL_SCREENSHOT_UNSUPPORTED,
+    ScreenAutomationErrorCodes.VISUAL_SCREENSHOT_FAILED,
+    ScreenAutomationErrorCodes.VISUAL_SCREENSHOT_TIMEOUT,
+    ScreenAutomationErrorCodes.VISUAL_OBSERVATION_REQUIRED,
+    ScreenAutomationErrorCodes.VISUAL_OBSERVATION_STALE,
+    ScreenAutomationErrorCodes.VISUAL_TARGET_INVALID ->
+        "Call screen_capture_visual to obtain a fresh visual observation before using screen_visual_gesture."
     else ->
         "Call screen_read_ui_tree or screen_find_ui_element now and use only its latest snapshotId and nodeId. Do not use terminal_bash_execute or relaunch the app to recover."
 }
 
 private fun screenRecoveryTool(code: String): String = when (code) {
     ScreenAutomationErrorCodes.ACCESSIBILITY_UNAVAILABLE -> "get_android_accessibility_status"
+    ScreenAutomationErrorCodes.VISUAL_SCREENSHOT_UNSUPPORTED,
+    ScreenAutomationErrorCodes.VISUAL_SCREENSHOT_FAILED,
+    ScreenAutomationErrorCodes.VISUAL_SCREENSHOT_TIMEOUT,
+    ScreenAutomationErrorCodes.VISUAL_OBSERVATION_REQUIRED,
+    ScreenAutomationErrorCodes.VISUAL_OBSERVATION_STALE,
+    ScreenAutomationErrorCodes.VISUAL_TARGET_INVALID -> "screen_capture_visual"
     else -> "screen_read_ui_tree"
 }
 
@@ -172,6 +186,129 @@ class ScreenFindUiElementTool(
                 }
             }.toString()
         )
+    }
+}
+
+class ScreenCaptureVisualTool(
+    private val backend: ScreenVisualAutomationBackend,
+    override val name: String = "screen_capture_visual"
+) : AgentTool {
+    override val description: String =
+        "Captures the current external screen and returns a multimodal observation for visual target identification. The image is sent to the configured model; use it only when the accessibility UI tree is unavailable or insufficient."
+
+    override val inputSchema: JsonObject = buildJsonObject {
+        put("type", "object")
+        putJsonObject("properties") {}
+    }
+
+    override suspend fun execute(call: ToolCall, context: ToolExecutionContext): ToolResult {
+        val result = backend.captureVisualObservation(context.sessionId)
+        val observation = result.observation
+        return if (result.success && observation != null) {
+            val payload = observation.toJson()
+            ToolResult(
+                toolCallId = call.id,
+                name = name,
+                content = payload.toString(),
+                metadata = payload,
+                images = listOf(observation.image),
+                imageContext =
+                    "已附带当前屏幕截图。请只根据截图中实际可见内容判断目标；如需操作，必须使用该 observationId，并返回目标区域的 0..1 归一化 left/top/right/bottom。"
+            )
+        } else {
+            screenErrorResult(
+                callId = call.id,
+                toolName = name,
+                code = result.code,
+                message = result.message ?: "Unable to capture the current screen."
+            )
+        }
+    }
+}
+
+class ScreenVisualGestureTool(
+    private val backend: ScreenVisualAutomationBackend,
+    override val name: String = "screen_visual_gesture"
+) : AgentTool {
+    override val description: String =
+        "Performs a bounded coordinate gesture against a fresh screen_capture_visual observation. Use only when the accessibility tree cannot expose a reliable target."
+
+    override val inputSchema: JsonObject = buildJsonObject {
+        put("type", "object")
+        putJsonObject("properties") {
+            putJsonObject("observationId") {
+                put("type", "string")
+                put("description", "Exact observationId returned by the latest screen_capture_visual result.")
+            }
+            putJsonObject("action") {
+                put("type", "string")
+                putJsonArray("enum") {
+                    ScreenGestureNames.supported.forEach { add(JsonPrimitive(it)) }
+                }
+            }
+            putJsonObject("target") {
+                put("type", "object")
+                put("description", "Target bounds in normalized 0..1 screen coordinates, not image pixels.")
+                putJsonObject("properties") {
+                    putJsonObject("left") { put("type", "number") }
+                    putJsonObject("top") { put("type", "number") }
+                    putJsonObject("right") { put("type", "number") }
+                    putJsonObject("bottom") { put("type", "number") }
+                }
+                putJsonArray("required") {
+                    add(JsonPrimitive("left"))
+                    add(JsonPrimitive("top"))
+                    add(JsonPrimitive("right"))
+                    add(JsonPrimitive("bottom"))
+                }
+            }
+            putJsonObject("targetDescription") {
+                put("type", "string")
+                put("description", "Short description of the visible target, for confirmation and diagnostics.")
+            }
+        }
+        putJsonArray("required") {
+            add(JsonPrimitive("observationId"))
+            add(JsonPrimitive("action"))
+            add(JsonPrimitive("target"))
+        }
+    }
+
+    override suspend fun execute(call: ToolCall, context: ToolExecutionContext): ToolResult {
+        val targetObject = call.input["target"] as? JsonObject
+        val left = targetObject?.doubleValue("left")
+        val top = targetObject?.doubleValue("top")
+        val right = targetObject?.doubleValue("right")
+        val bottom = targetObject?.doubleValue("bottom")
+        val target = if (left != null && top != null && right != null && bottom != null) {
+            ScreenVisualTarget(
+                left = left,
+                top = top,
+                right = right,
+                bottom = bottom
+            )
+        } else {
+            null
+        }
+        if (target == null) {
+            return screenErrorResult(
+                callId = call.id,
+                toolName = name,
+                code = ScreenAutomationErrorCodes.VISUAL_TARGET_INVALID,
+                message = "target must include numeric left, top, right, and bottom values in normalized 0..1 coordinates."
+            )
+        }
+
+        val result = backend.performVisualGesture(
+            sessionId = context.sessionId,
+            request = ScreenVisualGestureRequest(
+                observationId = call.input.stringValue("observationId"),
+                action = call.input.stringValue("action").orEmpty(),
+                target = target,
+                targetDescription = call.input.stringValue("targetDescription")
+            )
+        )
+        return result.toToolResult(call.id, name)
     }
 }
 
@@ -404,3 +541,22 @@ private fun JsonObject.stringValue(name: String): String? =
 
 private fun JsonObject.intValue(name: String): Int? =
     this[name]?.jsonPrimitive?.contentOrNull?.toIntOrNull()
+
+private fun JsonObject.doubleValue(name: String): Double? =
+    this[name]?.jsonPrimitive?.contentOrNull?.toDoubleOrNull()
+
+private fun ScreenVisualObservation.toJson(): JsonObject = buildJsonObject {
+    put("observationId", observationId)
+    put("sessionId", sessionId)
+    put("package", packageName)
+    put("screenWidth", screenWidth)
+    put("screenHeight", screenHeight)
+    put("imageWidth", imageWidth)
+    put("imageHeight", imageHeight)
+    put("displayId", displayId)
+    put("rotation", rotation)
+    put("capturedAtEpochMillis", capturedAtEpochMillis)
+    put("coordinateSpace", "normalized_0_to_1")
+    put("observationMaxAgeMillis", ScreenAutomationLimits.MAX_VISUAL_OBSERVATION_AGE_MILLIS)
+    put("imageAttached", true)
+}

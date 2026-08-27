@@ -13,7 +13,11 @@ data class ToolResult(
     val name: String,
     val content: String,
     val isError: Boolean = false,
-    val metadata: JsonObject = JsonObject(emptyMap())
+    val metadata: JsonObject = JsonObject(emptyMap()),
+    /** Tool 返回、仅供紧邻下一次模型请求使用的多模态附件。 */
+    val images: List<AgentImageContent> = emptyList(),
+    /** 图片附件对应的模型上下文说明；不会进入持久化 Tool 结果。 */
+    val imageContext: String? = null
 )
 
 data class ToolProgress(

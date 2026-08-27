@@ -76,6 +76,13 @@
 - demo 通过 `AccessibilityScreenAutomationBackend` 注入当前无障碍服务；
 - 统一全授权确认策略 `AgentConfirmationPolicy`。
 
+### ⑦ 当前未发布工作区：视觉屏幕兜底
+- 当无障碍 UI 树无法暴露可靠目标时，新增 `screen_capture_visual` 截取当前屏幕，并通过 `ToolResult` 的短暂多模态附件传给紧邻的下一次模型请求；截图不写入持久化会话记录。
+- 模型返回 `0..1` 归一化目标区域后，新增 `screen_visual_gesture` 使用最新 `observationId` 执行 tap、long press 或方向 swipe；后端校验 15 秒有效期、前台包名、屏幕尺寸、旋转和边界。
+- 视觉截图和视觉手势均走精确输入确认；默认图片长边限制 1280、JPEG quality 80。Android API 30 以下返回不支持，受保护/DRM/动态画面仍可能不可用。
+- demo 的无障碍服务配置已加入 `android:canTakeScreenshot="true"`。宿主若使用默认后端，也必须在自己的 service XML 中声明该能力。
+- 这是 `0.3.0` 之后的未发布实现：`versionName=0.3.0`、`versionCode=4` 和标签 `demo-app-v0.3.0` 均未修改；已保存为本地基线提交，未推送远端，待真机体验评估后再决定正式版本化。
+
 ---
 
 ## 3. 关键文件索引与架构分布
@@ -93,8 +100,8 @@
 | `:ugk-pi-android` | `AnthropicMessagesProvider.kt` | Anthropic 标准协议提供者（支持多模态 image 块与 baseUrl 自定义） |
 | `:ugk-pi-android` | `OpenAiChatCompletionsProvider.kt` | OpenAI 兼容协议提供者（支持 image_url 与 baseUrl 自定义） |
 | `:ugk-pi-android` | `AgentConfirmationPolicy.kt` | 全授权模式跳过确认策略与工具调用安全边界 |
-| `:pi-system-skill-android` | `ScreenAutomationTools.kt` | SDK 统一的屏幕读/查/动作/手势/IME/全局 Tools |
-| `:pi-system-skill-android` | `AccessibilityScreenAutomationBackend.kt` | 无障碍服务后端、快照校验与节点生命周期安全回收 |
+| `:pi-system-skill-android` | `ScreenAutomationTools.kt` | SDK 统一的屏幕读/查/动作/视觉观察/视觉手势/IME/全局 Tools |
+| `:pi-system-skill-android` | `AccessibilityScreenAutomationBackend.kt` | 无障碍服务后端、快照校验、截图编码、视觉观察 freshness 与节点生命周期安全回收 |
 
 ---
 
@@ -110,6 +117,10 @@
      -> **`versionCode=4 / versionName=0.3.0`**。
    - 真机多模态实测：拍照识图、相册选图、大图查看器、智谱 GLM-5.3-Flash 视觉结构化分析全链路畅通。
    - 真机表格实测：包含 8 行 3 列的水果营养表格流式输出全过程平稳顺滑，无跳动与闪烁，横向滑动正常，深浅色模式切换完美适配。
+
+2. **本次视觉兜底实现验证（未发布）**：
+   - 全量 JVM 单元测试通过；`demo-app` Debug APK 构建通过；`demo-app` 仪器测试 Kotlin 源码编译通过。
+   - 尚未安装到小米真机执行真实跨应用截图、模型识别和坐标点击；下一步只允许使用小米 `QSG6Q8IFDMDELVGQ` 做体验验证，不能触碰三星设备。
 
 ---
 

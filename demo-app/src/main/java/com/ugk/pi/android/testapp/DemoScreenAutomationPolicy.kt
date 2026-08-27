@@ -16,6 +16,8 @@ internal object DemoScreenAutomationPolicy {
         "screen_read_ui_tree",
         "screen_find_ui_element",
         "screen_perform_action",
+        "screen_capture_visual",
+        "screen_visual_gesture",
         "screen_gesture",
         "screen_press_key",
         "screen_global_action"
@@ -28,6 +30,13 @@ internal object DemoScreenAutomationPolicy {
     fun screenToolCallDetail(call: ToolCall): String = when (call.name.trim().lowercase()) {
         "screen_read_ui_tree" -> " [snapshot=read]"
         "screen_find_ui_element" -> " [snapshot=find]"
+        "screen_capture_visual" -> " [visual=observe]"
+        "screen_visual_gesture" -> {
+            val action = call.input["action"]?.jsonPrimitive?.contentOrNull ?: "missing"
+            val observation = call.input["observationId"]?.jsonPrimitive?.contentOrNull
+                ?.takeIf { it.isNotBlank() }
+            " [visualAction=$action observation=${if (observation == null) "missing" else "present"}]"
+        }
         "screen_perform_action" -> {
             val action = call.input["action"]?.jsonPrimitive?.contentOrNull ?: "missing"
             val snapshot = call.input["snapshotId"]?.jsonPrimitive?.contentOrNull
@@ -59,6 +68,13 @@ internal object DemoScreenAutomationPolicy {
                 "屏幕操作未执行：目标当前不可交互。请重新读取屏幕并确认目标可见、启用。"
             "ACCESSIBILITY_UNAVAILABLE" ->
                 "屏幕操作未执行：无障碍服务不可用。请先检查无障碍状态，再重新读取屏幕。"
+            "VISUAL_OBSERVATION_REQUIRED",
+            "VISUAL_OBSERVATION_STALE",
+            "VISUAL_TARGET_INVALID",
+            "VISUAL_SCREENSHOT_FAILED",
+            "VISUAL_SCREENSHOT_TIMEOUT",
+            "VISUAL_SCREENSHOT_UNSUPPORTED" ->
+                "视觉屏幕操作未执行：请重新获取屏幕视觉观察，不要复用旧截图或猜测坐标。"
             "SCREEN_AUTOMATION_TERMINAL_BLOCKED" ->
                 "已拦截终端命令：屏幕自动化期间只能使用 screen_* 工具。"
             else -> recovery?.takeIf { it.isNotBlank() }

@@ -9,6 +9,7 @@
 - 识别控件能力、可用 action、状态和屏幕位置；
 - 对节点执行 click、long click、scroll、focus、clear focus、set text；
 - 在 UI 树不足时执行有界 tap、long press、swipe；
+- 在 UI 树无法暴露目标时截取当前屏幕，交给已配置的多模态模型识别目标区域，再以观察 ID 约束坐标手势；
 - 触发 focused input 的 IME `enter` action；
 - 执行 back、home、recents、notifications、quick settings 等全局动作。
 
@@ -34,6 +35,17 @@ AndroidAutomationAgentPlugin(
 
 不传 `screenAutomationBackend` 的轻量宿主仍只获得 App 查询、启动和无障碍状态工具，不会意外获得屏幕控制工具。
 
+使用默认视觉后端时，宿主的无障碍服务 XML 还必须声明 Android 30+ 截图能力：
+
+```xml
+<accessibility-service
+    android:canRetrieveWindowContent="true"
+    android:canPerformGestures="true"
+    android:canTakeScreenshot="true" />
+```
+
+截图能力由用户在系统无障碍设置中授权；SDK 不会静默开启该权限。
+
 ## Tool 分层
 
 | Tool | 类型 | 用途 |
@@ -42,10 +54,12 @@ AndroidAutomationAgentPlugin(
 | `screen_find_ui_element` | 只读 | 按 partial/exact text、content description、viewId 或 type 返回紧凑候选集和 `snapshotId` |
 | `screen_perform_action` | 高影响 | 使用 `snapshotId + nodeId` 执行节点 action |
 | `screen_gesture` | 高影响 | 按当前屏幕尺寸执行 tap、long press 或方向 swipe |
+| `screen_capture_visual` | 高影响 | 截取当前外部屏幕并把图片附加到紧邻的下一次模型请求 |
+| `screen_visual_gesture` | 高影响 | 使用最新视觉观察 ID 和 0..1 归一化目标区域执行手势 |
 | `screen_press_key` | 高影响 | 在 API 30+ 对 focused input 触发 IME `enter` |
 | `screen_global_action` | 高影响 | 执行系统 back、home、recents、通知栏等动作 |
 
-高影响 Tool 由 `UserConfirmationRequiredTool` 包装；确认必须绑定下一次调用的完整 Tool 名称和 JSON input。
+高影响 Tool 由 `UserConfirmationRequiredTool` 包装；确认必须绑定下一次调用的完整 Tool 名称和 JSON input。视觉截图即使本身不改变屏幕，也会把跨应用画面发送给配置的模型，因此同样需要确认。
 
 ## Full authorization mode
 
@@ -77,12 +91,23 @@ Confirmation cards may temporarily restore focusability so the user can press
 their buttons; the overlay is collapsed again before the protected action
 continues.
 
-When a screen operation returns `success=false`, the result includes its
-structured error code and a recovery hint. The next recovery step is a fresh
-`screen_read_ui_tree` or `screen_find_ui_element` call. In the demo host,
+When a semantic screen operation returns `success=false`, the result includes its
+structured error code and a recovery hint; the next recovery step is a fresh
+`screen_read_ui_tree` or `screen_find_ui_element` call. For
+`screen_capture_visual` or `screen_visual_gesture`, follow the visual error code
+and capture a fresh observation when required. In the demo host,
 `terminal_bash_execute` is blocked during the screen workflow and returns
 immediately without starting Bash, preventing terminal exploration from
 replacing screen recovery.
+
+## 视觉兜底协议
+
+1. 先按 Snapshot-first 流程读取/查找 UI 树；只有树不可用、被截断后仍无法定位或目标没有可靠节点时才调用 `screen_capture_visual`。
+2. 截图成功后，模型会收到图片和 `observationId`、包名、屏幕尺寸、旋转角度等元数据；图片不会写入 `AgentSession` 的持久化消息，只附加到紧邻的下一次模型请求。
+3. 模型必须从图片返回目标的 `left/top/right/bottom` 归一化区域（每个值在 `0..1`），再调用 `screen_visual_gesture`，同时原样提交最新 `observationId`。
+4. 后端会校验观察 ID、15 秒有效期、前台包名、屏幕尺寸、旋转和目标区域；点击/长按使用区域中心，方向滑动从区域中心开始。执行成功只表示 Android 接受了触摸流，仍必须重新读树或截图验证。
+
+该能力是视觉兜底，不是对所有场景的通用突破：Android 30 以下不支持该截图 API；`FLAG_SECURE`、DRM、黑屏/受保护内容可能无法捕获；动画、弹窗或页面切换可能使观察过期；视觉坐标也不能替代无障碍节点提供的可靠文本输入。涉及支付、认证、删除等不可逆操作时仍必须让用户确认具体目标。
 
 ## Snapshot-first 协议
 
@@ -116,7 +141,9 @@ content description，避免界面变化后误操作其他节点。
 
 `ACCESSIBILITY_UNAVAILABLE`、`INVALID_INPUT`、`SNAPSHOT_REQUIRED`、`STALE_SNAPSHOT`、`NODE_NOT_FOUND`、
 `TARGET_NOT_INTERACTABLE`、`ACTION_NOT_SUPPORTED`、`ACTION_FAILED`、`GESTURE_REJECTED`、
-`GESTURE_TIMEOUT`、`KEY_UNSUPPORTED`、`KEY_FAILED`、`GLOBAL_ACTION_UNSUPPORTED`、`GLOBAL_ACTION_FAILED`。
+`GESTURE_TIMEOUT`、`KEY_UNSUPPORTED`、`KEY_FAILED`、`GLOBAL_ACTION_UNSUPPORTED`、`GLOBAL_ACTION_FAILED`、
+`VISUAL_SCREENSHOT_UNSUPPORTED`、`VISUAL_SCREENSHOT_FAILED`、`VISUAL_SCREENSHOT_TIMEOUT`、
+`VISUAL_OBSERVATION_REQUIRED`、`VISUAL_OBSERVATION_STALE`、`VISUAL_TARGET_INVALID`。
 
 Tool 返回 `success=false` 时，Agent 必须依据错误码恢复，不能仅凭计划中的 Tool call 宣称动作已经完成。
 
@@ -124,5 +151,7 @@ Tool 返回 `success=false` 时，Agent 必须依据错误码恢复，不能仅�
 
 - snapshot 只在当前进程内按 session 保留最新值，最多保留 16 个 session；没有跨进程 Coordinator、ticket store、
   `runId` 或屏幕录制。
+- 视觉观察只在当前进程内按 session 保留最新元数据，最多保留 16 个 session，图片本身不在后端缓存；默认图片长边
+  限制为 1280、JPEG quality 为 80，观察有效期为 15 秒。
 - `screen_press_key` 在 Android API 30 以下不使用未经验证的坐标 fallback，而是返回 `KEY_UNSUPPORTED`。
 - 无障碍服务、宿主 overlay 过滤和生命周期由宿主负责；SDK 只通过 `AccessibilityServiceProvider` 访问当前实例。

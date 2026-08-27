@@ -194,13 +194,15 @@ class AgentRuntime(
         var modelRequestIteration = 0
         var consecutiveIncompleteResponses = 0
         var incompleteResponseCorrection: AgentMessage.System? = null
+        var transientModelMessages: List<AgentMessage> = emptyList()
 
         while (completedIterations < maxIterations) {
             modelRequestIteration++
             val requestMessages = buildRequestMessages(
                 sessionMessages = session.messages.toList(),
                 activeSkillMessage = activeSkillMessage,
-                transientSystemMessage = incompleteResponseCorrection
+                transientSystemMessage = incompleteResponseCorrection,
+                transientModelMessages = transientModelMessages
             )
             val tools = toolRegistry.definitions()
             emit(
@@ -270,6 +272,7 @@ class AgentRuntime(
                     )
                     continue
                 }
+                transientModelMessages = emptyList()
                 session.messages += AgentMessage.Assistant(response.content)
                 emit(AgentEvent.Completed(response.content))
                 return@flow
@@ -278,12 +281,14 @@ class AgentRuntime(
             completedIterations++
             consecutiveIncompleteResponses = 0
             incompleteResponseCorrection = null
+            transientModelMessages = emptyList()
             session.messages += AgentMessage.Assistant(
                 content = response.content,
                 toolCalls = response.toolCalls,
                 reasoningContent = response.reasoningContent
             )
 
+            val nextTransientModelMessages = mutableListOf<AgentMessage>()
             try {
                 response.toolCalls.forEach { call ->
                     emit(AgentEvent.ToolStarted(call))
@@ -295,9 +300,19 @@ class AgentRuntime(
                             emit(AgentEvent.ToolProgress(call, progress))
                         }
                     )
-                    session.messages += AgentMessage.Tool(result)
-                    emit(AgentEvent.ToolFinished(result))
-                    terminalCompletion(result)?.let { completion ->
+                    // Tool 附件只供紧邻的下一次模型请求使用。持久化 transcript
+                    // 和事件保持纯文本，避免截图在 AgentSession 中累积或进入诊断输出。
+                    val durableResult = result.copy(images = emptyList(), imageContext = null)
+                    session.messages += AgentMessage.Tool(durableResult)
+                    if (result.images.isNotEmpty()) {
+                        nextTransientModelMessages += AgentMessage.User(
+                            content = result.imageContext
+                                ?: "The previous tool returned a screen image. Use only the visible screen content when reasoning about the next step.",
+                            images = result.images
+                        )
+                    }
+                    emit(AgentEvent.ToolFinished(durableResult))
+                    terminalCompletion(durableResult)?.let { completion ->
                         session.messages += AgentMessage.Assistant(completion)
                         emit(AgentEvent.Completed(completion))
                         return@flow
@@ -311,6 +326,7 @@ class AgentRuntime(
                 appendCancelledToolResults(session, response.toolCalls)
                 throw cancelled
             }
+            transientModelMessages = nextTransientModelMessages
 
             pendingUserMessages()
                 .map { it.trim() }
@@ -346,7 +362,8 @@ class AgentRuntime(
     private fun buildRequestMessages(
         sessionMessages: List<AgentMessage>,
         activeSkillMessage: AgentMessage.System?,
-        transientSystemMessage: AgentMessage.System? = null
+        transientSystemMessage: AgentMessage.System? = null,
+        transientModelMessages: List<AgentMessage> = emptyList()
     ): List<AgentMessage> {
         val runtimeAgentMessages = agentInstructions
             .asSequence()
@@ -361,7 +378,8 @@ class AgentRuntime(
             runtimeAgentMessages +
                 systemMessages +
                 listOfNotNull(activeSkillMessage, transientSystemMessage) +
-                nonSystemMessages
+                nonSystemMessages +
+                transientModelMessages
         return requestMessages.withUserTimePrefixes()
     }
 

@@ -18,6 +18,9 @@ import com.ugk.pi.android.ScreenGestureRequest
 import com.ugk.pi.android.ScreenKeyRequest
 import com.ugk.pi.android.ScreenOperationResult
 import com.ugk.pi.android.ScreenReadResult
+import com.ugk.pi.android.ScreenVisualAutomationBackend
+import com.ugk.pi.android.ScreenVisualCaptureResult
+import com.ugk.pi.android.ScreenVisualGestureRequest
 import com.ugk.pi.android.LLMProvider
 import com.ugk.pi.android.ModelRequest
 import com.ugk.pi.android.ModelResponse
@@ -64,9 +67,12 @@ class AndroidAutomationAgentIntegrationInstrumentedTest {
         assertTrue(tools.any { it.name == "screen_gesture" && it is UserConfirmationRequiredTool })
         assertTrue(tools.any { it.name == "screen_press_key" && it is UserConfirmationRequiredTool })
         assertTrue(tools.any { it.name == "screen_global_action" && it is UserConfirmationRequiredTool })
+        assertTrue(tools.any { it.name == "screen_capture_visual" && it is UserConfirmationRequiredTool })
+        assertTrue(tools.any { it.name == "screen_visual_gesture" && it is UserConfirmationRequiredTool })
         assertTrue(tools.any { it.name == "screen_read_ui_tree" && it !is UserConfirmationRequiredTool })
         assertTrue(plugin.skills().any { it.id == "android-accessibility-screen-automation" })
         assertTrue(plugin.agentInstructions().any { it.contains("snapshot-first") })
+        assertTrue(plugin.agentInstructions().any { it.contains("screen_capture_visual") })
     }
 
     @Test
@@ -268,7 +274,7 @@ class AndroidAutomationAgentIntegrationInstrumentedTest {
         }
     }
 
-    private object EmptyScreenBackend : ScreenAutomationBackend {
+    private object EmptyScreenBackend : ScreenAutomationBackend, ScreenVisualAutomationBackend {
         override fun readUiTree(sessionId: String, maxDepth: Int, maxNodes: Int) = ScreenReadResult()
 
         override suspend fun performAction(sessionId: String, request: ScreenActionRequest) =
@@ -282,5 +288,13 @@ class AndroidAutomationAgentIntegrationInstrumentedTest {
 
         override fun performGlobalAction(request: ScreenGlobalActionRequest) =
             ScreenOperationResult(false, "EMPTY")
+
+        override suspend fun captureVisualObservation(sessionId: String) =
+            ScreenVisualCaptureResult()
+
+        override suspend fun performVisualGesture(
+            sessionId: String,
+            request: ScreenVisualGestureRequest
+        ) = ScreenOperationResult(false, "EMPTY")
     }
 }

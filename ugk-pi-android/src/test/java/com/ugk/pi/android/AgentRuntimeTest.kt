@@ -244,6 +244,41 @@ class AgentRuntimeTest {
     }
 
     @Test
+    fun `forwards tool images as a transient multimodal observation`() = runBlocking {
+        val call = ToolCall(
+            id = "visual-1",
+            name = "visual_tool",
+            input = JsonObject(emptyMap())
+        )
+        val provider = ScriptedLLMProvider(
+            ModelResponse(content = "observe", toolCalls = listOf(call)),
+            ModelResponse(content = "recognized")
+        )
+        val session = AgentSession(id = "visual-observation")
+        val runtime = AgentRuntime(
+            llmProvider = provider,
+            toolRegistry = ToolRegistry().register(VisualTool())
+        )
+
+        runtime.run(session, "inspect screen").toList()
+
+        val observationMessage = provider.requests[1].messages
+            .filterIsInstance<AgentMessage.User>()
+            .single { it.images.isNotEmpty() }
+        assertTrue(observationMessage.content.endsWith("The screen image is attached."))
+        assertEquals(
+            listOf(AgentImageContent(base64Data = "AQID", mimeType = "image/jpeg")),
+            observationMessage.images
+        )
+        val storedToolResult = session.messages
+            .filterIsInstance<AgentMessage.Tool>()
+            .single()
+            .result
+        assertTrue(storedToolResult.images.isEmpty())
+        assertTrue(session.messages.filterIsInstance<AgentMessage.User>().none { it.images.isNotEmpty() })
+    }
+
+    @Test
     fun `preserves tool call reasoning content in subsequent model requests`() = runBlocking {
         val call = ToolCall(
             id = "tool-1",
@@ -678,6 +713,23 @@ class AgentRuntimeTest {
                 content = "pong: $text"
             )
         }
+    }
+
+    private class VisualTool : AgentTool {
+        override val name = "visual_tool"
+        override val description = "Returns an image observation for tests."
+        override val inputSchema = JsonObject(emptyMap())
+
+        override suspend fun execute(
+            call: ToolCall,
+            context: ToolExecutionContext
+        ): ToolResult = ToolResult(
+            toolCallId = call.id,
+            name = name,
+            content = "observation metadata",
+            images = listOf(AgentImageContent("AQID")),
+            imageContext = "The screen image is attached."
+        )
     }
 
     private class TerminalTool : AgentTool {

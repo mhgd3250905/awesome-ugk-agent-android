@@ -97,6 +97,21 @@ class AndroidAutomationAgentPlugin(
                 shouldBypassConfirmation = shouldBypassConfirmation
             )
         )
+        val visualBackend = backend as? ScreenVisualAutomationBackend
+        if (visualBackend != null) {
+            add(
+                UserConfirmationRequiredTool(
+                    ScreenCaptureVisualTool(visualBackend),
+                    shouldBypassConfirmation = shouldBypassConfirmation
+                )
+            )
+            add(
+                UserConfirmationRequiredTool(
+                    ScreenVisualGestureTool(visualBackend),
+                    shouldBypassConfirmation = shouldBypassConfirmation
+                )
+            )
+        }
     }
 
     override fun skills(): List<AndroidSkill> = buildList {
@@ -104,7 +119,12 @@ class AndroidAutomationAgentPlugin(
         add(AndroidSystemSkills.androidAutomationControl(requireUserConfirmation))
         add(AndroidSystemSkills.appFacingIntentControl(requireUserConfirmation))
         if (screenAutomationBackend != null) {
-            add(ScreenAutomationSkills.accessibilityScreenControl(requireUserConfirmation))
+            add(
+                ScreenAutomationSkills.accessibilityScreenControl(
+                    requireUserConfirmation = requireUserConfirmation,
+                    includeVisualFallback = screenAutomationBackend is ScreenVisualAutomationBackend
+                )
+            )
         }
     }
 
@@ -113,6 +133,9 @@ class AndroidAutomationAgentPlugin(
         add(androidRuntimeAgentContract(requireUserConfirmation))
         if (screenAutomationBackend != null) {
             add(SCREEN_AUTOMATION_AGENT_CONTRACT)
+            if (screenAutomationBackend is ScreenVisualAutomationBackend) {
+                add(SCREEN_VISUAL_AGENT_CONTRACT)
+            }
         }
     }
 
@@ -141,7 +164,14 @@ class AndroidAutomationAgentPlugin(
             Treat screen_read_ui_tree and screen_find_ui_element as read-only snapshot producers. Treat every returned snapshotId as single-session state: any new read/find invalidates the previous target. Mutating screen tools must use the exact latest snapshotId and nodeId and must be preceded by the host's exact-input confirmation flow unless full authorization is active.
             SNAPSHOT_REQUIRED means no screen action was executed. Never retry the same screen_perform_action input; the next tool call must be screen_read_ui_tree or screen_find_ui_element, followed by a new action using both values from that fresh result.
             Prefer semantic node actions and supported actions reported by the snapshot. Use gestures only when the UI tree is unavailable or insufficient, and derive coordinates from the latest reported screen dimensions. After each mutating action, read or find again and verify the result.
-            If any screen tool returns success=false, the next recovery call must be screen_read_ui_tree or screen_find_ui_element (or get_android_accessibility_status when the error code is ACCESSIBILITY_UNAVAILABLE). Do not call terminal_bash_execute, relaunch the app, or guess coordinates to recover from a screen-tool failure.
+            If a semantic screen tool returns success=false, the next recovery call must be screen_read_ui_tree or screen_find_ui_element (or get_android_accessibility_status when the error code is ACCESSIBILITY_UNAVAILABLE). If screen_capture_visual or screen_visual_gesture returns success=false, follow its visual error code and capture a fresh observation when required. Do not call terminal_bash_execute, relaunch the app, or guess coordinates to recover from a screen-tool failure.
+        """.trimIndent()
+
+        val SCREEN_VISUAL_AGENT_CONTRACT = """
+            When the accessibility tree cannot expose a reliable visible target, use screen_capture_visual as the visual fallback. This sends the current screen image to the configured model and returns a short-lived observationId plus screen metadata; do not capture repeatedly or use it for unrelated inspection.
+            The model must return a visible target rectangle in normalized 0..1 left/top/right/bottom coordinates. Call screen_visual_gesture with the exact latest observationId and that rectangle; never invent raw pixel coordinates, reuse an older observation, or use screen_visual_gesture without a fresh screenshot.
+            screen_capture_visual and screen_visual_gesture are protected by the exact confirmation flow unless full authorization is active. After every visual gesture, call screen_read_ui_tree or screen_capture_visual and verify the visible state. A successful gesture only means AccessibilityService accepted the touch stream; it does not prove the intended control activated.
+            Visual fallback is not universal: secure/DRM surfaces may be blank, dynamic screens may become stale, and visual coordinates cannot replace semantic text entry when no editable node exists. Never use a visual guess for destructive, financial, authentication, or irreversible actions without explicit user confirmation.
         """.trimIndent()
     }
 }

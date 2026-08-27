@@ -26,6 +26,19 @@ interface ScreenAutomationBackend {
     fun performGlobalAction(request: ScreenGlobalActionRequest): ScreenOperationResult
 }
 
+/**
+ * 可选的视觉兜底能力。单独定义接口，避免破坏已有宿主对
+ * [ScreenAutomationBackend] 的实现与二进制兼容性。
+ */
+interface ScreenVisualAutomationBackend {
+    suspend fun captureVisualObservation(sessionId: String): ScreenVisualCaptureResult
+
+    suspend fun performVisualGesture(
+        sessionId: String,
+        request: ScreenVisualGestureRequest
+    ): ScreenOperationResult
+}
+
 data class ScreenActionRequest(
     val snapshotId: String?,
     val nodeId: String,
@@ -45,6 +58,47 @@ data class ScreenKeyRequest(
 
 data class ScreenGlobalActionRequest(
     val action: String
+)
+
+data class ScreenVisualCaptureResult(
+    val observation: ScreenVisualObservation? = null,
+    val code: String = ScreenAutomationErrorCodes.OK,
+    val message: String? = null
+) {
+    val success: Boolean
+        get() = observation != null && code == ScreenAutomationErrorCodes.OK
+}
+
+/**
+ * 一次截图观察。图片坐标在传给模型时会被缩放，因此视觉手势使用
+ * [ScreenVisualTarget] 的 0..1 归一化坐标，而不是直接复用图片像素。
+ */
+data class ScreenVisualObservation(
+    val observationId: String,
+    val sessionId: String,
+    val packageName: String,
+    val screenWidth: Int,
+    val screenHeight: Int,
+    val imageWidth: Int,
+    val imageHeight: Int,
+    val displayId: Int,
+    val rotation: Int,
+    val capturedAtEpochMillis: Long,
+    val image: AgentImageContent
+)
+
+data class ScreenVisualTarget(
+    val left: Double,
+    val top: Double,
+    val right: Double,
+    val bottom: Double
+)
+
+data class ScreenVisualGestureRequest(
+    val observationId: String?,
+    val action: String,
+    val target: ScreenVisualTarget,
+    val targetDescription: String? = null
 )
 
 data class ScreenReadResult(
@@ -117,6 +171,9 @@ object ScreenAutomationLimits {
     const val MAX_MAX_DEPTH = 30
     const val DEFAULT_MAX_NODES = 200
     const val MAX_MAX_NODES = 500
+    const val MAX_VISUAL_OBSERVATION_AGE_MILLIS = 15_000L
+    const val MAX_VISUAL_IMAGE_DIMENSION = 1_280
+    const val VISUAL_JPEG_QUALITY = 80
     const val MAX_TEXT_CHARS = 200
     const val MAX_CONTENT_DESCRIPTION_CHARS = 200
     const val MAX_HINT_CHARS = 100
@@ -139,6 +196,12 @@ object ScreenAutomationErrorCodes {
     const val KEY_FAILED = "KEY_FAILED"
     const val GLOBAL_ACTION_UNSUPPORTED = "GLOBAL_ACTION_UNSUPPORTED"
     const val GLOBAL_ACTION_FAILED = "GLOBAL_ACTION_FAILED"
+    const val VISUAL_SCREENSHOT_UNSUPPORTED = "VISUAL_SCREENSHOT_UNSUPPORTED"
+    const val VISUAL_SCREENSHOT_FAILED = "VISUAL_SCREENSHOT_FAILED"
+    const val VISUAL_SCREENSHOT_TIMEOUT = "VISUAL_SCREENSHOT_TIMEOUT"
+    const val VISUAL_OBSERVATION_REQUIRED = "VISUAL_OBSERVATION_REQUIRED"
+    const val VISUAL_OBSERVATION_STALE = "VISUAL_OBSERVATION_STALE"
+    const val VISUAL_TARGET_INVALID = "VISUAL_TARGET_INVALID"
 }
 
 object ScreenActionNames {

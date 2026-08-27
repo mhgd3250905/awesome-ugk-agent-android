@@ -5,6 +5,7 @@ import kotlinx.serialization.json.Json
 import kotlinx.serialization.json.buildJsonObject
 import kotlinx.serialization.json.jsonObject
 import kotlinx.serialization.json.put
+import kotlinx.serialization.json.putJsonObject
 import org.junit.Assert.assertEquals
 import org.junit.Assert.assertFalse
 import org.junit.Assert.assertTrue
@@ -114,6 +115,78 @@ class ScreenAutomationToolsTest {
     }
 
     @Test
+    fun visualCaptureToolReturnsMetadataAndAnImageAttachment() = runBlocking {
+        val backend = FakeVisualScreenAutomationBackend()
+        val result = ScreenCaptureVisualTool(backend).execute(
+            ToolCall("capture", "screen_capture_visual", buildJsonObject {}),
+            ToolExecutionContext(sessionId = "visual-test")
+        )
+
+        val payload = Json.parseToJsonElement(result.content).jsonObject
+        assertFalse(result.isError)
+        assertEquals("visual-observation-1", payload["observationId"]?.toString()?.trim('"'))
+        assertEquals("normalized_0_to_1", payload["coordinateSpace"]?.toString()?.trim('"'))
+        assertEquals(1, result.images.size)
+        assertEquals("AQID", result.images.single().base64Data)
+        assertTrue(result.imageContext?.contains("observationId") == true)
+    }
+
+    @Test
+    fun visualGestureToolPassesObservationAndNormalizedTarget() = runBlocking {
+        val backend = FakeVisualScreenAutomationBackend()
+        val result = ScreenVisualGestureTool(backend).execute(
+            ToolCall(
+                "visual-action",
+                "screen_visual_gesture",
+                buildJsonObject {
+                    put("observationId", "visual-observation-1")
+                    put("action", "tap")
+                    put("targetDescription", "继续按钮")
+                    putJsonObject("target") {
+                        put("left", 0.1)
+                        put("top", 0.2)
+                        put("right", 0.4)
+                        put("bottom", 0.3)
+                    }
+                }
+            ),
+            ToolExecutionContext(sessionId = "visual-test")
+        )
+
+        assertFalse(result.isError)
+        assertEquals("visual-observation-1", backend.lastRequest?.observationId)
+        assertEquals("tap", backend.lastRequest?.action)
+        assertEquals(
+            ScreenVisualTarget(0.1, 0.2, 0.4, 0.3),
+            backend.lastRequest?.target
+        )
+        assertEquals("继续按钮", backend.lastRequest?.targetDescription)
+    }
+
+    @Test
+    fun visualGestureToolRejectsMissingTargetWithoutCallingBackend() = runBlocking {
+        val backend = FakeVisualScreenAutomationBackend()
+        val result = ScreenVisualGestureTool(backend).execute(
+            ToolCall(
+                "visual-invalid",
+                "screen_visual_gesture",
+                buildJsonObject {
+                    put("observationId", "visual-observation-1")
+                    put("action", "tap")
+                }
+            ),
+            ToolExecutionContext(sessionId = "visual-test")
+        )
+
+        assertTrue(result.isError)
+        assertEquals(
+            ScreenAutomationErrorCodes.VISUAL_TARGET_INVALID,
+            result.metadata["code"]?.toString()?.trim('"')
+        )
+        assertEquals(null, backend.lastRequest)
+    }
+
+    @Test
     fun findToolRejectsAnUnscopedQuery() = runBlocking {
         val backend = FakeScreenAutomationBackend()
         val result = ScreenFindUiElementTool(backend).execute(
@@ -212,5 +285,39 @@ class ScreenAutomationToolsTest {
 
         override fun performGlobalAction(request: ScreenGlobalActionRequest) =
             ScreenOperationResult(true, ScreenAutomationErrorCodes.OK, action = request.action)
+    }
+
+    private class FakeVisualScreenAutomationBackend : ScreenVisualAutomationBackend {
+        var lastRequest: ScreenVisualGestureRequest? = null
+
+        private val observation = ScreenVisualObservation(
+            observationId = "visual-observation-1",
+            sessionId = "visual-test",
+            packageName = "com.example.target",
+            screenWidth = 1080,
+            screenHeight = 2400,
+            imageWidth = 576,
+            imageHeight = 1280,
+            displayId = 0,
+            rotation = 0,
+            capturedAtEpochMillis = 123L,
+            image = AgentImageContent("AQID")
+        )
+
+        override suspend fun captureVisualObservation(sessionId: String): ScreenVisualCaptureResult =
+            ScreenVisualCaptureResult(observation = observation.copy(sessionId = sessionId))
+
+        override suspend fun performVisualGesture(
+            sessionId: String,
+            request: ScreenVisualGestureRequest
+        ): ScreenOperationResult {
+            lastRequest = request
+            return ScreenOperationResult(
+                success = true,
+                code = ScreenAutomationErrorCodes.OK,
+                action = request.action,
+                metadata = mapOf("observationId" to (request.observationId ?: ""))
+            )
+        }
     }
 }

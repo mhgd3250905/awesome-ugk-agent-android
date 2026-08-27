@@ -45,6 +45,33 @@ class ScreenAutomationSkillTest {
     }
 
     @Test
+    fun visualFallbackAddsScreenshotAndBoundedGestureWorkflow() {
+        val skill = ScreenAutomationSkills.accessibilityScreenControl(
+            requireUserConfirmation = true,
+            includeVisualFallback = true
+        )
+
+        assertTrue(skill.instructions.contains("screen_capture_visual"))
+        assertTrue(skill.instructions.contains("observationId"))
+        assertTrue(skill.instructions.contains("normalized 0..1"))
+        assertEquals(
+            setOf(
+                "get_android_accessibility_status",
+                "screen_read_ui_tree",
+                "screen_find_ui_element",
+                "screen_perform_action",
+                "screen_gesture",
+                "screen_press_key",
+                "screen_global_action",
+                "screen_capture_visual",
+                "screen_visual_gesture",
+                "show_user_confirmation_dialog"
+            ),
+            skill.methods.map { it.toolName }.toSet()
+        )
+    }
+
+    @Test
     fun parsesOnlyStrictNodePaths() {
         assertEquals(ScreenNodePath(0, emptyList()), parseScreenNodePath("0"))
         assertEquals(ScreenNodePath(2, listOf(0, 5, 11)), parseScreenNodePath("2.0.5.11"))
@@ -67,6 +94,32 @@ class ScreenAutomationSkillTest {
         )
         assertNull(resolveScreenGestureCoordinates("swipe_up", 10, 0, 400, 800))
         assertNull(resolveScreenGestureCoordinates("tap", 400, 10, 400, 800))
+    }
+
+    @Test
+    fun mapsNormalizedVisualTargetToCurrentScreenCenter() {
+        assertEquals(
+            500 to 1_200,
+            resolveScreenVisualTargetCenter(
+                ScreenVisualTarget(left = 0.4, top = 0.4, right = 0.6, bottom = 0.6),
+                screenWidth = 1_000,
+                screenHeight = 2_400
+            )
+        )
+        assertNull(
+            resolveScreenVisualTargetCenter(
+                ScreenVisualTarget(left = 0.7, top = 0.2, right = 0.6, bottom = 0.3),
+                screenWidth = 1_000,
+                screenHeight = 2_400
+            )
+        )
+        assertNull(
+            resolveScreenVisualTargetCenter(
+                ScreenVisualTarget(left = 0.0, top = 0.0, right = 1.1, bottom = 0.5),
+                screenWidth = 1_000,
+                screenHeight = 2_400
+            )
+        )
     }
 
     @Test

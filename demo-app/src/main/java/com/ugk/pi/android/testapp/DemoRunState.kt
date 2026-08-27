@@ -163,6 +163,8 @@ object DemoToolSemanticMapper {
         "screen_find_ui_element" -> "查找屏幕 UI 元素"
         "screen_read_ui_tree" -> "读取屏幕 UI 树"
         "screen_perform_action" -> "执行屏幕控件操作"
+        "screen_capture_visual" -> "获取屏幕视觉观察"
+        "screen_visual_gesture" -> "执行视觉定位手势"
         "screen_launch_app" -> "启动应用"
         "screen_gesture" -> "执行屏幕手势"
         "screen_press_key" -> "触发按键"
@@ -187,6 +189,12 @@ object DemoToolSemanticMapper {
                 .filter { (key, value) -> key in setOf("text", "content_desc", "view_id", "type") && value.toString().isNotBlank() }
                 .joinToString(", ") { (key, value) -> "$key=${value.toString()}" }
             if (selector.isNotBlank()) "查找: $selector" else "查找屏幕 UI 元素"
+        }
+        "screen_capture_visual" -> "获取当前屏幕截图并交给视觉模型"
+        "screen_visual_gesture" -> {
+            val action = input["action"]?.jsonPrimitive?.contentOrNull ?: "手势"
+            val description = input["targetDescription"]?.jsonPrimitive?.contentOrNull
+            if (!description.isNullOrBlank()) "视觉目标: $description ($action)" else "视觉手势: $action"
         }
         "screen_launch_app" -> {
             val pkg = input["packageName"]?.jsonPrimitive?.contentOrNull
@@ -246,6 +254,8 @@ object DemoToolSemanticMapper {
                 if (nodeCount != null) "已读取屏幕 UI（共 $nodeCount 个节点）" else "已获取屏幕 UI 结构"
             }
             "screen_perform_action" -> "控件操作已执行完成"
+            "screen_capture_visual" -> "屏幕视觉观察已获取"
+            "screen_visual_gesture" -> "视觉定位手势已执行完成"
             "screen_launch_app" -> "已发起目标应用启动"
             "screen_gesture" -> "手势操作已完成"
             "bash", "terminal_exec" -> {

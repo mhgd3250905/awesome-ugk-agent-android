@@ -1,11 +1,30 @@
 package com.ugk.pi.android
 
 object ScreenAutomationSkills {
-    fun accessibilityScreenControl(requireUserConfirmation: Boolean = true): AndroidSkill {
+    fun accessibilityScreenControl(
+        requireUserConfirmation: Boolean = true,
+        includeVisualFallback: Boolean = false
+    ): AndroidSkill {
         val confirmationInstruction = if (requireUserConfirmation) {
-            "screen_perform_action, screen_gesture, screen_press_key, and screen_global_action change visible state or navigation. Immediately before each call, use show_user_confirmation_dialog with target.toolName set to the exact next Tool name and target.input set to that Tool's complete JSON input. Invoke the next Tool with identical name and input. Do not treat selectedButtonId alone as authorization."
+            if (includeVisualFallback) {
+                "screen_capture_visual sends a cross-app screenshot to the configured model, while screen_perform_action, screen_visual_gesture, screen_gesture, screen_press_key, and screen_global_action change visible state or navigation. Immediately before each protected call, use show_user_confirmation_dialog with target.toolName set to the exact next Tool name and target.input set to that Tool's complete JSON input. Invoke the next Tool with identical name and input. Do not treat selectedButtonId alone as authorization."
+            } else {
+                "screen_perform_action, screen_gesture, screen_press_key, and screen_global_action change visible state or navigation. Immediately before each call, use show_user_confirmation_dialog with target.toolName set to the exact next Tool name and target.input set to that Tool's complete JSON input. Invoke the next Tool with identical name and input. Do not treat selectedButtonId alone as authorization."
+            }
         } else {
             AgentConfirmationPolicy.FULL_AUTHORIZATION_AGENT_INSTRUCTION
+        }
+        val visualFallbackInstruction = if (includeVisualFallback) {
+            """
+
+                Visual fallback for missing or insufficient UI trees:
+                - Use screen_capture_visual only after screen_read_ui_tree or screen_find_ui_element cannot expose a reliable target. It returns a screenshot attachment plus a short-lived observationId, package, dimensions, rotation, and image dimensions. The screenshot is sent to the configured model, so do not capture unrelated or repeated frames.
+                - Ask the visual model to identify a visible target using a normalized 0..1 rectangle: left, top, right, bottom. Use the target center for tap/long_press and the target center as the start point for directional swipes. Never convert coordinates from memory or assume a fixed resolution.
+                - Use screen_visual_gesture with the exact latest observationId and the model's normalized rectangle. The backend rejects missing, stale, changed-package, or changed-screen observations. Its success only means AccessibilityService accepted the touch stream.
+                - After every visual gesture, call screen_read_ui_tree or screen_capture_visual and verify the visible state. Secure/DRM surfaces may be blank, animated screens may become stale, and visual coordinates cannot replace semantic text entry when no editable node exists.
+            """.trimIndent()
+        } else {
+            ""
         }
         return AndroidSkill(
             id = "android-accessibility-screen-automation",
@@ -109,12 +128,15 @@ object ScreenAutomationSkills {
                 - After every accepted click, long click, text entry, scroll, gesture, key press, or global action, call a
                   read/find tool and verify the observed state. A success=true result means Android accepted the request;
                   it does not prove that the user-visible operation completed.
-                - If any screen tool returns success=false, recover only with screen_read_ui_tree or screen_find_ui_element
-                  (or get_android_accessibility_status when accessibility is unavailable). Do not use terminal_bash_execute,
-                  relaunch the app, or guess coordinates to recover.
+                - If a semantic screen tool returns success=false, recover only with screen_read_ui_tree or
+                  screen_find_ui_element (or get_android_accessibility_status when accessibility is unavailable). If
+                  screen_capture_visual or screen_visual_gesture returns success=false, follow its visual error code;
+                  when the observation is missing or stale, capture a fresh visual observation. Do not use
+                  terminal_bash_execute, relaunch the app, or guess coordinates to recover.
                 - Use screen_global_action only for back, home, recents, notifications, quick_settings, power_dialog,
                   lock_screen, or take_screenshot. Confirm these actions separately and report their exact result.
                 - Never use terminal commands, coordinate guessing, or a stale snapshot to bypass a failed target check.
+                $visualFallbackInstruction
             """.trimIndent(),
             methods = listOf(
                 AndroidSkillMethod(
@@ -159,11 +181,31 @@ object ScreenAutomationSkills {
                     whenToUse = "For back, home, recents, notifications, quick settings, power dialog, lock screen, or screenshot.",
                     resultSemantics = "success=true means AccessibilityService accepted the system action; verify the resulting screen before continuing."
                 ),
+                if (includeVisualFallback) {
+                    AndroidSkillMethod(
+                        toolName = "screen_capture_visual",
+                        purpose = "Captures the current external screen and attaches it to the next model request for visual target identification.",
+                        whenToUse = "After the accessibility tree cannot expose a reliable visible target; it requires confirmation because screen content leaves the device.",
+                        resultSemantics = "Returns an observationId, screen metadata, and an image attachment. The observation is short-lived and must not be reused after a new capture."
+                    )
+                } else {
+                    null
+                },
+                if (includeVisualFallback) {
+                    AndroidSkillMethod(
+                        toolName = "screen_visual_gesture",
+                        purpose = "Performs a coordinate gesture against a fresh visual screen observation.",
+                        whenToUse = "Only when no reliable accessibility node/action exists and the target rectangle is visible in the latest screen_capture_visual image.",
+                        resultSemantics = "The backend validates observation freshness, package, dimensions, and normalized bounds; success still requires a follow-up screen verification."
+                    )
+                } else {
+                    null
+                },
                 if (requireUserConfirmation) {
                     AndroidSkillMethod(
                         toolName = "show_user_confirmation_dialog",
                         purpose = "Confirms the exact next mutating screen tool call.",
-                        whenToUse = "Immediately before screen_perform_action, screen_gesture, screen_press_key, or screen_global_action.",
+                        whenToUse = "Immediately before screen_capture_visual, screen_perform_action, screen_visual_gesture, screen_gesture, screen_press_key, or screen_global_action.",
                         resultSemantics = "The confirmation target must match the next tool name and complete JSON input; a button id without a matching ticket is not authorization."
                     )
                 } else {
