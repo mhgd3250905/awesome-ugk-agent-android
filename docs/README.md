@@ -2,7 +2,7 @@
 
 更新时间：2026-08-27
 适用项目：`awesome-ugk-agent-android`
-源码目录：`D:\AII\ugk-android`
+源码目录：`E:\AII\ugk-android-new`
 
 独立持续开发台账：[awesome-ugk-agent-android-ledger](https://github.com/mhgd3250905/awesome-ugk-agent-android-ledger)
 
