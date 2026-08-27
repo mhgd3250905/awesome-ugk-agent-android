@@ -342,7 +342,7 @@ class DemoChatMessageView @JvmOverloads constructor(
         if (role == DemoChatMessageRole.ASSISTANT) {
             assistantContainer.visibility = View.VISIBLE
             userMessageColumn.visibility = View.GONE
-            renderAssistantContent(messageText)
+            renderAssistantContent(messageText, isStreaming = true)
         } else {
             userMessageColumn.visibility = View.VISIBLE
             assistantContainer.visibility = View.GONE
@@ -350,7 +350,7 @@ class DemoChatMessageView @JvmOverloads constructor(
         }
     }
 
-    private fun renderAssistantContent(text: String) {
+    private fun renderAssistantContent(text: String, isStreaming: Boolean = false) {
         val blocks = DemoCodeBlockParser.splitBlocks(text)
         if (blocks.isEmpty()) {
             assistantBubble.removeAllViews()
@@ -368,7 +368,7 @@ class DemoChatMessageView @JvmOverloads constructor(
                 assistantBubble.removeAllViews()
                 createAssistantTextView().also { assistantBubble.addView(it) }
             }
-            DemoMarkdownFormatter.setMarkdown(tv, textContent)
+            DemoMarkdownFormatter.setMarkdown(tv, textContent, isStreaming = isStreaming)
             return
         }
 
@@ -388,7 +388,7 @@ class DemoChatMessageView @JvmOverloads constructor(
                         assistantBubble.addView(newTv, childIndex)
                         newTv
                     }
-                    DemoMarkdownFormatter.setMarkdown(tv, block.markdown)
+                    DemoMarkdownFormatter.setMarkdown(tv, block.markdown, isStreaming = isStreaming)
                     childIndex++
                 }
                 is DemoContentBlock.Code -> {
@@ -409,6 +409,27 @@ class DemoChatMessageView @JvmOverloads constructor(
                             assistantBubble.removeViewAt(childIndex)
                         }
                         assistantBubble.addView(codeView, childIndex)
+                    }
+                    childIndex++
+                }
+                is DemoContentBlock.Table -> {
+                    val existing = assistantBubble.getChildAt(childIndex) as? DemoTableView
+                    val tableView = existing ?: DemoTableView(context).apply {
+                        val lp = LinearLayout.LayoutParams(
+                            LinearLayout.LayoutParams.MATCH_PARENT,
+                            LinearLayout.LayoutParams.WRAP_CONTENT
+                        ).apply {
+                            topMargin = context.chatDp(6)
+                            bottomMargin = context.chatDp(6)
+                        }
+                        layoutParams = lp
+                    }
+                    tableView.bind(block.tableMarkdown)
+                    if (existing == null) {
+                        if (childIndex < assistantBubble.childCount) {
+                            assistantBubble.removeViewAt(childIndex)
+                        }
+                        assistantBubble.addView(tableView, childIndex)
                     }
                     childIndex++
                 }

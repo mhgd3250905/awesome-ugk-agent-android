@@ -22,17 +22,20 @@ import kotlin.math.abs
 sealed class DemoContentBlock {
     data class Text(val markdown: String) : DemoContentBlock()
     data class Code(val language: String, val code: String) : DemoContentBlock()
+    data class Table(val tableMarkdown: String) : DemoContentBlock()
 }
 
 /**
- * 将 Markdown 消息内容切分为正文块与代码块的解析器。
+ * 将 Markdown 消息内容切分为正文块、代码块与表格块的解析器。
  */
 object DemoCodeBlockParser {
 
     fun splitBlocks(markdown: String): List<DemoContentBlock> {
+        val trimmed = markdown.trim()
+        if (trimmed.isBlank()) return emptyList()
+
         if (!markdown.contains("```")) {
-            val trimmed = markdown.trim()
-            return if (trimmed.isNotBlank()) listOf(DemoContentBlock.Text(trimmed)) else emptyList()
+            return extractTableAndTextBlocks(trimmed)
         }
 
         val blocks = mutableListOf<DemoContentBlock>()
@@ -43,8 +46,8 @@ object DemoCodeBlockParser {
         var currentLang = ""
 
         for (line in lines) {
-            val trimmed = line.trim()
-            if (trimmed.startsWith("```")) {
+            val currentTrimmed = line.trim()
+            if (currentTrimmed.startsWith("```")) {
                 if (inCodeBlock) {
                     // 代码块闭合
                     blocks.add(DemoContentBlock.Code(currentLang, codeBuffer.toString()))
@@ -56,11 +59,11 @@ object DemoCodeBlockParser {
                     if (textBuffer.isNotEmpty()) {
                         val text = textBuffer.toString().trim()
                         if (text.isNotBlank()) {
-                            blocks.add(DemoContentBlock.Text(text))
+                            blocks.addAll(extractTableAndTextBlocks(text))
                         }
                         textBuffer.clear()
                     }
-                    currentLang = trimmed.removePrefix("```").trim()
+                    currentLang = currentTrimmed.removePrefix("```").trim()
                     inCodeBlock = true
                 }
             } else {
@@ -80,11 +83,70 @@ object DemoCodeBlockParser {
         } else if (textBuffer.isNotEmpty()) {
             val text = textBuffer.toString().trim()
             if (text.isNotBlank()) {
-                blocks.add(DemoContentBlock.Text(text))
+                blocks.addAll(extractTableAndTextBlocks(text))
             }
         }
 
         return blocks
+    }
+
+    private fun extractTableAndTextBlocks(markdown: String): List<DemoContentBlock> {
+        val lines = markdown.lines()
+        val result = mutableListOf<DemoContentBlock>()
+        val textBuffer = StringBuilder()
+        val tableBuffer = StringBuilder()
+        var inTable = false
+
+        var i = 0
+        while (i < lines.size) {
+            val line = lines[i]
+            val trimmed = line.trim()
+
+            if (!inTable) {
+                val isNextDivider = if (i + 1 < lines.size) {
+                    DemoTableData.isDividerRow(lines[i + 1])
+                } else false
+
+                if ((trimmed.startsWith("|") || trimmed.contains("|")) && isNextDivider) {
+                    if (textBuffer.isNotEmpty()) {
+                        val t = textBuffer.toString().trim()
+                        if (t.isNotBlank()) result.add(DemoContentBlock.Text(t))
+                        textBuffer.clear()
+                    }
+                    inTable = true
+                    tableBuffer.append(line)
+                } else {
+                    if (textBuffer.isNotEmpty()) textBuffer.append("\n")
+                    textBuffer.append(line)
+                }
+            } else {
+                val isStillTable = trimmed.startsWith("|") || (trimmed.contains("|") && !trimmed.startsWith("#"))
+                if (isStillTable) {
+                    if (tableBuffer.isNotEmpty()) tableBuffer.append("\n")
+                    tableBuffer.append(line)
+                } else if (trimmed.isBlank()) {
+                    result.add(DemoContentBlock.Table(tableBuffer.toString()))
+                    tableBuffer.clear()
+                    inTable = false
+                } else {
+                    result.add(DemoContentBlock.Table(tableBuffer.toString()))
+                    tableBuffer.clear()
+                    inTable = false
+                    if (textBuffer.isNotEmpty()) textBuffer.append("\n")
+                    textBuffer.append(line)
+                }
+            }
+            i++
+        }
+
+        if (inTable && tableBuffer.isNotEmpty()) {
+            result.add(DemoContentBlock.Table(tableBuffer.toString()))
+        } else if (textBuffer.isNotEmpty()) {
+            val t = textBuffer.toString().trim()
+            if (t.isNotBlank()) result.add(DemoContentBlock.Text(t))
+        }
+
+        return result
     }
 }
 

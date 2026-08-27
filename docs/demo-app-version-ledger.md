@@ -1,6 +1,6 @@
 # demo-app 版本与变更台账
 
-更新时间：2026-08-14
+更新时间：2026-08-25
 当前版本：`0.2.1`（`versionCode 3`）
 版本范围：仅 `:demo-app`；SDK/AAR 模块版本继续独立维护。
 当前阶段：稳定化测试期；本次 `sdk-stabilization-baseline-2026-08-14` 是工程 checkpoint，不是新的 Demo 发布版本。
@@ -66,11 +66,52 @@
 - 本轮尚未重新执行人工悬浮窗、Activity 重建和键盘触控验收；连接的真机回归覆盖的是自动化 Demo/Runtime 测试。
 - 未覆盖的人工场景仍需使用当前 APK、当前 tag 和设备序列号重新记录，不能用旧版本报告替代。
 
+### 2026-08-25 屏幕自动化稳定性补强（不升版本）
+
+- `screen_read_ui_tree` 增加屏幕尺寸、非自身窗口数、截断标记和有界 `max_nodes`；`screen_gesture` 改为按当前屏幕尺寸生成滑动终点并拒绝越界输入。
+- `screen_perform_action` 对未知动作和缺失 `set_text.text` fail-closed；屏幕树和动作窗口路径补齐节点回收；手势回调等待改为可取消协程等待。
+- 新增坐标边界、屏幕尺寸适配和输入拒绝 JVM 回归；当前 Debug APK 在 Pixel 8 / Android 17 Preview 与 SM-A526U1 / Android 14 上各完成 `14/14` connected instrumentation。
+- 两台设备本轮均未启用 Demo AccessibilityService，因此跨 App 的真实微信/设置/浏览器无障碍操作仍未形成当前版本证据；本条不提升 `versionName` 或 `versionCode`。
+
 ### 稳定化测试期版本边界
 
 - 本次保存不提升 `versionName` 或 `versionCode`；`0.2.1 / versionCode 3` 继续代表当前 Demo 测试交付物。
 - `demo-app-v0.2.1` 保持不变；稳定化 checkpoint 使用独立标签，不能当作新的产品版本或正式发布标签。
 - 后续若只是稳定性修复、测试和证据整理，先更新本台账和 SDK 稳定化文档；只有形成新的可安装交付物或用户可感知行为变化时才评估 patch/minor bump。
+
+## 2026-08-25 Accessibility screen automation SDK migration
+
+### 变更范围
+
+- 屏幕 UI 树读取、selector 查找、节点 action、坐标手势、IME action 和 global action 下沉到
+  `pi-system-skill-android` 的统一 Skill/Plugin。
+- demo 通过 `AccessibilityScreenAutomationBackend` 注入当前无障碍服务，不再维护私有 Screen Tool 和屏幕 Skill。
+- 节点动作改为 `snapshotId + nodeId` 精确绑定；新的 read/find 会使旧 snapshot 失效，backend 对目标 fingerprint
+  和可交互状态做 fail-closed 校验。
+- 高影响屏幕操作继续使用 `UserConfirmationRequiredTool`；无障碍授权仍由用户手动开启。
+
+### 版本边界
+
+本次是 SDK 能力归位、测试迁移和文档修订，不改变 demo 用户可感知 UI，因此保持 `0.2.1 / versionCode 3`。
+
+## 2026-08-27 原生卡片表格重构与流式渲染防抖优化
+
+### 变更背景与问题定位
+- **视觉反馈**：大模型流式输出 Markdown 表格时，表格区域高速闪烁、行高反复跳跃、网格重叠变形，直到表格输出完毕后才稳定。
+- **深层根因**：Markwon 官方 `TablePlugin` 基于 `TableRowSpan`（`ReplacementSpan`），测量期（`getSize`）因未知宽度返回默认行高，绘制期（`draw`）生成布局后发现高度突变，通过 `TableRowsScheduler` 异步 `post(view.setText(text))` 触发二次排版。在流式输出（高频刷新）期间，每一帧新字符都产生新 Span 并经历“高度0 -> 绘制变高 -> post 重设”的死循环震颤。
+- **架构重构**：
+  1. 废弃在单一 TextView 内用 ReplacementSpan 绘制复杂表格的方式，将表格提拔为顶层独立内容块 `DemoContentBlock.Table`（与 `DemoContentBlock.Code` 一致）。
+  2. 实现原生卡片式表格组件 `DemoTableView`：
+     - 外层 `HorizontalScrollView`（`isFillViewport = true`，支持超宽多列表格横向平滑滑动，告别单元格过度换行导致纵向堆叠过长）；
+     - 内部 `TableLayout`（`isStretchAllColumns = true`，少列时自动拉伸平铺整个卡片）；
+     - 表头高对比微底色，偶数/奇数行极细分割线与柔和斑马纹；
+     - 单元格采用原生 12sp TextView 并支持富文本行内样式（加粗、代码）；
+     - 完美深度适配米白浅色与纯净深碳灰主题。
+  3. **彻底绝杀抖动**：表格作为原生独立 View，大模型在流式输出表格后续文字时，表格 View 纹丝不动，零重绘、零测量震颤。
+
+### 验收证据
+- `:demo-app:testDebugUnitTest`：全工程 163 个单元测试全部通过（新增表格分块提取与结构解析单测用例）。
+- 小米 15 目标设备（`QSG6Q8IFDMDELVGQ`）真机实测验证：水果表格流式生成过程与最终完成态平稳丝滑，横向滑动正常，深浅色切换完美适配。
 
 ## 0.1.0 · 历史开发基线
 
