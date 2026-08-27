@@ -40,7 +40,8 @@ data class AgentRunInput(
     val content: String,
     val source: AgentRunSource = AgentRunSource.USER,
     val taskId: String? = null,
-    val visibleInConversation: Boolean = true
+    val visibleInConversation: Boolean = true,
+    val images: List<AgentImageContent> = emptyList()
 )
 
 data class ToolExecutionContext(

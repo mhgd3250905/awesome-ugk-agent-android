@@ -1,6 +1,9 @@
 package com.ugk.pi.android
 
 import kotlinx.coroutines.CancellationException
+import kotlinx.coroutines.flow.Flow
+import kotlinx.coroutines.flow.asFlow
+import kotlinx.coroutines.flow.toList
 import kotlinx.coroutines.runBlocking
 import kotlinx.serialization.json.Json
 import kotlinx.serialization.json.JsonObject
@@ -9,6 +12,7 @@ import kotlinx.serialization.json.jsonArray
 import kotlinx.serialization.json.jsonObject
 import kotlinx.serialization.json.jsonPrimitive
 import org.junit.Assert.assertEquals
+import org.junit.Assert.assertNotNull
 import org.junit.Assert.assertTrue
 import org.junit.Test
 
@@ -240,6 +244,62 @@ class AnthropicMessagesProviderTest {
         assertEquals(1, callCount)
     }
 
+    @Test
+    fun `generateStream parses sse thinking and text deltas and builds complete response`() = runBlocking {
+        val sseLines = listOf(
+            "event: message_start",
+            """data: {"type":"message_start","message":{"id":"msg_1","type":"message","role":"assistant","content":[],"model":"claude-3-7-sonnet","stop_reason":null}}""",
+            "",
+            "event: content_block_start",
+            """data: {"type":"content_block_start","index":0,"content_block":{"type":"thinking","thinking":""}}""",
+            "",
+            "event: content_block_delta",
+            """data: {"type":"content_block_delta","index":0,"delta":{"type":"thinking_delta","thinking":"Let me think."}}""",
+            "",
+            "event: content_block_stop",
+            """data: {"type":"content_block_stop","index":0}""",
+            "",
+            "event: content_block_start",
+            """data: {"type":"content_block_start","index":1,"content_block":{"type":"text","text":""}}""",
+            "",
+            "event: content_block_delta",
+            """data: {"type":"content_block_delta","index":1,"delta":{"type":"text_delta","text":"Hello "}}""",
+            "",
+            "event: content_block_delta",
+            """data: {"type":"content_block_delta","index":1,"delta":{"type":"text_delta","text":"world!"}}""",
+            "",
+            "event: content_block_stop",
+            """data: {"type":"content_block_stop","index":1}""",
+            "",
+            "event: message_delta",
+            """data: {"type":"message_delta","delta":{"stop_reason":"end_turn"}}""",
+            "",
+            "event: message_stop",
+            """data: {"type":"message_stop"}""",
+            ""
+        )
+        val transport = object : HttpTransport {
+            override suspend fun post(request: HttpRequest): HttpResponse = error("Unexpected non-stream call")
+            override fun postStream(request: HttpRequest): Flow<String> = sseLines.asFlow()
+        }
+        val provider = AnthropicMessagesProvider(
+            apiKey = "test-key",
+            model = "claude-3-7-sonnet",
+            baseUrl = "https://example.com/anthropic",
+            transport = transport
+        )
+
+        val chunks = provider.generateStream(simpleRequest()).toList()
+
+        assertEquals(ModelStreamChunk.ThinkingDelta("Let me think.") as ModelStreamChunk, chunks[0])
+        assertEquals(ModelStreamChunk.ContentDelta("Hello ") as ModelStreamChunk, chunks[1])
+        assertEquals(ModelStreamChunk.ContentDelta("world!") as ModelStreamChunk, chunks[2])
+        val completed = chunks[3] as ModelStreamChunk.Completed
+        assertEquals("Hello world!", completed.response.content)
+        assertEquals("Let me think.", completed.response.reasoningContent)
+        assertEquals("end_turn", completed.response.stopReason)
+    }
+
     private fun simpleRequest(): ModelRequest {
         return ModelRequest(
             sessionId = "s1",
@@ -263,6 +323,57 @@ class AnthropicMessagesProviderTest {
               "stop_reason": "end_turn"
             }
         """.trimIndent()
+    }
+
+    @Test
+    fun generateIncludesMultimodalImageContent() = runBlocking {
+        val transport = RecordingHttpTransport(
+            simpleTextResponse("识别完成：图中有小猫")
+        )
+        val provider = AnthropicMessagesProvider(
+            apiKey = "test-key",
+            model = "GLM-5.3-Flash",
+            baseUrl = "https://open.bigmodel.cn/api/anthropic",
+            transport = transport
+        )
+
+        val response = provider.generate(
+            ModelRequest(
+                sessionId = "s-multimodal",
+                messages = listOf(
+                    AgentMessage.User(
+                        content = "看看图里有什么",
+                        images = listOf(
+                            AgentImageContent(
+                                base64Data = "iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAYAAAAfFcSJAAAADUlEQVR42mNk+M9QDwADhgGAWjR9awAAAABJRU5ErkJggg==",
+                                mimeType = "image/png"
+                            )
+                        )
+                    )
+                ),
+                tools = emptyList()
+            )
+        )
+
+        assertEquals("识别完成：图中有小猫", response.content)
+        val body = Json.parseToJsonElement(transport.request.body).jsonObject
+        val messages = body["messages"]?.jsonArray
+        val userMsg = messages?.firstOrNull()?.jsonObject
+        assertEquals("user", userMsg?.get("role")?.jsonPrimitive?.content)
+        val contentBlocks = userMsg?.get("content")?.jsonArray
+        assertNotNull(contentBlocks)
+        assertEquals(2, contentBlocks!!.size)
+
+        val imageBlock = contentBlocks[0].jsonObject
+        assertEquals("image", imageBlock["type"]?.jsonPrimitive?.content)
+        val source = imageBlock["source"]?.jsonObject
+        assertEquals("base64", source?.get("type")?.jsonPrimitive?.content)
+        assertEquals("image/png", source?.get("media_type")?.jsonPrimitive?.content)
+        assertEquals("iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAYAAAAfFcSJAAAADUlEQVR42mNk+M9QDwADhgGAWjR9awAAAABJRU5ErkJggg==", source?.get("data")?.jsonPrimitive?.content)
+
+        val textBlock = contentBlocks[1].jsonObject
+        assertEquals("text", textBlock["type"]?.jsonPrimitive?.content)
+        assertEquals("看看图里有什么", textBlock["text"]?.jsonPrimitive?.content)
     }
 
     private class RecordingHttpTransport(

@@ -12,6 +12,9 @@ import kotlinx.serialization.json.contentOrNull
 import kotlinx.serialization.json.jsonArray
 import kotlinx.serialization.json.jsonObject
 import kotlinx.serialization.json.jsonPrimitive
+import kotlinx.coroutines.flow.Flow
+import kotlinx.coroutines.flow.emitAll
+import kotlinx.coroutines.flow.flow
 import kotlinx.serialization.json.put
 import kotlinx.serialization.json.putJsonArray
 import kotlinx.serialization.json.putJsonObject
@@ -34,7 +37,7 @@ class OpenAiChatCompletionsProvider(
                     "Authorization" to "Bearer $apiKey",
                     "Content-Type" to "application/json"
                 ),
-                body = requestBody(request).toString()
+                body = requestBody(request, stream = false).toString()
             )
         )
 
@@ -47,9 +50,160 @@ class OpenAiChatCompletionsProvider(
         return parseResponse(httpResponse.body)
     }
 
-    private fun requestBody(request: ModelRequest): JsonObject {
+    override fun generateStream(request: ModelRequest): Flow<ModelStreamChunk> = flow {
+        val httpRequest = HttpRequest(
+            url = endpoint,
+            headers = mapOf(
+                "Authorization" to "Bearer $apiKey",
+                "Content-Type" to "application/json"
+            ),
+            body = requestBody(request, stream = true).toString()
+        )
+
+        val rawLinesFlow = transport.postStream(httpRequest)
+        emitAll(parseOpenAiSseStream(rawLinesFlow))
+    }
+
+    private fun parseOpenAiSseStream(rawLines: Flow<String>): Flow<ModelStreamChunk> = flow {
+        val accumulatedContent = StringBuilder()
+        val accumulatedReasoning = StringBuilder()
+        // 每个 toolCall 在流中会根据其 index 逐步拼接 arguments
+        class ToolCallDraft(
+            var id: String = "",
+            var name: String = "",
+            val argsBuilder: StringBuilder = StringBuilder()
+        )
+        val toolDrafts = mutableMapOf<Int, ToolCallDraft>()
+        var currentStopReason: String? = null
+        var completedEmitted = false
+
+        rawLines.collect { rawLine ->
+            val line = rawLine.trim()
+            if (line.isEmpty() || line.startsWith(":")) {
+                return@collect
+            }
+
+            // 容错：如果后端不支持流式，直接返回了完整 JSON 响应
+            if (line.startsWith("{") && line.endsWith("}")) {
+                val parsed = runCatching { parseResponse(line) }.getOrNull()
+                if (parsed != null) {
+                    if (!parsed.reasoningContent.isNullOrBlank()) {
+                        emit(ModelStreamChunk.ThinkingDelta(parsed.reasoningContent))
+                    }
+                    if (parsed.content.isNotBlank()) {
+                        emit(ModelStreamChunk.ContentDelta(parsed.content))
+                    }
+                    emit(ModelStreamChunk.Completed(parsed))
+                    completedEmitted = true
+                    return@collect
+                }
+            }
+
+            if (!line.startsWith("data:")) {
+                return@collect
+            }
+
+            val dataStr = line.removePrefix("data:").trim()
+            if (dataStr == "[DONE]") {
+                if (!completedEmitted) {
+                    val finalToolCalls = toolDrafts.values.mapNotNull { draft ->
+                        if (draft.id.isBlank() || draft.name.isBlank()) return@mapNotNull null
+                        val parsedInput = runCatching {
+                            val parsed = json.parseToJsonElement(draft.argsBuilder.toString())
+                            parsed as? JsonObject ?: JsonObject(emptyMap())
+                        }.getOrDefault(JsonObject(emptyMap()))
+                        ToolCall(id = draft.id, name = draft.name, input = parsedInput)
+                    }
+                    val response = ModelResponse(
+                        content = accumulatedContent.toString(),
+                        toolCalls = finalToolCalls,
+                        stopReason = currentStopReason,
+                        reasoningContent = accumulatedReasoning.toString().takeIf { it.isNotBlank() }
+                    )
+                    emit(ModelStreamChunk.Completed(response))
+                    completedEmitted = true
+                }
+                return@collect
+            }
+
+            val dataElement = runCatching { json.parseToJsonElement(dataStr) }.getOrNull() ?: return@collect
+            val dataObj = dataElement as? JsonObject ?: return@collect
+
+            val choices = dataObj["choices"]?.jsonArray ?: return@collect
+            val firstChoice = choices.firstOrNull()?.jsonObject ?: return@collect
+            val finishReason = firstChoice["finish_reason"]?.jsonPrimitive?.contentOrNull
+            if (!finishReason.isNullOrBlank()) {
+                currentStopReason = finishReason
+            }
+
+            val delta = firstChoice["delta"]?.jsonObject ?: return@collect
+
+            // 思考链增量（Reasoning / CoT，OpenAI 协议常用 reasoning_content）
+            val reasoning = delta["reasoning_content"]?.jsonPrimitive?.contentOrNull
+            if (!reasoning.isNullOrEmpty()) {
+                accumulatedReasoning.append(reasoning)
+                emit(ModelStreamChunk.ThinkingDelta(reasoning))
+            }
+
+            // 正文内容增量
+            val content = delta["content"]?.jsonPrimitive?.contentOrNull
+            if (!content.isNullOrEmpty()) {
+                accumulatedContent.append(content)
+                emit(ModelStreamChunk.ContentDelta(content))
+            }
+
+            // 工具调用分片
+            val toolCallsArray = delta["tool_calls"]?.jsonArray
+            toolCallsArray?.forEach { toolElement ->
+                val toolObj = toolElement.jsonObject
+                val index = toolObj["index"]?.jsonPrimitive?.contentOrNull?.toIntOrNull() ?: toolDrafts.size
+                val draft = toolDrafts.getOrPut(index) { ToolCallDraft() }
+
+                val id = toolObj["id"]?.jsonPrimitive?.contentOrNull
+                if (!id.isNullOrBlank()) {
+                    draft.id = id
+                }
+
+                val functionObj = toolObj["function"]?.jsonObject
+                if (functionObj != null) {
+                    val name = functionObj["name"]?.jsonPrimitive?.contentOrNull
+                    if (!name.isNullOrBlank()) {
+                        draft.name = name
+                    }
+                    val args = functionObj["arguments"]?.jsonPrimitive?.contentOrNull
+                    if (!args.isNullOrEmpty()) {
+                        draft.argsBuilder.append(args)
+                    }
+                }
+            }
+        }
+
+        // 流结束兜底
+        if (!completedEmitted) {
+            val finalToolCalls = toolDrafts.values.mapNotNull { draft ->
+                if (draft.id.isBlank() || draft.name.isBlank()) return@mapNotNull null
+                val parsedInput = runCatching {
+                    val parsed = json.parseToJsonElement(draft.argsBuilder.toString())
+                    parsed as? JsonObject ?: JsonObject(emptyMap())
+                }.getOrDefault(JsonObject(emptyMap()))
+                ToolCall(id = draft.id, name = draft.name, input = parsedInput)
+            }
+            val response = ModelResponse(
+                content = accumulatedContent.toString(),
+                toolCalls = finalToolCalls,
+                stopReason = currentStopReason,
+                reasoningContent = accumulatedReasoning.toString().takeIf { it.isNotBlank() }
+            )
+            emit(ModelStreamChunk.Completed(response))
+        }
+    }
+
+    private fun requestBody(request: ModelRequest, stream: Boolean = false): JsonObject {
         return buildJsonObject {
             put("model", model)
+            if (stream) {
+                put("stream", true)
+            }
             put("messages", JsonArray(request.messages.map { it.toOpenAiMessage() }))
             if (request.tools.isNotEmpty()) {
                 put("tools", JsonArray(request.tools.map { it.toOpenAiTool() }))
@@ -67,7 +221,30 @@ class OpenAiChatCompletionsProvider(
 
             is AgentMessage.User -> buildJsonObject {
                 put("role", "user")
-                put("content", content)
+                if (images.isEmpty()) {
+                    put("content", content)
+                } else {
+                    putJsonArray("content") {
+                        images.forEach { img ->
+                            add(
+                                buildJsonObject {
+                                    put("type", "image_url")
+                                    putJsonObject("image_url") {
+                                        put("url", "data:${img.mimeType};base64,${img.base64Data}")
+                                    }
+                                }
+                            )
+                        }
+                        if (content.isNotBlank()) {
+                            add(
+                                buildJsonObject {
+                                    put("type", "text")
+                                    put("text", content)
+                                }
+                            )
+                        }
+                    }
+                }
             }
 
             is AgentMessage.Assistant -> buildJsonObject {

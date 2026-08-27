@@ -178,7 +178,7 @@ class AgentRuntime(
     ): Flow<AgentEvent> = flow {
         require(maxIterations > 0) { "maxIterations must be greater than 0" }
 
-        session.messages += userMessageWithTimeContext(input.content)
+        session.messages += userMessageWithTimeContext(input.content, input.images)
         emit(
             AgentEvent.Started(
                 sessionId = session.id,
@@ -211,14 +211,27 @@ class AgentRuntime(
                 )
             )
             val startedAt = System.currentTimeMillis()
-            val response = try {
-                llmProvider.generate(
+            var fullResponse: ModelResponse? = null
+            try {
+                llmProvider.generateStream(
                     ModelRequest(
                         sessionId = session.id,
                         messages = requestMessages,
                         tools = tools
                     )
-                )
+                ).collect { chunk ->
+                    when (chunk) {
+                        is ModelStreamChunk.ThinkingDelta -> {
+                            emit(AgentEvent.ModelThinkingDelta(chunk.delta))
+                        }
+                        is ModelStreamChunk.ContentDelta -> {
+                            emit(AgentEvent.ModelContentDelta(chunk.delta))
+                        }
+                        is ModelStreamChunk.Completed -> {
+                            fullResponse = chunk.response
+                        }
+                    }
+                }
             } catch (error: CancellationException) {
                 throw error
             } catch (error: Throwable) {
@@ -227,6 +240,11 @@ class AgentRuntime(
                         error.message ?: error::class.java.name
                     )
                 )
+                return@flow
+            }
+
+            val response = fullResponse ?: run {
+                emit(AgentEvent.Failed("模型响应流异常中断，未获取到完整响应"))
                 return@flow
             }
 
@@ -361,14 +379,19 @@ class AgentRuntime(
         val context = timeContext ?: timeContextProvider.currentContext()
         return AgentMessage.User(
             content = "${context.prefix()}\n$content",
-            timeContext = context
+            timeContext = context,
+            images = images
         )
     }
 
-    private fun userMessageWithTimeContext(content: String): AgentMessage.User {
+    private fun userMessageWithTimeContext(
+        content: String,
+        images: List<AgentImageContent> = emptyList()
+    ): AgentMessage.User {
         return AgentMessage.User(
             content = content,
-            timeContext = timeContextProvider.currentContext()
+            timeContext = timeContextProvider.currentContext(),
+            images = images
         )
     }
 

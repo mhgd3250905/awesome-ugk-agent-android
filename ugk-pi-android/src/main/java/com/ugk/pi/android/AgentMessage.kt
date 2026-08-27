@@ -4,16 +4,21 @@ sealed class AgentMessage {
     data class System(val content: String) : AgentMessage()
     class User(
         val content: String,
-        val timeContext: AgentTimeContext? = null
+        val timeContext: AgentTimeContext? = null,
+        val images: List<AgentImageContent> = emptyList()
     ) : AgentMessage() {
         override fun equals(other: Any?): Boolean {
-            return other is User && content == other.content
+            return other is User && content == other.content && images == other.images
         }
 
-        override fun hashCode(): Int = content.hashCode()
+        override fun hashCode(): Int = 31 * content.hashCode() + images.hashCode()
 
         override fun toString(): String {
-            return "User(content=$content)"
+            return if (images.isEmpty()) {
+                "User(content=$content)"
+            } else {
+                "User(content=$content, images=${images.size})"
+            }
         }
     }
     data class Assistant(

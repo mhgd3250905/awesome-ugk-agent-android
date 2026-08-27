@@ -41,6 +41,20 @@ import com.ugk.pi.android.LLMProvider
 import com.ugk.pi.android.ModelRequest
 import com.ugk.pi.android.ModelResponse
 import com.ugk.pi.terminal.skill.TerminalAgentPlugin
+import android.Manifest
+import android.content.pm.PackageManager
+import android.graphics.BitmapFactory
+import android.graphics.Outline
+import android.graphics.drawable.GradientDrawable
+import android.net.Uri
+import android.provider.MediaStore
+import android.view.ViewOutlineProvider
+import android.widget.ImageView
+import androidx.core.app.ActivityCompat
+import androidx.core.content.ContextCompat
+import com.ugk.pi.android.AgentImageContent
+import com.ugk.pi.android.OpenAiChatCompletionsProvider
+import java.io.File
 import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.SupervisorJob
@@ -92,6 +106,10 @@ class MainActivity : Activity() {
     private lateinit var sendButton: SendActionButton
     private var pendingImportedFiles: List<DemoImportedFile> = emptyList()
     private var importingFile = false
+    private var pendingImage: ProcessedImage? = null
+    private var cameraPhotoFile: File? = null
+    private lateinit var pendingImagePreviewContainer: LinearLayout
+    private lateinit var pendingImageView: ImageView
     private val fileImportScope = CoroutineScope(SupervisorJob() + Dispatchers.Main.immediate)
     private lateinit var providerLabel: TextView
     private lateinit var runStatusLabel: TextView
@@ -172,26 +190,109 @@ class MainActivity : Activity() {
     @Deprecated("Use the file picker callback when the Activity Result API is adopted.")
     override fun onActivityResult(requestCode: Int, resultCode: Int, data: Intent?) {
         super.onActivityResult(requestCode, resultCode, data)
-        if (requestCode != REQUEST_IMPORT_FILE || resultCode != RESULT_OK) return
-        val uri = data?.data ?: return
-        if (importingFile) return
-        importingFile = true
-        updateComposerState()
-        fileImportScope.launch {
-            val result = withContext(Dispatchers.IO) { fileImportStore.importFile(uri) }
-            importingFile = false
-            when (result) {
-                is DemoFileImportResult.Success -> {
-                    pendingImportedFiles = (pendingImportedFiles + result.file)
-                        .takeLast(MAX_PENDING_IMPORTED_FILES)
-                    showInlineNotice("已导入文件：${result.file.displayName}")
-                    updateComposerState()
-                }
+        if (resultCode != RESULT_OK) return
+        when (requestCode) {
+            REQUEST_PICK_IMAGE -> {
+                val uri = data?.data ?: return
+                handleSelectedImageUri(uri)
+            }
+            REQUEST_TAKE_PHOTO -> {
+                val file = cameraPhotoFile ?: return
+                handleSelectedImageUri(Uri.fromFile(file))
+            }
+            REQUEST_IMPORT_FILE -> {
+                val uri = data?.data ?: return
+                if (importingFile) return
+                importingFile = true
+                updateComposerState()
+                fileImportScope.launch {
+                    val result = withContext(Dispatchers.IO) { fileImportStore.importFile(uri) }
+                    importingFile = false
+                    when (result) {
+                        is DemoFileImportResult.Success -> {
+                            pendingImportedFiles = (pendingImportedFiles + result.file)
+                                .takeLast(MAX_PENDING_IMPORTED_FILES)
+                            showInlineNotice("已导入文件：${result.file.displayName}")
+                            updateComposerState()
+                        }
 
-                is DemoFileImportResult.Failure -> {
-                    showInlineNotice("文件导入失败：${result.message}")
-                    updateComposerState()
+                        is DemoFileImportResult.Failure -> {
+                            showInlineNotice("文件导入失败：${result.message}")
+                            updateComposerState()
+                        }
+                    }
                 }
+            }
+        }
+    }
+
+    override fun onRequestPermissionsResult(
+        requestCode: Int,
+        permissions: Array<out String>,
+        grantResults: IntArray
+    ) {
+        super.onRequestPermissionsResult(requestCode, permissions, grantResults)
+        if (requestCode == REQUEST_CAMERA_PERMISSION && grantResults.firstOrNull() == PackageManager.PERMISSION_GRANTED) {
+            openCamera()
+        }
+    }
+
+    private fun showAttachmentMenu() {
+        if (runState.isBusy || importingFile) return
+        val options = arrayOf("📸  拍照", "🖼️  从相册选择图片", "📁  导入文档/文件")
+        AlertDialog.Builder(this)
+            .setTitle("附件与多模态识图")
+            .setItems(options) { _, which ->
+                when (which) {
+                    0 -> openCamera()
+                    1 -> openGalleryPicker()
+                    2 -> openFilePicker()
+                }
+            }
+            .show()
+    }
+
+    private fun openGalleryPicker() {
+        if (runState.isBusy || importingFile) return
+        val intent = Intent(Intent.ACTION_GET_CONTENT).apply {
+            type = "image/*"
+            addCategory(Intent.CATEGORY_OPENABLE)
+        }
+        startActivityForResult(intent, REQUEST_PICK_IMAGE)
+    }
+
+    private fun openCamera() {
+        if (runState.isBusy || importingFile) return
+        if (ContextCompat.checkSelfPermission(this, Manifest.permission.CAMERA) != PackageManager.PERMISSION_GRANTED) {
+            ActivityCompat.requestPermissions(this, arrayOf(Manifest.permission.CAMERA), REQUEST_CAMERA_PERMISSION)
+            return
+        }
+        val photoFile = DemoImageUtils.createCameraPhotoFile(this)
+        cameraPhotoFile = photoFile
+        val uri = DemoImageUtils.getFileProviderUri(this, photoFile)
+        val intent = Intent(MediaStore.ACTION_IMAGE_CAPTURE).apply {
+            putExtra(MediaStore.EXTRA_OUTPUT, uri)
+            addFlags(Intent.FLAG_GRANT_WRITE_URI_PERMISSION or Intent.FLAG_GRANT_READ_URI_PERMISSION)
+        }
+        startActivityForResult(intent, REQUEST_TAKE_PHOTO)
+    }
+
+    private fun handleSelectedImageUri(uri: Uri) {
+        fileImportScope.launch {
+            val processed = withContext(Dispatchers.IO) {
+                DemoImageUtils.processImageUri(this@MainActivity, uri)
+            }
+            if (processed != null) {
+                pendingImage = processed
+                val bitmap = BitmapFactory.decodeFile(processed.file.absolutePath)
+                if (bitmap != null) {
+                    pendingImageView.setImageBitmap(bitmap)
+                }
+                pendingImagePreviewContainer.visibility = View.VISIBLE
+                updateComposerState()
+                showInlineNotice("已选定图片，可直接发送或补充提问")
+            } else {
+                showInlineNotice("无法解析该图片，请重试")
             }
         }
     }
@@ -521,10 +622,10 @@ class MainActivity : Activity() {
             setOnClickListener { sendMessage() }
         }
         importButton = ImportActionButton(this).apply {
-            contentDescription = "导入文件"
+            contentDescription = "附件与识图"
             isClickable = true
             isFocusable = false
-            setOnClickListener { openFilePicker() }
+            setOnClickListener { showAttachmentMenu() }
         }
         inputShellLayout = LinearLayout(this).apply {
             orientation = LinearLayout.HORIZONTAL
@@ -555,10 +656,65 @@ class MainActivity : Activity() {
             gravity = Gravity.CENTER
             setPadding(dp(4), dp(6), dp(4), 0)
         }
+
+        pendingImageView = ImageView(this).apply {
+            scaleType = ImageView.ScaleType.CENTER_CROP
+            clipToOutline = true
+            outlineProvider = object : ViewOutlineProvider() {
+                override fun getOutline(view: View, outline: Outline) {
+                    outline.setRoundRect(0, 0, view.width, view.height, dp(10).toFloat())
+                }
+            }
+            background = Ui.rounded(this@MainActivity, Ui.SurfaceElevated, 10, Ui.Outline, 1)
+        }
+        val removeImageBtn = TextView(this).apply {
+            text = "✕"
+            textSize = 11f
+            gravity = Gravity.CENTER
+            setTextColor(Color.WHITE)
+            background = GradientDrawable().apply {
+                shape = GradientDrawable.OVAL
+                setColor(Color.argb(190, 40, 42, 48))
+            }
+            setOnClickListener {
+                pendingImage = null
+                pendingImagePreviewContainer.visibility = View.GONE
+                updateComposerState()
+            }
+        }
+        val imageBadgeLayout = FrameLayout(this).apply {
+            addView(pendingImageView, FrameLayout.LayoutParams(dp(54), dp(54)))
+            addView(removeImageBtn, FrameLayout.LayoutParams(dp(20), dp(20)).apply {
+                gravity = Gravity.TOP or Gravity.END
+                topMargin = dp(-4)
+                marginEnd = dp(-4)
+            })
+            clipChildren = false
+        }
+        val imageNoticeText = TextView(this).apply {
+            text = "已选定待发送图片（可直接点击发送或输入提问）"
+            textSize = 12f
+            setTextColor(Ui.TextSecondary)
+            setPadding(dp(10), 0, 0, 0)
+        }
+        pendingImagePreviewContainer = LinearLayout(this).apply {
+            orientation = LinearLayout.HORIZONTAL
+            gravity = Gravity.CENTER_VERTICAL
+            clipChildren = false
+            visibility = View.GONE
+            setPadding(dp(4), dp(2), dp(4), dp(6))
+            addView(imageBadgeLayout)
+            addView(imageNoticeText)
+        }
+
         composerLayout = LinearLayout(this).apply {
             orientation = LinearLayout.VERTICAL
             setPadding(dp(12), dp(6), dp(12), dp(8))
             background = Ui.rounded(this@MainActivity, Ui.SurfaceElevated, 0, Ui.Outline, 1)
+            addView(pendingImagePreviewContainer, LinearLayout.LayoutParams(
+                LinearLayout.LayoutParams.MATCH_PARENT,
+                LinearLayout.LayoutParams.WRAP_CONTENT
+            ))
             addView(inputShellLayout, LinearLayout.LayoutParams(
                 LinearLayout.LayoutParams.MATCH_PARENT,
                 LinearLayout.LayoutParams.WRAP_CONTENT
@@ -795,15 +951,19 @@ class MainActivity : Activity() {
         }
         val text = inputField.text.toString().trim()
         val attachments = pendingImportedFiles.toList()
-        if (text.isBlank() && attachments.isEmpty()) return
+        val image = pendingImage
+        if (text.isBlank() && attachments.isEmpty() && image == null) return
         if (DemoActivityState.runCoordinator.isRunning()) {
-            val queuedMessage = buildAgentMessage(text, attachments)
+            val effectiveText = if (text.isBlank() && image != null) "请分析并识别这张图片" else text
+            val queuedMessage = buildAgentMessage(effectiveText, attachments)
             if (DemoActivityState.runCoordinator.enqueue(queuedMessage)) {
                 inputField.setText("")
                 DemoActivityState.draft = ""
                 pendingImportedFiles = emptyList()
+                pendingImage = null
+                pendingImagePreviewContainer.visibility = View.GONE
                 updateCapabilityBanner()
-                floatingWindow.addLog("已排队：${text.take(48)}")
+                floatingWindow.addLog("已排队：${effectiveText.take(48)}")
                 renderRunState()
             } else {
                 showInlineNotice("消息队列已满，请稍后再试")
@@ -816,10 +976,12 @@ class MainActivity : Activity() {
         if (apiStore.activeConfig() != null) {
             maybeOfferOverlayPermission()
         }
-        if (runAgent(text, attachments)) {
+        if (runAgent(text, attachments, image)) {
             DemoActivityState.draft = ""
             inputField.setText("")
             pendingImportedFiles = emptyList()
+            pendingImage = null
+            pendingImagePreviewContainer.visibility = View.GONE
             updateCapabilityBanner()
         }
     }
@@ -900,21 +1062,31 @@ class MainActivity : Activity() {
 
     private fun runAgent(
         text: String,
-        attachments: List<DemoImportedFile> = emptyList()
+        attachments: List<DemoImportedFile> = emptyList(),
+        image: ProcessedImage? = null
     ): Boolean {
         if (runState.isBusy || DemoActivityState.runCoordinator.isRunning()) return false
         val currentRuntime = runtime ?: return false
-        val message = buildAgentMessage(text, attachments)
+        val effectiveText = if (text.isBlank() && image != null) "请分析并识别这张图片" else text
+        val message = buildAgentMessage(effectiveText, attachments)
         if (message.isBlank()) return false
 
         setScreenAutomationActive(false)
 
         if (activeConversation.title == "新对话") {
-            val titleSeed = text.trim().ifBlank { attachments.firstOrNull()?.displayName.orEmpty() }
+            val titleSeed = when {
+                effectiveText.isNotBlank() && effectiveText != "请分析并识别这张图片" -> effectiveText.trim()
+                image != null -> "图片识别分析"
+                else -> attachments.firstOrNull()?.displayName.orEmpty()
+            }
             activeConversation.title = conversationStore.suggestedTitle(titleSeed)
         }
         val isFirstMessage = activeConversation.messages.none { it.role == "user" || it.role == "assistant" }
-        activeConversation.messages += DemoStoredMessage("user", message)
+        activeConversation.messages += DemoStoredMessage(
+            role = "user",
+            content = message,
+            imagePath = image?.file?.absolutePath
+        )
         activeConversation.updatedAt = System.currentTimeMillis()
         conversationStore.save(activeConversation)
         syncTranscript()
@@ -925,7 +1097,7 @@ class MainActivity : Activity() {
         if (isFirstMessage) {
             messageContainer.removeAllViews()
         }
-        addChatMessage(DemoChatMessageRole.USER, message)
+        addChatMessage(DemoChatMessageRole.USER, message, image?.file?.absolutePath)
         addProcessCard()
         DemoActivityState.activeConversationId = activeConversation.id
 
@@ -939,11 +1111,18 @@ class MainActivity : Activity() {
             sessionId = session.id
         )
 
+        val imageContents = if (image != null) {
+            listOf(AgentImageContent(image.base64Data, image.mimeType))
+        } else {
+            emptyList()
+        }
+
         DemoActivityState.runCoordinator.start(
             runtime = currentRuntime,
             session = session,
             conversationId = activeConversation.id,
-            message = message
+            message = message,
+            images = imageContents
         )
         runState = DemoActivityState.runCoordinator.snapshot().state
         renderRunState()
@@ -1091,9 +1270,13 @@ class MainActivity : Activity() {
             ?: run { assistantMessageView = addChatMessage(DemoChatMessageRole.ASSISTANT, text) }
     }
 
-    private fun addChatMessage(role: DemoChatMessageRole, text: String): DemoChatMessageView {
+    private fun addChatMessage(
+        role: DemoChatMessageRole,
+        text: String,
+        imagePath: String? = null
+    ): DemoChatMessageView {
         val view = DemoChatMessageView(this).apply {
-            bind(role, text)
+            bind(role, text, imagePath)
         }
         messageContainer.addView(view, LinearLayout.LayoutParams(
             LinearLayout.LayoutParams.MATCH_PARENT,
@@ -1239,21 +1422,26 @@ class MainActivity : Activity() {
         inputField.isEnabled = !busy
         val hasText = !inputField.text.isNullOrBlank()
         val hasAttachments = pendingImportedFiles.isNotEmpty()
-        val actionable = busy || hasText || hasAttachments
+        val hasImage = pendingImage != null
+        val actionable = busy || hasText || hasAttachments || hasImage
         if (::importButton.isInitialized) {
             importButton.isEnabled = !busy && !importingFile
             importButton.alpha = if (busy || importingFile) 0.45f else 1f
-            importButton.hasAttachments = hasAttachments
+            importButton.hasAttachments = hasAttachments || hasImage
         }
-        if (::composerHint.isInitialized && hasAttachments) {
-            composerHint.text = "附件：" + pendingImportedFiles.joinToString("、") { it.displayName }
+        if (::composerHint.isInitialized) {
+            when {
+                hasAttachments -> composerHint.text = "附件：" + pendingImportedFiles.joinToString("、") { it.displayName }
+                hasImage -> composerHint.text = "已选定图片，可直接发送或输入提问"
+                else -> composerHint.text = "Agent 会按需调用工具，重要操作会先请求确认"
+            }
         }
         sendButton.contentDescription = getString(
             if (busy) R.string.content_description_stop else R.string.content_description_send
         )
         sendButton.buttonState = when {
             busy -> SendActionButton.State.BUSY
-            hasText || hasAttachments -> SendActionButton.State.ACTIVE
+            hasText || hasAttachments || hasImage -> SendActionButton.State.ACTIVE
             else -> SendActionButton.State.DISABLED
         }
         sendButton.isEnabled = actionable
@@ -1292,7 +1480,7 @@ class MainActivity : Activity() {
             val hasProcess = runState.isBusy || runState.steps.isNotEmpty()
             activeConversation.messages.forEachIndexed { index, message ->
                 when (message.role) {
-                    "user" -> addChatMessage(DemoChatMessageRole.USER, message.content)
+                    "user" -> addChatMessage(DemoChatMessageRole.USER, message.content, message.imagePath)
                     "assistant" -> addChatMessage(DemoChatMessageRole.ASSISTANT, message.content)
                 }
                 if (hasProcess && index == processIndex) addProcessCard()
@@ -1683,6 +1871,9 @@ class MainActivity : Activity() {
         const val KEY_DRAFT = "demo_draft"
         const val MAX_VISIBLE_CHAT_MESSAGES = 100
         const val REQUEST_IMPORT_FILE = 4101
+        const val REQUEST_TAKE_PHOTO = 4102
+        const val REQUEST_PICK_IMAGE = 4103
+        const val REQUEST_CAMERA_PERMISSION = 4104
         const val MAX_PENDING_IMPORTED_FILES = 3
     }
 

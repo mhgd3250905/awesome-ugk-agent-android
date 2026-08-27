@@ -16,6 +16,9 @@ import kotlinx.serialization.json.putJsonArray
 import kotlinx.serialization.json.putJsonObject
 import kotlinx.coroutines.CancellationException
 import kotlinx.coroutines.delay
+import kotlinx.coroutines.flow.Flow
+import kotlinx.coroutines.flow.emitAll
+import kotlinx.coroutines.flow.flow
 
 data class AnthropicRetryPolicy(
     val maxAttempts: Int = 3,
@@ -50,7 +53,7 @@ class AnthropicMessagesProvider(
                 "anthropic-version" to anthropicVersion,
                 "content-type" to "application/json"
             ),
-            body = requestBody(request).toString()
+            body = requestBody(request, stream = false).toString()
         )
         val httpResponse = executeWithRetry(httpRequest)
 
@@ -61,6 +64,167 @@ class AnthropicMessagesProvider(
         }
 
         return parseResponse(httpResponse.body)
+    }
+
+    override fun generateStream(request: ModelRequest): Flow<ModelStreamChunk> = flow {
+        val httpRequest = HttpRequest(
+            url = "${baseUrl.trimEnd('/')}/v1/messages",
+            headers = mapOf(
+                "x-api-key" to apiKey,
+                "anthropic-version" to anthropicVersion,
+                "content-type" to "application/json"
+            ),
+            body = requestBody(request, stream = true).toString()
+        )
+
+        val rawLinesFlow = transport.postStream(httpRequest)
+        emitAll(parseSseStream(rawLinesFlow))
+    }
+
+    private fun parseSseStream(rawLines: Flow<String>): Flow<ModelStreamChunk> = flow {
+        val accumulatedContent = StringBuilder()
+        val accumulatedThinking = StringBuilder()
+        val toolCalls = mutableListOf<ToolCall>()
+        var currentStopReason: String? = null
+
+        var currentToolId: String? = null
+        var currentToolName: String? = null
+        val currentToolInputJson = StringBuilder()
+        var completedEmitted = false
+
+        rawLines.collect { rawLine ->
+            val line = rawLine.trim()
+            if (line.isEmpty() || line.startsWith(":")) {
+                // SSE 注释或心跳行
+                return@collect
+            }
+
+            // 容错：如果后端不支持 SSE，直接返回了完整 JSON 字符串
+            if (line.startsWith("{") && line.endsWith("}")) {
+                val parsed = runCatching { parseResponse(line) }.getOrNull()
+                if (parsed != null) {
+                    if (!parsed.reasoningContent.isNullOrBlank()) {
+                        emit(ModelStreamChunk.ThinkingDelta(parsed.reasoningContent))
+                    }
+                    if (parsed.content.isNotBlank()) {
+                        emit(ModelStreamChunk.ContentDelta(parsed.content))
+                    }
+                    emit(ModelStreamChunk.Completed(parsed))
+                    completedEmitted = true
+                    return@collect
+                }
+            }
+
+            if (!line.startsWith("data:")) {
+                return@collect
+            }
+
+            val dataStr = line.removePrefix("data:").trim()
+            if (dataStr == "[DONE]" || dataStr.isEmpty()) {
+                return@collect
+            }
+
+            val dataElement = runCatching { json.parseToJsonElement(dataStr) }.getOrNull() ?: return@collect
+            val dataObj = dataElement as? JsonObject ?: return@collect
+
+            when (dataObj["type"]?.jsonPrimitive?.contentOrNull) {
+                "content_block_start" -> {
+                    val block = dataObj["content_block"] as? JsonObject
+                    val blockType = block?.get("type")?.jsonPrimitive?.contentOrNull
+                    if (blockType == "tool_use") {
+                        currentToolId = block["id"]?.jsonPrimitive?.contentOrNull
+                        currentToolName = block["name"]?.jsonPrimitive?.contentOrNull
+                        currentToolInputJson.clear()
+                    }
+                }
+
+                "content_block_delta" -> {
+                    val delta = dataObj["delta"] as? JsonObject ?: return@collect
+                    when (delta["type"]?.jsonPrimitive?.contentOrNull) {
+                        "thinking_delta" -> {
+                            val thinking = delta["thinking"]?.jsonPrimitive?.contentOrNull
+                            if (!thinking.isNullOrEmpty()) {
+                                accumulatedThinking.append(thinking)
+                                emit(ModelStreamChunk.ThinkingDelta(thinking))
+                            }
+                        }
+
+                        "text_delta" -> {
+                            val text = delta["text"]?.jsonPrimitive?.contentOrNull
+                            if (!text.isNullOrEmpty()) {
+                                accumulatedContent.append(text)
+                                emit(ModelStreamChunk.ContentDelta(text))
+                            }
+                        }
+
+                        "input_json_delta" -> {
+                            val partial = delta["partial_json"]?.jsonPrimitive?.contentOrNull
+                            if (!partial.isNullOrEmpty()) {
+                                currentToolInputJson.append(partial)
+                            }
+                        }
+                    }
+                }
+
+                "content_block_stop" -> {
+                    if (currentToolId != null && currentToolName != null) {
+                        val inputParsed = runCatching {
+                            val parsed = json.parseToJsonElement(currentToolInputJson.toString())
+                            parsed as? JsonObject ?: JsonObject(emptyMap())
+                        }.getOrDefault(JsonObject(emptyMap()))
+
+                        toolCalls.add(
+                            ToolCall(
+                                id = currentToolId!!,
+                                name = currentToolName!!,
+                                input = inputParsed
+                            )
+                        )
+                        currentToolId = null
+                        currentToolName = null
+                        currentToolInputJson.clear()
+                    }
+                }
+
+                "message_delta" -> {
+                    val delta = dataObj["delta"] as? JsonObject
+                    val stopReason = delta?.get("stop_reason")?.jsonPrimitive?.contentOrNull
+                    if (!stopReason.isNullOrBlank()) {
+                        currentStopReason = stopReason
+                    }
+                }
+
+                "message_stop" -> {
+                    if (!completedEmitted) {
+                        val response = ModelResponse(
+                            content = accumulatedContent.toString(),
+                            toolCalls = toolCalls.toList(),
+                            stopReason = currentStopReason,
+                            reasoningContent = accumulatedThinking.toString().takeIf { it.isNotBlank() }
+                        )
+                        emit(ModelStreamChunk.Completed(response))
+                        completedEmitted = true
+                    }
+                }
+
+                "error" -> {
+                    val errorObj = dataObj["error"] as? JsonObject
+                    val message = errorObj?.get("message")?.jsonPrimitive?.contentOrNull ?: dataStr
+                    throw IllegalStateException("Anthropic SSE stream error: $message")
+                }
+            }
+        }
+
+        // 流正常完结兜底：如果服务端未正常发送 message_stop 便关闭了数据流
+        if (!completedEmitted) {
+            val response = ModelResponse(
+                content = accumulatedContent.toString(),
+                toolCalls = toolCalls.toList(),
+                stopReason = currentStopReason,
+                reasoningContent = accumulatedThinking.toString().takeIf { it.isNotBlank() }
+            )
+            emit(ModelStreamChunk.Completed(response))
+        }
     }
 
     private suspend fun executeWithRetry(request: HttpRequest): HttpResponse {
@@ -99,10 +263,13 @@ class AnthropicMessagesProvider(
         return this == 408 || this == 429 || this in 500..599
     }
 
-    private fun requestBody(request: ModelRequest): JsonObject {
+    private fun requestBody(request: ModelRequest, stream: Boolean = false): JsonObject {
         return buildJsonObject {
             put("model", model)
             put("max_tokens", maxTokens)
+            if (stream) {
+                put("stream", true)
+            }
 
             val systemText = request.messages
                 .filterIsInstance<AgentMessage.System>()
@@ -152,7 +319,32 @@ class AnthropicMessagesProvider(
             is AgentMessage.System -> error("System messages are serialized as the top-level system field")
             is AgentMessage.User -> buildJsonObject {
                 put("role", "user")
-                put("content", content)
+                if (images.isEmpty()) {
+                    put("content", content)
+                } else {
+                    putJsonArray("content") {
+                        images.forEach { img ->
+                            add(
+                                buildJsonObject {
+                                    put("type", "image")
+                                    putJsonObject("source") {
+                                        put("type", "base64")
+                                        put("media_type", img.mimeType)
+                                        put("data", img.base64Data)
+                                    }
+                                }
+                            )
+                        }
+                        if (content.isNotBlank()) {
+                            add(
+                                buildJsonObject {
+                                    put("type", "text")
+                                    put("text", content)
+                                }
+                            )
+                        }
+                    }
+                }
             }
 
             is AgentMessage.Assistant -> buildJsonObject {

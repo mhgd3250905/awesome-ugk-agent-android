@@ -94,9 +94,17 @@ android {
 
 dependencies {
     implementation(project(":ugk-pi-android"))
+    implementation(project(":pi-file-skill-android"))
     implementation(project(":pi-system-skill-android"))
     implementation(project(":pi-terminal-skill-android"))
     implementation("org.jetbrains.kotlinx:kotlinx-coroutines-android:1.7.3")
+    implementation("androidx.core:core-ktx:1.12.0")
+
+    // 成熟优秀的 Android 原生 Markdown 渲染框架 (CommonMark + Spannable)
+    implementation("io.noties.markwon:core:4.6.2")
+    implementation("io.noties.markwon:ext-tables:4.6.2")
+    implementation("io.noties.markwon:ext-strikethrough:4.6.2")
+    implementation("io.noties.markwon:ext-tasklist:4.6.2")
 
     testImplementation("junit:junit:4.13.2")
     androidTestImplementation("androidx.test.ext:junit:1.2.1")

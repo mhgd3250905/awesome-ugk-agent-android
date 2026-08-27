@@ -16,6 +16,7 @@ import android.view.MotionEvent
 import android.view.View
 import android.view.ViewGroup
 import android.widget.FrameLayout
+import android.widget.ImageView
 import android.widget.LinearLayout
 import android.widget.ScrollView
 import android.widget.TextView
@@ -115,6 +116,27 @@ class DemoChatMessageView @JvmOverloads constructor(
         importantForAccessibility = View.IMPORTANT_FOR_ACCESSIBILITY_NO
     }
 
+    private val userImageView = ImageView(context).apply {
+        scaleType = ImageView.ScaleType.CENTER_CROP
+        clipToOutline = true
+        outlineProvider = object : android.view.ViewOutlineProvider() {
+            override fun getOutline(view: View, outline: android.graphics.Outline) {
+                outline.setRoundRect(0, 0, view.width, view.height, context.chatDp(14).toFloat())
+            }
+        }
+        background = asymmetricRoundedBackground(
+            context = context,
+            fillColor = DemoChatPalette.userBubble,
+            strokeColor = DemoChatPalette.userStroke,
+            topLeftDp = 18,
+            topRightDp = 4,
+            bottomRightDp = 18,
+            bottomLeftDp = 18
+        )
+        visibility = View.GONE
+        importantForAccessibility = View.IMPORTANT_FOR_ACCESSIBILITY_NO
+    }
+
     private val assistantAvatar = TextView(context).apply {
         text = "✦"
         textSize = 13f
@@ -178,6 +200,12 @@ class DemoChatMessageView @JvmOverloads constructor(
     private val userMessageColumn = LinearLayout(context).apply {
         orientation = LinearLayout.VERTICAL
         gravity = Gravity.END
+        addView(userImageView, LinearLayout.LayoutParams(
+            context.chatDp(190),
+            context.chatDp(190)
+        ).apply {
+            bottomMargin = context.chatDp(6)
+        })
         addView(userBubble, LinearLayout.LayoutParams(
             LinearLayout.LayoutParams.WRAP_CONTENT,
             LinearLayout.LayoutParams.WRAP_CONTENT
@@ -235,26 +263,49 @@ class DemoChatMessageView @JvmOverloads constructor(
         bind(role, messageText)
     }
 
-    /** 绑定角色和消息正文；不会触发任何业务回调。 */
-    fun bind(role: DemoChatMessageRole, text: CharSequence) {
+    /** 绑定角色和消息正文，可选携带用户图片路径；不会触发任何业务回调。 */
+    @JvmOverloads
+    fun bind(role: DemoChatMessageRole, text: CharSequence, imagePath: String? = null) {
         this.role = role
         messageText = text.toString()
         if (role == DemoChatMessageRole.USER) {
             userMessageColumn.visibility = View.VISIBLE
             assistantContainer.visibility = View.GONE
-            userBubble.setTextColor(DemoChatPalette.textPrimary)
-            userBubble.background = asymmetricRoundedBackground(
-                context = context,
-                fillColor = DemoChatPalette.userBubble,
-                strokeColor = DemoChatPalette.userStroke,
-                topLeftDp = 18,
-                topRightDp = 4,
-                bottomRightDp = 18,
-                bottomLeftDp = 18
-            )
+
+            if (!imagePath.isNullOrBlank() && java.io.File(imagePath).exists()) {
+                val bitmap = runCatching { android.graphics.BitmapFactory.decodeFile(imagePath) }.getOrNull()
+                if (bitmap != null) {
+                    userImageView.setImageBitmap(bitmap)
+                    userImageView.visibility = View.VISIBLE
+                    userImageView.isClickable = true
+                    userImageView.setOnClickListener {
+                        showFullImageDialog(context, imagePath)
+                    }
+                } else {
+                    userImageView.visibility = View.GONE
+                }
+            } else {
+                userImageView.visibility = View.GONE
+            }
+
+            if (messageText.isNotBlank()) {
+                userBubble.visibility = View.VISIBLE
+                userBubble.setTextColor(DemoChatPalette.textPrimary)
+                userBubble.background = asymmetricRoundedBackground(
+                    context = context,
+                    fillColor = DemoChatPalette.userBubble,
+                    strokeColor = DemoChatPalette.userStroke,
+                    topLeftDp = 18,
+                    topRightDp = 4,
+                    bottomRightDp = 18,
+                    bottomLeftDp = 18
+                )
+                userBubble.text = messageText
+            } else {
+                userBubble.visibility = View.GONE
+            }
             userCopyButton.background = pressedCardBackground(context)
             userCopyButton.setTextColor(DemoChatPalette.textSecondary)
-            userBubble.text = messageText
         } else {
             userMessageColumn.visibility = View.GONE
             assistantContainer.visibility = View.VISIBLE
@@ -1175,3 +1226,29 @@ private fun pressedCardBackground(context: Context): Drawable = StateListDrawabl
         )
     )
 }
+
+private fun showFullImageDialog(context: Context, imagePath: String) {
+    val dialog = android.app.Dialog(context, android.R.style.Theme_Black_NoTitleBar_Fullscreen)
+    val container = FrameLayout(context).apply {
+        setBackgroundColor(Color.argb(235, 10, 11, 14))
+        setOnClickListener { dialog.dismiss() }
+    }
+    val fullImageView = ImageView(context).apply {
+        val bitmap = runCatching { android.graphics.BitmapFactory.decodeFile(imagePath) }.getOrNull()
+        if (bitmap != null) {
+            setImageBitmap(bitmap)
+        }
+        scaleType = ImageView.ScaleType.FIT_CENTER
+        setOnClickListener { dialog.dismiss() }
+    }
+    container.addView(
+        fullImageView,
+        FrameLayout.LayoutParams(
+            FrameLayout.LayoutParams.MATCH_PARENT,
+            FrameLayout.LayoutParams.MATCH_PARENT
+        )
+    )
+    dialog.setContentView(container)
+    dialog.show()
+}
+

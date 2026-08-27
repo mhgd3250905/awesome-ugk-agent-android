@@ -1,6 +1,8 @@
 package com.ugk.pi.android.testapp
 
 import com.ugk.pi.android.AgentEvent
+import com.ugk.pi.android.AgentImageContent
+import com.ugk.pi.android.AgentRunInput
 import com.ugk.pi.android.AgentRuntime
 import com.ugk.pi.android.AgentSession
 import kotlinx.coroutines.CancellationException
@@ -76,7 +78,8 @@ class DemoAgentRunCoordinator(
         runtime: AgentRuntime,
         session: AgentSession,
         conversationId: String,
-        message: String
+        message: String,
+        images: List<AgentImageContent> = emptyList()
     ): Long {
         check(job == null) { "An Agent run is already active" }
         val runId = ++generation
@@ -92,7 +95,8 @@ class DemoAgentRunCoordinator(
         launchedJob = scope.launch(start = CoroutineStart.LAZY) {
             try {
                 withContext(Dispatchers.Default) {
-                    runtime.run(runSession, message).collect { event ->
+                    val input = AgentRunInput(content = message, images = images)
+                    runtime.run(runSession, input).collect { event ->
                         withContext(mainDispatcher) {
                             dispatch(runId, event)
                         }

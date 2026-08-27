@@ -102,6 +102,67 @@ class OpenAiChatCompletionsProviderTest {
         assertTrue(transport.request.body.contains("\"tools\""))
     }
 
+    @Test
+    fun generateIncludesMultimodalImageContent() = runBlocking {
+        val transport = RecordingHttpTransport(
+            """
+                {
+                  "choices": [
+                    {
+                      "message": {
+                        "content": "识别到图片内容：红苹果"
+                      }
+                    }
+                  ]
+                }
+            """.trimIndent()
+        )
+        val provider = OpenAiChatCompletionsProvider(
+            apiKey = "test-key",
+            model = "gpt-4o",
+            transport = transport
+        )
+
+        val response = provider.generate(
+            ModelRequest(
+                sessionId = "s-multimodal-openai",
+                messages = listOf(
+                    AgentMessage.User(
+                        content = "识别图片",
+                        images = listOf(
+                            AgentImageContent(
+                                base64Data = "iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAYAAAAfFcSJAAAADUlEQVR42mNk+M9QDwADhgGAWjR9awAAAABJRU5ErkJggg==",
+                                mimeType = "image/png"
+                            )
+                        )
+                    )
+                ),
+                tools = emptyList()
+            )
+        )
+
+        assertEquals("识别到图片内容：红苹果", response.content)
+        val body = kotlinx.serialization.json.Json.parseToJsonElement(transport.request.body).let {
+            it as kotlinx.serialization.json.JsonObject
+        }
+        val messages = body["messages"]?.let { it as kotlinx.serialization.json.JsonArray }
+        val userMsg = messages?.firstOrNull()?.let { it as kotlinx.serialization.json.JsonObject }
+        assertEquals("user", userMsg?.get("role")?.let { (it as kotlinx.serialization.json.JsonPrimitive).content })
+        val contentArray = userMsg?.get("content")?.let { it as kotlinx.serialization.json.JsonArray }
+        org.junit.Assert.assertNotNull(contentArray)
+        assertEquals(2, contentArray!!.size)
+
+        val imgObj = contentArray[0] as kotlinx.serialization.json.JsonObject
+        assertEquals("image_url", (imgObj["type"] as kotlinx.serialization.json.JsonPrimitive).content)
+        val imgUrlObj = imgObj["image_url"] as kotlinx.serialization.json.JsonObject
+        val url = (imgUrlObj["url"] as kotlinx.serialization.json.JsonPrimitive).content
+        assertEquals("data:image/png;base64,iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAYAAAAfFcSJAAAADUlEQVR42mNk+M9QDwADhgGAWjR9awAAAABJRU5ErkJggg==", url)
+
+        val textObj = contentArray[1] as kotlinx.serialization.json.JsonObject
+        assertEquals("text", (textObj["type"] as kotlinx.serialization.json.JsonPrimitive).content)
+        assertEquals("识别图片", (textObj["text"] as kotlinx.serialization.json.JsonPrimitive).content)
+    }
+
     private class RecordingHttpTransport(
         private val responseBody: String
     ) : HttpTransport {

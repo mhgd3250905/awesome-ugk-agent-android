@@ -9,7 +9,8 @@ import java.util.UUID
 data class DemoStoredMessage(
     val role: String,
     val content: String,
-    val createdAt: Long = System.currentTimeMillis()
+    val createdAt: Long = System.currentTimeMillis(),
+    val imagePath: String? = null
 )
 
 enum class DemoMessageRole {
@@ -167,11 +168,13 @@ class DemoConversationStore(context: Context) {
                         val encoded = encodedMessages.optJSONObject(messageIndex) ?: continue
                         val role = encoded.optString("role").trim()
                         val content = encoded.optString("content")
-                        if (role !in ALLOWED_ROLES || content.isBlank()) continue
+                        val imagePath = encoded.optString("imagePath").takeIf { it.isNotBlank() }
+                        if (role !in ALLOWED_ROLES || (content.isBlank() && imagePath.isNullOrBlank())) continue
                         messages += DemoStoredMessage(
                             role = role,
                             content = content.take(MAX_MESSAGE_CHARS),
-                            createdAt = encoded.optLong("createdAt", System.currentTimeMillis())
+                            createdAt = encoded.optLong("createdAt", System.currentTimeMillis()),
+                            imagePath = imagePath
                         )
                     }
                     add(
@@ -234,12 +237,14 @@ class DemoConversationStore(context: Context) {
                 .put("updatedAt", conversation.updatedAt)
             val messages = JSONArray()
             conversation.messages.takeLast(MAX_MESSAGES).forEach { message ->
-                messages.put(
-                    JSONObject()
-                        .put("role", message.role)
-                        .put("content", message.content.take(MAX_MESSAGE_CHARS))
-                        .put("createdAt", message.createdAt)
-                )
+                val msgObj = JSONObject()
+                    .put("role", message.role)
+                    .put("content", message.content.take(MAX_MESSAGE_CHARS))
+                    .put("createdAt", message.createdAt)
+                if (!message.imagePath.isNullOrBlank()) {
+                    msgObj.put("imagePath", message.imagePath)
+                }
+                messages.put(msgObj)
             }
             item.put("messages", messages)
             root.put(item)
@@ -252,9 +257,9 @@ class DemoConversationStore(context: Context) {
 
     private fun normalize(conversation: DemoConversation): DemoConversation {
         val messages = conversation.messages
-            .filter { it.role in ALLOWED_ROLES && it.content.isNotBlank() }
+            .filter { it.role in ALLOWED_ROLES && (it.content.isNotBlank() || !it.imagePath.isNullOrBlank()) }
             .takeLast(MAX_MESSAGES)
-            .map { it.copy(content = it.content.take(MAX_MESSAGE_CHARS)) }
+            .map { it.copy(content = it.content.take(MAX_MESSAGE_CHARS), imagePath = it.imagePath) }
             .toMutableList()
         return conversation.copy(
             title = normalizeTitle(conversation.title),
