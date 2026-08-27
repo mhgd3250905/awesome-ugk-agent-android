@@ -60,7 +60,7 @@ object DemoMarkdownFormatter {
         val tableTheme = TableTheme.Builder()
             .tableBorderColor(tableBorder)
             .tableBorderWidth(dp(1))
-            .tableCellPadding(dp(8))
+            .tableCellPadding(dp(4))
             .tableHeaderRowBackgroundColor(tableHeaderBg)
             .tableEvenRowBackgroundColor(Color.TRANSPARENT)
             .tableOddRowBackgroundColor(tableOddBg)
@@ -97,9 +97,47 @@ object DemoMarkdownFormatter {
                             visitor.ensureNewLine()
                         }
                     }
+
+                    // 表格内文字与代码紧凑化排版：将单元格文字缩放到 0.80f（约 12sp），大幅减少换行与表格纵向高度堆叠
+                    builder.on(org.commonmark.node.Text::class.java) { visitor, text ->
+                        val inTable = isInsideTableCell(text)
+                        val start = visitor.length()
+                        visitor.builder().append(text.literal)
+                        if (inTable) {
+                            visitor.builder().setSpan(
+                                android.text.style.RelativeSizeSpan(0.80f),
+                                start,
+                                visitor.length(),
+                                android.text.Spanned.SPAN_EXCLUSIVE_EXCLUSIVE
+                            )
+                        }
+                    }
+
+                    builder.on(org.commonmark.node.Code::class.java) { visitor, code ->
+                        val length = visitor.length()
+                        visitor.builder().append(code.literal)
+                        visitor.setSpans(length, visitor.configuration().spansFactory().get(org.commonmark.node.Code::class.java))
+                        if (isInsideTableCell(code)) {
+                            visitor.builder().setSpan(
+                                android.text.style.RelativeSizeSpan(0.80f),
+                                length,
+                                visitor.length(),
+                                android.text.Spanned.SPAN_EXCLUSIVE_EXCLUSIVE
+                            )
+                        }
+                    }
                 }
             })
             .build()
+    }
+
+    private fun isInsideTableCell(node: org.commonmark.node.Node): Boolean {
+        var parent = node.parent
+        while (parent != null) {
+            if (parent is org.commonmark.ext.gfm.tables.TableCell) return true
+            parent = parent.parent
+        }
+        return false
     }
 
     /**
