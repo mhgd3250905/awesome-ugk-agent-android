@@ -21,6 +21,12 @@ sealed class AgentEvent {
         val reasoningContent: String? = null
     ) : AgentEvent()
 
+    /** 模型思考链（Reasoning / CoT）流式字符增量 */
+    data class ModelThinkingDelta(val delta: String) : AgentEvent()
+
+    /** 模型正文内容流式字符增量 */
+    data class ModelContentDelta(val delta: String) : AgentEvent()
+
     data class ToolStarted(val call: ToolCall) : AgentEvent()
     data class ToolProgress(val call: ToolCall, val progress: com.ugk.pi.android.ToolProgress) : AgentEvent()
     data class ToolFinished(val result: ToolResult) : AgentEvent()

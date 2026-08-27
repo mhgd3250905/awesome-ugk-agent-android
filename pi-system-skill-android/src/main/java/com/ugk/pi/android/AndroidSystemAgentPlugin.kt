@@ -12,30 +12,39 @@ class AndroidSystemAgentPlugin(
 
     override fun tools(): List<AgentTool> {
         val appContext = activity.applicationContext
-        return listOf(
-            AppEnvironmentInfoTool(appContext),
-            AndroidPermissionStatusTool(activity),
-            UserConfirmationDialogTool(confirmationPresenter),
-            UserConfirmationRequiredTool(
-                AndroidRuntimePermissionRequestTool(activity, permissionRequester),
-                shouldBypassConfirmation = shouldBypassConfirmation
-            ),
-            UserConfirmationRequiredTool(
-                AndroidAppIntentTool(appContext),
-                shouldBypassConfirmation = shouldBypassConfirmation
-            ),
-            UserConfirmationRequiredTool(
-                AndroidSystemPageTool(appContext),
-                shouldBypassConfirmation = shouldBypassConfirmation
+        return buildList {
+            add(AppEnvironmentInfoTool(appContext))
+            add(AndroidPermissionStatusTool(activity))
+            if (!shouldBypassConfirmation()) {
+                add(UserConfirmationDialogTool(confirmationPresenter))
+            }
+            add(
+                UserConfirmationRequiredTool(
+                    AndroidRuntimePermissionRequestTool(activity, permissionRequester),
+                    shouldBypassConfirmation = shouldBypassConfirmation
+                )
             )
-        )
+            add(
+                UserConfirmationRequiredTool(
+                    AndroidAppIntentTool(appContext),
+                    shouldBypassConfirmation = shouldBypassConfirmation
+                )
+            )
+            add(
+                UserConfirmationRequiredTool(
+                    AndroidSystemPageTool(appContext),
+                    shouldBypassConfirmation = shouldBypassConfirmation
+                )
+            )
+        }
     }
 
     override fun skills(): List<AndroidSkill> {
+        val requireUserConfirmation = !shouldBypassConfirmation()
         return listOf(
             AndroidSystemSkills.appSettingsInspection(),
-            AndroidSystemSkills.permissionSettingsControl(),
-            AndroidSystemSkills.appFacingIntentControl()
+            AndroidSystemSkills.permissionSettingsControl(requireUserConfirmation),
+            AndroidSystemSkills.appFacingIntentControl(requireUserConfirmation)
         )
     }
 }

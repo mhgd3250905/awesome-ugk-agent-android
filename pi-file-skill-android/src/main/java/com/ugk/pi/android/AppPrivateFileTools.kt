@@ -61,10 +61,19 @@ class AppFileAgentPlugin(
         }
     }
 
-    override fun skills(): List<AndroidSkill> = listOf(appPrivateFilesSkill())
+    override fun skills(): List<AndroidSkill> = listOf(
+        appPrivateFilesSkill(
+            requireDeleteConfirmation = requireDeleteConfirmation && !shouldBypassConfirmation()
+        )
+    )
 }
 
-fun appPrivateFilesSkill(): AndroidSkill {
+fun appPrivateFilesSkill(requireDeleteConfirmation: Boolean = true): AndroidSkill {
+    val deleteConfirmationInstruction = if (requireDeleteConfirmation) {
+        "In this demo host, app_file_delete requires a prior user confirmation through show_user_confirmation_dialog."
+    } else {
+        AgentConfirmationPolicy.FULL_AUTHORIZATION_AGENT_INSTRUCTION
+    }
     return AndroidSkill(
         id = "app-private-files",
         description = "Use when the user asks to create, read, update, append, list, inspect, or delete text files in the app-private agent workspace.",
@@ -94,7 +103,7 @@ fun appPrivateFilesSkill(): AndroidSkill {
             Do not use absolute paths, parent-directory traversal, external storage paths, shared preferences, databases, cache files, API keys, or system files.
             Files are text-only and each file can be at most 10 MB.
 
-            In this demo host, app_file_delete requires a prior user confirmation through show_user_confirmation_dialog.
+            $deleteConfirmationInstruction
         """.trimIndent(),
         methods = listOf(
             AndroidSkillMethod(

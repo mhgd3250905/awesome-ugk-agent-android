@@ -84,7 +84,7 @@ v1 Terminal Core Profile：Bash、curl、OpenSSL、SQLite、CPython 3.14.6；Nod
 - `AgentCapabilityPlugin` 是工具+技能+运行时全局指令的注册入口（`tools()` + `skills()` + `agentInstructions()`）
 - `AndroidSkill` 是只读上下文包，不创建工具、不授权；skill method 仅在同名 tool 已注册时才注入
 - `AnthropicMessagesProvider` / `OpenAiChatCompletionsProvider` 支持 baseUrl 自定义
-- 高影响工具通过 `UserConfirmationRequiredTool` 包装，必须先调用 `show_user_confirmation_dialog`
+- 高影响工具默认通过 `UserConfirmationRequiredTool` 包装并先调用 `show_user_confirmation_dialog`；宿主显式开启 full authorization 时不注册确认 Tool，但仍保留工具自身校验
 
 ## 两类同名 `AGENTS.md`（必须区分）
 
@@ -101,12 +101,9 @@ v1 Terminal Core Profile：Bash、curl、OpenSSL、SQLite、CPython 3.14.6；Nod
 | `MainActivity.kt` | 主界面：对话 UI + AgentRuntime 构建 + skill instructions |
 | `AgentAccessibilityService.kt` | 无障碍服务，静态 `instance` 给 Tool 使用 |
 | `AgentFloatingWindow.kt` | 可拖动、缩放的跨 App 悬浮窗；按过程到最终回答的时间线展示 Agent 状态 |
-| `ScreenReadUiTreeTool.kt` | 读 UI 树（跳过自身 overlay，最多 200 node） |
-| `ScreenPerformActionTool.kt` | nodeId 粒度操作：click/scroll/set_text |
-| `ScreenLaunchAppTool.kt` | 按 package name 启动 app |
-| `ScreenGlobalActionTool.kt` | 系统动作：back/home/recents/notifications |
-| `ScreenGestureTool.kt` | 坐标手势：tap/long_press/swipe（UI 树被屏蔽时用） |
-| `ScreenPressKeyTool.kt` | 触发 IME action（回车/搜索/发送），API 30+ 用 ACTION_IME_ACTION |
+| `pi-system-skill-android/src/main/.../ScreenAutomationTools.kt` | SDK 统一的 screen read/find/action/gesture/IME/global Tools |
+| `pi-system-skill-android/src/main/.../AccessibilityScreenAutomationBackend.kt` | AccessibilityService 默认 backend、snapshot/target 校验和 fail-closed 恢复 |
+| `pi-system-skill-android/src/main/.../ScreenAutomationSkills.kt` | Android Accessibility 屏幕自动化 Skill 与确认/验证策略 |
 | `ApiSettings.kt` | API 源配置 + SharedPreferences 持久化 + Ui 色彩工具 |
 
 需要权限：无障碍服务 + SYSTEM_ALERT_WINDOW（悬浮窗）

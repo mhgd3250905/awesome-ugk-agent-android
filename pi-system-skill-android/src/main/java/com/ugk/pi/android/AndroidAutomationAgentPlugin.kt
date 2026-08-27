@@ -8,60 +8,140 @@ import android.content.Context
  * AccessibilityService implementation.
  *
  * App discovery and app launch remain usable without AccessibilityService;
- * screen reading and actions are supplied by the host's screen tools after
- * the service is enabled and connected.
+ * screen reading and actions are supplied by the optional host-injected
+ * ScreenAutomationBackend after the service is enabled and connected.
  */
 class AndroidAutomationAgentPlugin(
     context: Context,
     private val confirmationPresenter: UserConfirmationDialogPresenter,
     private val accessibilityServiceComponent: ComponentName,
     private val accessibilityStateProvider: AndroidAccessibilityServiceStateProvider,
-    private val shouldBypassConfirmation: () -> Boolean = { false }
+    private val shouldBypassConfirmation: () -> Boolean = { false },
+    private val screenAutomationBackend: ScreenAutomationBackend? = null
 ) : AgentCapabilityPlugin {
+    /** Keeps the pre-screen-backend constructor available to compiled hosts. */
+    constructor(
+        context: Context,
+        confirmationPresenter: UserConfirmationDialogPresenter,
+        accessibilityServiceComponent: ComponentName,
+        accessibilityStateProvider: AndroidAccessibilityServiceStateProvider,
+        shouldBypassConfirmation: () -> Boolean
+    ) : this(
+        context = context,
+        confirmationPresenter = confirmationPresenter,
+        accessibilityServiceComponent = accessibilityServiceComponent,
+        accessibilityStateProvider = accessibilityStateProvider,
+        shouldBypassConfirmation = shouldBypassConfirmation,
+        screenAutomationBackend = null
+    )
+
     private val appContext = context.applicationContext ?: context
 
     override val id: String = "android-automation"
 
-    override fun tools(): List<AgentTool> = listOf(
-        AndroidAppCatalogTool(appContext),
-        AndroidAccessibilityStatusTool(
-            context = appContext,
-            serviceComponent = accessibilityServiceComponent,
-            stateProvider = accessibilityStateProvider
-        ),
-        UserConfirmationDialogTool(confirmationPresenter),
-        UserConfirmationRequiredTool(
-            AndroidLaunchAppTool(appContext),
-            shouldBypassConfirmation = shouldBypassConfirmation
-        ),
-        UserConfirmationRequiredTool(
-            AndroidAppIntentTool(appContext),
-            shouldBypassConfirmation = shouldBypassConfirmation
-        ),
-        UserConfirmationRequiredTool(
-            AndroidAccessibilitySettingsTool(appContext),
-            shouldBypassConfirmation = shouldBypassConfirmation
+    override fun tools(): List<AgentTool> = buildList {
+        add(AndroidAppCatalogTool(appContext))
+        add(
+            AndroidAccessibilityStatusTool(
+                context = appContext,
+                serviceComponent = accessibilityServiceComponent,
+                stateProvider = accessibilityStateProvider
+            )
         )
-    )
+        if (!shouldBypassConfirmation()) {
+            add(UserConfirmationDialogTool(confirmationPresenter))
+        }
+        add(
+            UserConfirmationRequiredTool(
+                AndroidLaunchAppTool(appContext),
+                shouldBypassConfirmation = shouldBypassConfirmation
+            )
+        )
+        add(
+            UserConfirmationRequiredTool(
+                AndroidAppIntentTool(appContext),
+                shouldBypassConfirmation = shouldBypassConfirmation
+            )
+        )
+        add(
+            UserConfirmationRequiredTool(
+                AndroidAccessibilitySettingsTool(appContext),
+                shouldBypassConfirmation = shouldBypassConfirmation
+            )
+        )
 
-    override fun skills(): List<AndroidSkill> = listOf(
-        AndroidSystemSkills.androidAutomationControl(),
-        AndroidSystemSkills.appFacingIntentControl()
-    )
+        val backend = screenAutomationBackend ?: return@buildList
+        add(ScreenReadUiTreeTool(backend))
+        add(ScreenFindUiElementTool(backend))
+        add(
+            UserConfirmationRequiredTool(
+                ScreenPerformActionTool(backend),
+                shouldBypassConfirmation = shouldBypassConfirmation
+            )
+        )
+        add(
+            UserConfirmationRequiredTool(
+                ScreenGestureTool(backend),
+                shouldBypassConfirmation = shouldBypassConfirmation
+            )
+        )
+        add(
+            UserConfirmationRequiredTool(
+                ScreenPressKeyTool(backend),
+                shouldBypassConfirmation = shouldBypassConfirmation
+            )
+        )
+        add(
+            UserConfirmationRequiredTool(
+                ScreenGlobalActionTool(backend),
+                shouldBypassConfirmation = shouldBypassConfirmation
+            )
+        )
+    }
 
-    override fun agentInstructions(): List<String> = listOf(ANDROID_RUNTIME_AGENT_CONTRACT)
+    override fun skills(): List<AndroidSkill> = buildList {
+        val requireUserConfirmation = !shouldBypassConfirmation()
+        add(AndroidSystemSkills.androidAutomationControl(requireUserConfirmation))
+        add(AndroidSystemSkills.appFacingIntentControl(requireUserConfirmation))
+        if (screenAutomationBackend != null) {
+            add(ScreenAutomationSkills.accessibilityScreenControl(requireUserConfirmation))
+        }
+    }
 
-    private companion object {
-        val ANDROID_RUNTIME_AGENT_CONTRACT = """
+    override fun agentInstructions(): List<String> = buildList {
+        val requireUserConfirmation = !shouldBypassConfirmation()
+        add(androidRuntimeAgentContract(requireUserConfirmation))
+        if (screenAutomationBackend != null) {
+            add(SCREEN_AUTOMATION_AGENT_CONTRACT)
+        }
+    }
+
+    private fun androidRuntimeAgentContract(requireUserConfirmation: Boolean): String {
+        val confirmationInstruction = if (requireUserConfirmation) {
+            "Before each protected launch or accessibility-settings action, call show_user_confirmation_dialog with target.toolName set to the exact next protected Tool name and target.input set to that Tool's complete JSON input. Invoke the next Tool with the identical name and input. selectedButtonId only records the button choice; it does not authorize a protected Tool by itself, and a missing or mismatched target ticket must be treated as not authorized."
+        } else {
+            AgentConfirmationPolicy.FULL_AUTHORIZATION_AGENT_INSTRUCTION
+        }
+        return """
             You are operating inside a normal Android host application, not Android Shell, root, or a full Linux distribution.
             Treat Android system state, app discovery, app launch, AccessibilityService state, and screen actions as separate capabilities.
             Use find_android_app to resolve a human app name to an exact packageName; do not guess package names.
             Use launch_android_app or launch_android_app_intent to open another app; never use terminal_bash_execute, am, or pm for app launch.
-            Before each protected launch or accessibility-settings action, call show_user_confirmation_dialog with target.toolName set to the exact next protected Tool name and target.input set to that Tool's complete JSON input. Invoke the next Tool with the identical name and input. selectedButtonId only records the button choice; it does not authorize a protected Tool by itself, and a missing or mismatched target ticket must be treated as not authorized.
+            $confirmationInstruction
             Cross-app screen reading and clicking require get_android_accessibility_status to report readyForScreenAutomation=true.
             If accessibility is disabled, call open_android_accessibility_settings, tell the user to enable the service manually, and wait for a new status check.
-            After launching an app or performing a screen action, call screen_read_ui_tree again and verify the observed state before claiming success.
+            After launching an app or performing a screen action, use the screen automation Skill's snapshot-first workflow and verify the observed state before claiming success.
             Do not claim that an Android action happened merely because a tool call was planned; use the structured tool result and a follow-up screen observation.
+        """.trimIndent()
+    }
+
+    private companion object {
+        val SCREEN_AUTOMATION_AGENT_CONTRACT = """
+            Screen automation is available only because this host supplied an AccessibilityService backend.
+            Treat screen_read_ui_tree and screen_find_ui_element as read-only snapshot producers. Treat every returned snapshotId as single-session state: any new read/find invalidates the previous target. Mutating screen tools must use the exact latest snapshotId and nodeId and must be preceded by the host's exact-input confirmation flow unless full authorization is active.
+            SNAPSHOT_REQUIRED means no screen action was executed. Never retry the same screen_perform_action input; the next tool call must be screen_read_ui_tree or screen_find_ui_element, followed by a new action using both values from that fresh result.
+            Prefer semantic node actions and supported actions reported by the snapshot. Use gestures only when the UI tree is unavailable or insufficient, and derive coordinates from the latest reported screen dimensions. After each mutating action, read or find again and verify the result.
+            If any screen tool returns success=false, the next recovery call must be screen_read_ui_tree or screen_find_ui_element (or get_android_accessibility_status when the error code is ACCESSIBILITY_UNAVAILABLE). Do not call terminal_bash_execute, relaunch the app, or guess coordinates to recover from a screen-tool failure.
         """.trimIndent()
     }
 }

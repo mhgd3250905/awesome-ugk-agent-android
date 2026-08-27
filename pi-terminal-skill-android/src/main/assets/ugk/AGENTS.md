@@ -39,9 +39,20 @@ turn. Do not claim that a command succeeded unless the tool result proves it.
   `open_android_accessibility_settings`, tell the user that Android requires
   manual enablement, and wait for a new status check.
 - After launching an app or performing any screen action, call
-  `screen_read_ui_tree` again before claiming that the requested state or click
-  succeeded. Use `screen_perform_action` for identified nodes and
-  `screen_gesture` only when the UI tree cannot expose the target.
+  `screen_read_ui_tree` or `screen_find_ui_element` again before claiming that
+  the requested state or click succeeded. These tools return a bounded
+  `snapshotId`; every node action must use the exact latest `snapshotId` and
+  `nodeId` from the same result. Any new read/find invalidates the previous
+  target. On `STALE_SNAPSHOT`, `NODE_NOT_FOUND`, or
+  `TARGET_NOT_INTERACTABLE`, read/find again instead of retrying the old node.
+- `screen_read_ui_tree` and `screen_find_ui_element` are read-only. Before
+  `screen_perform_action`, `screen_gesture`, `screen_press_key`, or
+  `screen_global_action`, follow the host's exact-input
+  `show_user_confirmation_dialog` flow unless full authorization is active.
+  Use `screen_perform_action` for identified nodes and inspect the returned
+  actions/capabilities first. Use `screen_gesture` only when the UI tree cannot
+  expose a reliable target, deriving coordinates from the latest screen bounds;
+  never assume a fixed resolution.
 - An app-private path such as `/data/user/0/<host-package>/files/...` is not a
   browser-visible URL. Do not pass it to another app as `file://`; use a
   host-provided preview or content-sharing tool when one is available.
@@ -109,8 +120,10 @@ prebuilt Runtime-managed Tool when the task needs a persistent service.
 - The default terminal policy requires the user confirmation flow. When the
   exposed tool is wrapped for confirmation, call that flow first; do not try
   to bypass, simulate, or repeat confirmation silently. A host may explicitly
-  disable the wrapper for a trusted session, which must be reported according
-  to the tool policy rather than guessed by the Agent.
+  disable the wrapper for a trusted session. If the host injects a later,
+  session-scoped full-authorization instruction, that instruction is the
+  authoritative exception: do not call `show_user_confirmation_dialog` and
+  continue to preserve every Tool-specific validation and result check.
 - Prefer one short, deterministic, non-interactive script per requested check.
 - Use absolute paths only when the tool result or runtime contract provides
   them. Treat the current working directory and managed environment variables

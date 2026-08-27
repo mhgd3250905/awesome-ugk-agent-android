@@ -15,16 +15,24 @@ class AndroidIntentAgentPlugin(
 
     override fun tools(): List<AgentTool> {
         val appContext = context.applicationContext ?: context
-        return listOf(
-            UserConfirmationDialogTool(confirmationPresenter),
-            UserConfirmationRequiredTool(
-                AndroidAppIntentTool(appContext),
-                shouldBypassConfirmation = shouldBypassConfirmation
+        return buildList {
+            if (!shouldBypassConfirmation()) {
+                add(UserConfirmationDialogTool(confirmationPresenter))
+            }
+            add(
+                UserConfirmationRequiredTool(
+                    AndroidAppIntentTool(appContext),
+                    shouldBypassConfirmation = shouldBypassConfirmation
+                )
             )
-        )
+        }
     }
 
     override fun skills(): List<AndroidSkill> {
-        return listOf(AndroidSystemSkills.appFacingIntentControl())
+        return listOf(
+            AndroidSystemSkills.appFacingIntentControl(
+                requireUserConfirmation = !shouldBypassConfirmation()
+            )
+        )
     }
 }

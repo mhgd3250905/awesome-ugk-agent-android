@@ -143,3 +143,29 @@
 - 决策：稳定化窗口内，低于 P1 的修复仅在同时满足以下条件时准入：缺陷是确定性的功能/数据正确性问题或输入校验缺口（不是重构、性能优化或新能力）；每项附带回归测试或有书面说明的验证缺口；不触碰公共 API、确认语义、权限边界、Terminal Runtime scope 或 Gate 退出条件；不引入 Coordinator、TicketStore、runId、模块拆分或新跨模块 API。本批 4 个 P2 全部满足上述条件，予以放行；其中 `Thread.sleep`→`delay` 一项是对 PR 自身第一版引入问题的修复。此决策是对冻结规则的细化，不改变其禁止项；后续 P2 级修复必须先在台账登记条目并引用本决策，才能合入。
 - 原因：拒绝这批修复会使已证实的静默误操作（对无关节点执行动作并报告成功）和 URI 重构输入面继续存在；而放行条件不扩大架构面，与窗口“冻结边界、只修缺陷”的目的一致。
 - 影响：Core API surface 的 public member signature 计数可因编译器合成成员（如 `access$` 桥）随 private helper 增减而波动（本批 574→575，唯一差异为 `access$appendCancelledToolResults` synthetic accessor）；inventory 总数差异须先经与基线的逐行 diff 区分合成成员与源码 API 变化，只有后者才按 SDK-OPT-010 的版本规则处理。
+
+## D-019：Accessibility screen automation 下沉到 SDK Skill/Plugin
+
+- 日期：2026-08-25
+- 背景：屏幕读取、节点定位、点击/输入/滚动、坐标手势、IME action 和全局动作原先由 demo-app 私有注册，宿主无法复用同一套工具语义、目标校验和 Agent 指令。
+- 决策：将 screen automation 的工具、Skill 和 Android 默认 backend 放入 `pi-system-skill-android`。`AndroidAutomationAgentPlugin` 通过可选的 `ScreenAutomationBackend` 注入屏幕能力；宿主只负责提供当前 `AccessibilityService` 和自身包名。未注入 backend 的轻量宿主不注册 screen tools。
+- 目标协议：`screen_read_ui_tree` / `screen_find_ui_element` 生成有界值快照；每次快照有 `snapshotId`，每个节点有精确 `nodeId`；动作必须携带同一 session 的最新 snapshotId + nodeId。backend 会重新解析并校验 target fingerprint，发现 snapshot 过期、窗口/节点消失、目标不可交互或动作不支持时 fail-closed。
+- 安全边界：读屏和查找为只读；节点动作、手势、IME action、全局动作继续由 `UserConfirmationRequiredTool` 包装。SDK 不静默授予无障碍权限，也不把 root、shell、终端命令作为屏幕能力替代。
+- 资源边界：不跨 Tool 持有 `AccessibilityNodeInfo`，只保留 session 级 bounded snapshot；当前实现最多保留 16 个 session 的最新 snapshot。跨进程 Coordinator、ticket store、runId 和屏幕录制不属于本次 scope。
+- 原因：统一工具名和 structured error code（例如 `STALE_SNAPSHOT`、`NODE_NOT_FOUND`、`TARGET_NOT_INTERACTABLE`）可降低模型猜节点、误操作和重复 read 的成本；把准确性策略放入 SDK，宿主接入只需实现 service provider。
+- 影响：demo-app 改为注入 `AccessibilityScreenAutomationBackend`，删除 demo 私有 screen tool 实现；旧 screen tool 的单元测试迁移至 `pi-system-skill-android`。需要真机在用户手动开启无障碍后继续验证跨 App 读屏和操作；不能把无障碍未开启误报为 SDK 缺陷。
+## D-020：Full authorization 不应触发模型确认回合
+
+- 日期：2026-08-26
+- 背景：宿主已经通过 `shouldBypassConfirmation` 让高影响 Tool 在执行层直通，但模型仍能看到 `show_user_confirmation_dialog`、确认型 Tool description 和无条件确认 instructions，导致全授权模式额外消耗一个 LLM 回合。
+- 决策：当宿主在 Runtime 注册时显式开启 full authorization，System/Terminal/File 相关 Plugin 不注册确认 Tool；受保护 Tool description、Skill methods 和 Agent instructions 同步声明“直接调用受保护 Tool”，但保留所有目标、权限、输入、动作能力和结果校验。普通模式保持现有确认票据和 fail-closed 语义。
+- 兼容性：所有新增 Skill 参数默认保持确认；Demo 切换授权开关时重建 Runtime，使 Tool 注册表和模型上下文同步刷新。该模式只改变确认策略，不扩大 AccessibilityService 或 Terminal 能力边界。
+- 验证要求：补充全授权 Tool 列表、Skill method 列表和 AgentRuntime 无确认回合测试，并继续运行普通确认链路回归。
+
+## D-021：宿主悬浮窗不得成为屏幕自动化目标
+
+- 日期：2026-08-26
+- 背景：小米真机显示宿主 `TYPE_APPLICATION_OVERLAY` 窗口可能成为当前焦点窗口；虽然正常 `AccessibilityService.windows` 路径已按宿主包名过滤，但 `rootInActiveWindow` 回退和 IME action 仍可能把悬浮窗当成目标。
+- 决策：SDK 的读屏回退、焦点输入解析和节点窗口解析统一拒绝宿主包名；仅有宿主窗口时返回 `WINDOW_UNAVAILABLE`，不得把空树或宿主树交给 Agent。Demo AccessibilityService 同时忽略自身包名事件，避免悬浮窗刷新污染外部活动包名。
+- 兼容性：保留悬浮窗可输入、可显示的交互方式；语义节点 action 继续按非宿主窗口执行。坐标手势仍应避开悬浮窗覆盖区域。
+- 验证要求：补充宿主事件过滤单测，运行 SDK/Demo 单测和 Debug APK 构建，并在小米设备复核悬浮窗权限、无障碍服务和外部目标窗口状态。

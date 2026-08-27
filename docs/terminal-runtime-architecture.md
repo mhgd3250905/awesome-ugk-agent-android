@@ -56,31 +56,40 @@ Android App-facing actions 不应绕道终端执行。`pi-system-skill-android` 
 `AndroidAppIntentTool`（Tool 名：`launch_android_app_intent`）和两种宿主接入入口：
 
 - `AndroidIntentAgentPlugin`：只提供确认和 App-facing Intent；
-- `AndroidAutomationAgentPlugin`：额外提供 `find_android_app`、`launch_android_app`、
-  `get_android_accessibility_status` 和 `open_android_accessibility_settings`，由宿主注入自己的
-  `AccessibilityService` 状态；读屏/点击 Tool 仍由宿主注册。
+- `AndroidAutomationAgentPlugin`：额外提供 App 查询、包名启动、无障碍状态，以及可选的 Accessibility screen automation。
 
-```text
-用户口语（“打开刚才的网站”）
-  → Agent 先调用 show_user_confirmation_dialog
-  → 用户确认
-  → launch_android_app_intent(target=open_url, parameters.url=...)
-  → Context.startActivity(Intent.ACTION_VIEW)
-  → Chrome/其他浏览器
-```
+`AndroidAutomationAgentPlugin` 的 `screenAutomationBackend` 默认为空。轻量宿主不会因此获得屏幕工具；提供
+`ScreenAutomationBackend` 后，SDK 才注册统一的 `screen_read_ui_tree`、
+`screen_find_ui_element`、`screen_perform_action`、`screen_gesture`、
+`screen_press_key` 和 `screen_global_action`。宿主通常使用
+`AccessibilityScreenAutomationBackend`，只注入当前 `AccessibilityService` 提供器和宿主包名。
 
-当前 `open_url` 只接受带 host 的 `http`/`https` URL，拒绝 `file`、`javascript`、带 user-info 的 URL；
-Tool 直接尝试 `Context.startActivity()`，`ActivityNotFoundException` 映射为结构化 `no_handler`，其他
-启动异常映射为 `launch_failed`。这样不会因 Android 11+ package visibility 造成的预查询空结果而误报；
-需要查询已安装 App 时由 `find_android_app` 使用显式的 Manifest `<queries>` 声明。Intent Tool 的外部
-可见动作默认由 `UserConfirmationRequiredTool` 包装。
+屏幕工具的边界如下：
 
-跨 App 操作的决策规则是：先用 `find_android_app` 解析人类 App 名称，再用 `launch_android_app` 启动；
-需要读屏/点击时先用 `get_android_accessibility_status`，若未授权则用
-`open_android_accessibility_settings` 引导用户手动开启，服务连接后再调用宿主的 `screen_*` Tool。
-`AndroidSystemAgentPlugin`、`AndroidIntentAgentPlugin` 和 `AndroidAutomationAgentPlugin` 应按宿主需要
-选择，不要同时注册提供同名确认 Tool 的多个入口。
+- `screen_read_ui_tree` 和 `screen_find_ui_element` 只返回有界、值类型的 snapshot，不跨 Tool 调用持有
+  `AccessibilityNodeInfo`；
+- 每个 snapshot 带 `snapshotId`，节点带窗口/子节点路径形式的 `nodeId`；新的 read/find 会替换当前
+  session 的 snapshot，动作必须同时提交最新的 `snapshotId` 和原样 `nodeId`；
+- 动作执行前重新解析节点，并比对 package、type、viewId、bounds、text 和 content description；目标变化、节点
+  缺失、动作不支持或目标不可交互时 fail-closed；
+- 读屏结果、匹配结果为只读 Tool；节点动作、坐标手势、IME action 和全局动作由
+  `UserConfirmationRequiredTool` 包装；
+- 宿主显式开启 full authorization 时不向模型注册 `show_user_confirmation_dialog`，并同步切换
+  Tool description、Skill methods 与 Runtime instructions；该模式只跳过确认，不跳过屏幕目标和结果校验；
+- 坐标手势只能使用当前屏幕尺寸，不能假设固定分辨率；服务权限仍必须由用户在系统设置中手动开启。
 
+跨 App 操作的决策规则是：
+
+`find_android_app` → 用户确认 → `launch_android_app` → `get_android_accessibility_status`
+→ 用户启用服务 → `screen_read_ui_tree` 或 `screen_find_ui_element`
+→ 选择唯一 snapshot target → 用户确认 → 节点动作/手势/全局动作
+→ read/find 再验证结果。
+
+`open_url` 只接受带 host 的 `http`/`https` URL，拒绝 `file`、`javascript`、带 user-info 的 URL；
+Intent Tool 直接尝试 `Context.startActivity()`，`ActivityNotFoundException` 映射为结构化 `no_handler`，其他
+启动异常映射为 `launch_failed`。这些 App-facing 外部动作默认由 `UserConfirmationRequiredTool` 包装。
+`AndroidSystemAgentPlugin`、`AndroidIntentAgentPlugin` 和 `AndroidAutomationAgentPlugin` 仍应按宿主需要选择，
+不要同时注册提供同名确认 Tool 的多个入口。
 ### Runtime 管理的本地 HTTP 服务链路
 
 一次性 Bash 调用和需要跨调用持续存在的服务不是同一种生命周期：

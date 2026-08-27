@@ -13,8 +13,12 @@ class UserConfirmationRequiredTool(
     private val nowEpochMillis: () -> Long = System::currentTimeMillis
 ) : AgentTool {
     override val name: String = delegate.name
-    override val description: String =
-        "${delegate.description} Requires a prior show_user_confirmation_dialog confirmation."
+    override val description: String
+        get() = if (shouldBypassConfirmation()) {
+            "${delegate.description} The host has enabled full authorization for this session; do not call show_user_confirmation_dialog before this Tool."
+        } else {
+            "${delegate.description} Requires a prior show_user_confirmation_dialog confirmation."
+        }
     override val inputSchema: JsonObject = delegate.inputSchema
 
     override suspend fun execute(

@@ -43,6 +43,8 @@ class UserConfirmationRequiredToolTest {
         assertFalse(result.isError)
         assertEquals("executed", result.content)
         assertTrue(delegate.executed)
+        assertTrue(tool.description.contains("full authorization"))
+        assertFalse(tool.description.contains("Requires a prior show_user_confirmation_dialog"))
     }
 
     @Test

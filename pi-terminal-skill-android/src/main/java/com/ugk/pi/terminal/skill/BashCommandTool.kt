@@ -2,6 +2,7 @@ package com.ugk.pi.terminal.skill
 
 import android.content.Context
 import com.ugk.pi.android.AgentCapabilityPlugin
+import com.ugk.pi.android.AgentConfirmationPolicy
 import com.ugk.pi.android.AgentTool
 import com.ugk.pi.android.AndroidSkill
 import com.ugk.pi.android.AndroidSkillMethod
@@ -67,17 +68,53 @@ data class TerminalToolPolicy(
     }
 }
 
+/**
+ * Prevents a terminal call from taking over an active Android screen
+ * automation workflow. The guard is deliberately outside the confirmation
+ * wrapper so a blocked call returns immediately without showing a dialog or
+ * starting a Bash process.
+ */
+internal class ScreenAutomationTerminalGuard(
+    private val delegate: AgentTool,
+    private val shouldBlock: () -> Boolean
+) : AgentTool {
+    override val name: String = delegate.name
+    override val description: String =
+        "${delegate.description} Do not use this tool during Android screen automation; use the screen_* tools instead."
+    override val inputSchema = delegate.inputSchema
+
+    override suspend fun execute(call: ToolCall, context: ToolExecutionContext): ToolResult {
+        if (!shouldBlock()) return delegate.execute(call, context)
+
+        val message =
+            "Terminal execution is blocked while Android screen automation is active. " +
+                "Read the screen again with screen_read_ui_tree or screen_find_ui_element " +
+                "and use screen_perform_action; do not use terminal_bash_execute to operate Android."
+        return ToolResult(
+            toolCallId = call.id,
+            name = name,
+            content = message,
+            isError = true,
+            metadata = buildJsonObject {
+                put("code", "SCREEN_AUTOMATION_TERMINAL_BLOCKED")
+                put("message", message)
+            }
+        )
+    }
+}
+
 /** Registers Bash with the Agent SDK without adding a terminal UI. */
 class TerminalAgentPlugin(
     context: Context,
     private val policy: TerminalToolPolicy = TerminalToolPolicy(),
-    private val shouldBypassConfirmation: () -> Boolean = { false }
+    private val shouldBypassConfirmation: () -> Boolean = { false },
+    private val shouldBlockForScreenAutomation: () -> Boolean = { false }
 ) : AgentCapabilityPlugin {
     private val runtimeAgentInstructions = TerminalAgentInstructions.load(context)
     private val runtime = BashRuntime(context)
     private val localHttpServerManager = LocalHttpServerManager(runtime)
     private val terminalTool = BashCommandTool(runtime, runtime.defaultWorkspace(), policy)
-    private val exposedTool: AgentTool = if (policy.requireUserConfirmation) {
+    private val confirmationWrappedTerminalTool: AgentTool = if (policy.requireUserConfirmation) {
         UserConfirmationRequiredTool(
             terminalTool,
             shouldBypassConfirmation = shouldBypassConfirmation
@@ -85,6 +122,10 @@ class TerminalAgentPlugin(
     } else {
         terminalTool
     }
+    private val exposedTool: AgentTool = ScreenAutomationTerminalGuard(
+        delegate = confirmationWrappedTerminalTool,
+        shouldBlock = shouldBlockForScreenAutomation
+    )
     private val localHttpServerStartTool: AgentTool = UserConfirmationRequiredTool(
         LocalHttpServerStartTool(localHttpServerManager),
         shouldBypassConfirmation = shouldBypassConfirmation
@@ -105,11 +146,24 @@ class TerminalAgentPlugin(
     )
 
     override fun skills(): List<AndroidSkill> = listOf(
-        terminalBashSkill(policy),
-        localHttpServerSkill()
+        terminalBashSkill(
+            policy.copy(
+                requireUserConfirmation = policy.requireUserConfirmation && !shouldBypassConfirmation()
+            )
+        ),
+        localHttpServerSkill(requireUserConfirmation = !shouldBypassConfirmation())
     )
 
-    override fun agentInstructions(): List<String> = listOf(runtimeAgentInstructions)
+    override fun agentInstructions(): List<String> = buildList {
+        add(runtimeAgentInstructions)
+        add(
+            "During Android screen automation, terminal_bash_execute is blocked. " +
+                "After a screen tool failure, read the screen again before taking another Android action."
+        )
+        if (shouldBypassConfirmation()) {
+            add(AgentConfirmationPolicy.FULL_AUTHORIZATION_AGENT_INSTRUCTION)
+        }
+    }
 
     /** Interrupts a running or queued terminal call owned by this plugin, if present. */
     fun cancel(callId: String): Boolean = terminalTool.cancel(callId)
@@ -430,7 +484,12 @@ fun terminalBashSkill(policy: TerminalToolPolicy = TerminalToolPolicy()): Androi
     )
 }
 
-fun localHttpServerSkill(): AndroidSkill {
+fun localHttpServerSkill(requireUserConfirmation: Boolean = true): AndroidSkill {
+    val confirmationInstruction = if (requireUserConfirmation) {
+        "local_http_server_start and local_http_server_stop require the normal user confirmation flow. Before each protected call, call show_user_confirmation_dialog with target.toolName set to the exact next Tool name and target.input set to its complete JSON input, then invoke that Tool with the identical name and input. The returned browser Intent also requires its own exact confirmation target. selectedButtonId only records the dialog button choice; it does not authorize a protected Tool by itself."
+    } else {
+        AgentConfirmationPolicy.FULL_AUTHORIZATION_AGENT_INSTRUCTION
+    }
     return AndroidSkill(
         id = "local-http-server",
         description = "Start, inspect, and stop a Runtime-managed loopback HTTP server for an app-private workspace directory.",
@@ -452,9 +511,9 @@ fun localHttpServerSkill(): AndroidSkill {
             Use the prebuilt local_http_server_start tool when the user asks to serve or preview files from the terminal workspace.
             The server is implemented by the SDK with the packaged CPython runtime and binds only to 127.0.0.1; do not write nohup, disown, setsid, or a shell background daemon yourself.
             The directory must already exist inside the terminal workspace. Use local_http_server_status to verify that the service is listening, and local_http_server_stop when the user asks to stop it or the temporary service is no longer needed.
-            local_http_server_start and local_http_server_stop require the normal user confirmation flow. Before each protected call, call show_user_confirmation_dialog with target.toolName set to the exact next Tool name and target.input set to its complete JSON input, then invoke that Tool with the identical name and input. For local_http_server_start, bind the exact directory and any explicitly supplied port; if the next input relies on the default port, omit port in both inputs. For local_http_server_stop, bind the exact port. local_http_server_status is read-only and does not require confirmation or a ticket.
-            The returned URL is browser-visible only on the same Android device. Use launch_android_app_intent with target open_url to hand it to the browser, after a separate confirmation whose target.toolName is launch_android_app_intent and whose target.input exactly matches the next Intent input, including the actual URL. The confirmation target object is separate from any protected Tool input's own target field.
-            selectedButtonId only records the dialog button choice; it does not authorize a protected Tool by itself. The same target binding rule applies to any other protected Tool used in this workflow.
+            $confirmationInstruction
+            For local_http_server_start, bind the exact directory and any explicitly supplied port; if the next input relies on the default port, omit port in both inputs. For local_http_server_stop, bind the exact port. local_http_server_status is read-only and does not require confirmation or a ticket.
+            The returned URL is browser-visible only on the same Android device. Use launch_android_app_intent with target open_url to hand it to the browser. In confirmation mode, its confirmation target.toolName and target.input must match the next Intent input exactly.
         """.trimIndent(),
         methods = listOf(
             AndroidSkillMethod(

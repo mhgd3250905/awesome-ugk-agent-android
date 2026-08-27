@@ -95,19 +95,25 @@
 
 ## SDK-OPT-003：ScreenAutomationBackend 演进接缝
 
-状态：已审查，延后实施；无代码提交
+状态：已实施（2026-08-25）；SDK Skill/Plugin 下沉完成
 
-审查结论：该方向架构上成立，但当前不适合直接落地。
+实施内容：
 
-延后原因：
+- 在 `pi-system-skill-android` 增加 `ScreenAutomationBackend` 契约、Android 默认 backend、统一 screen tools 和
+  `android-accessibility-screen-automation` Skill。
+- `AndroidAutomationAgentPlugin` 通过可选 backend 注册 screen tools；读屏/查找为只读，节点动作/手势/IME/global
+  action 继续使用 `UserConfirmationRequiredTool`。未提供 backend 的宿主保持原有轻量工具集合。
+- screen read/find 产生 session 级有界快照；动作必须携带最新 `snapshotId` + 原样 `nodeId`，backend 重新解析并
+  校验 package/type/viewId/bounds/text/contentDesc，过期或不一致时 fail-closed。
+- demo-app 已删除私有 Screen Tool/Skill 注册，改为注入 `AccessibilityScreenAutomationBackend`；旧节点路径、
+  手势几何和输入拒绝测试迁移到 `pi-system-skill-android`。
+- 设备联调仍需用户在系统设置中手动启用无障碍服务后执行；SDK 不静默授予权限。
 
-- `ScreenReadUiTreeTool` 和 `ScreenPerformActionTool` 已包含工作树中尚未提交的稳定性修复。
-- 当前最小 Backend 接缝仍需要同时改动两个 Tool 和 `MainActivity`，无法在本轮可靠地区分新改动与既有用户改动。
-- 当前只有一个 Demo 宿主，尚未出现必须独立消费 Screen 能力的第二个真实宿主。
-- 子线程试做的新增接口、Demo adapter、测试和接入 hunk 已全部撤销，未进入提交或版本发布。
+保留边界：
 
-后续触发条件：Screen Tool 当前行为先稳定，或出现第二个真实宿主/外部独立消费需求后，再以“先接口、后逐个 Tool 迁移”的顺序重新实施。重新启动前必须先建立可恢复的差异边界，并单独验证 UI 树 JSON、节点回收、动作错误和确认流程。
-
+- 当前 backend 每个 session 只保留最新 snapshot，最多保留 16 个 session；不跨 Tool 持有
+  `AccessibilityNodeInfo`。
+- 不引入跨进程 Coordinator、ticket store、runId 或屏幕录制；这些属于后续独立议题。
 ## SDK-OPT-004：高影响 Tool 确认票据绑定
 
 状态：已审查，延后实施；无代码提交

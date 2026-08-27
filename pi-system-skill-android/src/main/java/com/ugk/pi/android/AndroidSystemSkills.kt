@@ -1,18 +1,20 @@
 package com.ugk.pi.android
 
 object AndroidSystemSkills {
-    fun androidAutomationControl(): AndroidSkill {
+    fun androidAutomationControl(requireUserConfirmation: Boolean = true): AndroidSkill {
+        val confirmationInstruction = if (requireUserConfirmation) {
+            "Before every protected external action (`launch_android_app`, `launch_android_app_intent`, or `open_android_accessibility_settings`), call show_user_confirmation_dialog immediately before the protected Tool. Set the confirmation target.toolName to the exact next protected Tool name and target.input to the complete JSON input for that exact call. Invoke the next Tool with the identical name and input. selectedButtonId only records which dialog button the user chose; it does not authorize a protected Tool by itself, and a missing or mismatched target ticket must be treated as not authorized."
+        } else {
+            AgentConfirmationPolicy.FULL_AUTHORIZATION_AGENT_INSTRUCTION
+        }
         return AndroidSkill(
             id = "android-app-automation",
-            description = "Plan and execute cross-app Android tasks using PackageManager discovery, Android launch intents, AccessibilityService state, and host screen tools.",
+            description = "Plan cross-app Android tasks using PackageManager discovery, Android launch intents, AccessibilityService state, and the optional SDK screen automation Skill.",
             triggers = listOf(
                 "launch app",
                 "open app",
                 "find app",
-                "click in app",
-                "tap in app",
-                "control app",
-                "accessibility service",
+            "accessibility service",
                 "启动应用",
                 "打开应用",
                 "查找应用",
@@ -22,15 +24,18 @@ object AndroidSystemSkills {
                 "读屏"
             ),
             instructions = """
-                This Android-Skill describes the supported cross-app automation workflow.
+                This Android-Skill describes app discovery, app launch, and AccessibilityService readiness.
+                The separate android-accessibility-screen-automation Skill owns screen snapshots, target selection,
+                node actions, gestures, and global screen operations. When screen tools are available, follow that
+                Skill's snapshotId/nodeId and exact-confirmation contract instead of inferring screen tool inputs here.
                 The Agent runs inside a normal Android host app. It is not Android Shell, root, or a full Linux distribution.
 
                 Use find_android_app with the user's human-visible app name before launching an app. Treat more than one candidate as ambiguous and ask the user to choose; never guess a package name.
                 Use launch_android_app with the exact packageName from find_android_app when the task is to open an installed app. This launch does not require AccessibilityService.
                 For a user-visible URL, use launch_android_app_intent with target open_url. Do not use terminal_bash_execute, am, pm, or screen icon searching for app launch.
 
-                Before every protected external action (`launch_android_app`, `launch_android_app_intent`, or `open_android_accessibility_settings`), call show_user_confirmation_dialog immediately before the protected Tool. Set the confirmation target.toolName to the exact next Tool name and target.input to the complete JSON input for that exact call. The next Tool call must use the identical name and input; for example, use {"toolName":"launch_android_app","input":{"package_name":"com.example.app"}} and then call launch_android_app with that same input. The confirmation target object is separate from any protected Tool input's own target field.
-                selectedButtonId only records which dialog button the user chose; it does not authorize a protected Tool by itself. Do not treat a confirming button id as sufficient when the target is missing or changed; the host's confirmation ticket must match.
+                $confirmationInstruction
+                In confirmation mode, the confirmation target object is separate from any protected Tool input's own target field. In full authorization mode, never create a confirmation ToolCall.
 
                 Before reading or operating another app's UI, call get_android_accessibility_status. Continue only when readyForScreenAutomation=true.
                 If the service is disabled, call open_android_accessibility_settings, explain that the user must enable the host service manually, and wait for the user to return before checking status again. Android does not allow the Agent to grant this permission silently.
@@ -114,7 +119,12 @@ object AndroidSystemSkills {
         )
     }
 
-    fun permissionSettingsControl(): AndroidSkill {
+    fun permissionSettingsControl(requireUserConfirmation: Boolean = true): AndroidSkill {
+        val confirmationInstruction = if (requireUserConfirmation) {
+            "Before each protected call to request_android_runtime_permissions, open_android_settings_page, or launch_android_app_intent, call show_user_confirmation_dialog with clear title/message, explicit buttons, and a target object. Set target.toolName to the exact next Tool name and target.input to the complete JSON input for that exact call; then invoke the next Tool with the identical name and input. selectedButtonId only records which dialog button the user chose; it does not authorize a protected Tool by itself. Proceed only when the latest confirmation result also contains the matching host-issued ticket; a missing or mismatched target must be treated as not authorized."
+        } else {
+            AgentConfirmationPolicy.FULL_AUTHORIZATION_AGENT_INSTRUCTION
+        }
         return AndroidSkill(
             id = "permission-settings-control",
             description = "Use when the user asks to enable, request, inspect, or open Android permissions and system settings for camera, Bluetooth, location, notifications, battery/background behavior, overlay, or exact alarms.",
@@ -150,7 +160,7 @@ object AndroidSystemSkills {
             instructions = """
                 This Android-Skill is the permission and settings capability map for this host app.
                 It explains prebuilt methods; it does not create permissions and it does not bypass user consent.
-                The agent must decide when confirmation is needed and call show_user_confirmation_dialog before surprising user-visible actions.
+                $confirmationInstruction
 
                 Runtime permission families:
                 - Camera: android.permission.CAMERA. Request with request_android_runtime_permissions. If denied permanently, open app_permissions or app_details.
@@ -171,43 +181,56 @@ object AndroidSystemSkills {
                 - exact_alarm: special app access for exact alarms on supported Android versions.
 
                 Prefer get_android_permission_status before requesting or opening settings.
-                Before each protected call to request_android_runtime_permissions, open_android_settings_page, or launch_android_app_intent, call show_user_confirmation_dialog with clear title/message, explicit buttons, and a target object. Set target.toolName to the exact next Tool name and target.input to the complete JSON input for that exact call; then invoke the next Tool with the identical name and input. For example, a permission request target is {"toolName":"request_android_runtime_permissions","input":{"permissions":["android.permission.CAMERA"]}}. The confirmation target object is separate from any protected Tool input's own target field.
-                selectedButtonId only records which dialog button the user chose; it does not authorize a protected Tool by itself. Proceed only when the latest confirmation result also contains the matching host-issued ticket; a missing or mismatched target must be treated as not authorized.
                 Use request_android_runtime_permissions only for normal runtime permissions that Android can prompt for.
                 Do not use settings-page tools for app-facing actions.
                 Use open_android_settings_page when the required action is a whitelisted system page, system switch, app-specific settings page, or special app access page.
                 If a method returns unavailable or failed, explain the fallback manually and do not claim the setting changed.
             """.trimIndent(),
-            methods = listOf(
-                AndroidSkillMethod(
-                    toolName = "get_android_permission_status",
-                    purpose = "Reads current grant state for known or requested Android permissions.",
-                    whenToUse = "Use before requesting permissions or directing the user to settings.",
-                    resultSemantics = "granted=true means Android currently grants that permission; shouldShowRationale=false with granted=false may indicate the app needs settings recovery."
-                ),
-                AndroidSkillMethod(
-                    toolName = "request_android_runtime_permissions",
-                    purpose = "Shows Android's runtime permission prompt for requested permissions through the current Activity.",
-                    whenToUse = "Use for CAMERA, location, Bluetooth runtime permissions, and POST_NOTIFICATIONS when the platform supports runtime prompts.",
-                    resultSemantics = "Each result reports granted after the user responds; false means the app still cannot use that protected API."
-                ),
-                AndroidSkillMethod(
-                    toolName = "show_user_confirmation_dialog",
-                    purpose = "Shows a parameterized confirmation dialog and returns the selected button id to the agent loop.",
-                    whenToUse = "Use before permission prompts, settings jumps, external intents, sharing, messaging, recording, camera, or other actions the user may not expect.",
-                    resultSemantics = "The request must include target.toolName and target.input for the exact next protected Tool; selectedButtonId records the user's choice but does not authorize that Tool by itself."
-                ),
-                AndroidSkillMethod(
-                    toolName = "open_android_settings_page",
-                    purpose = "Opens a controlled Android settings page such as app details, app permissions, notifications, battery optimization, Bluetooth, location, overlay, or exact alarm.",
-                    whenToUse = "Use when a runtime prompt is unavailable, the user must change a system switch, or permission recovery requires Settings.",
-                    resultSemantics = "opened=true only means Android accepted the settings Intent; the user still has to change the setting manually."
+            methods = buildList {
+                add(
+                    AndroidSkillMethod(
+                        toolName = "get_android_permission_status",
+                        purpose = "Reads current grant state for known or requested Android permissions.",
+                        whenToUse = "Use before requesting permissions or directing the user to settings.",
+                        resultSemantics = "granted=true means Android currently grants that permission; shouldShowRationale=false with granted=false may indicate the app needs settings recovery."
+                    )
                 )
-            )
+                add(
+                    AndroidSkillMethod(
+                        toolName = "request_android_runtime_permissions",
+                        purpose = "Shows Android's runtime permission prompt for requested permissions through the current Activity.",
+                        whenToUse = "Use for CAMERA, location, Bluetooth runtime permissions, and POST_NOTIFICATIONS when the platform supports runtime prompts.",
+                        resultSemantics = "Each result reports granted after the user responds; false means the app still cannot use that protected API."
+                    )
+                )
+                if (requireUserConfirmation) {
+                    add(
+                        AndroidSkillMethod(
+                            toolName = "show_user_confirmation_dialog",
+                            purpose = "Shows a parameterized confirmation dialog and returns the selected button id to the agent loop.",
+                            whenToUse = "Use before permission prompts, settings jumps, external intents, sharing, messaging, recording, camera, or other actions the user may not expect.",
+                            resultSemantics = "The request must include target.toolName and target.input for the exact next protected Tool; selectedButtonId records the user's choice but does not authorize that Tool by itself."
+                        )
+                    )
+                }
+                add(
+                    AndroidSkillMethod(
+                        toolName = "open_android_settings_page",
+                        purpose = "Opens a controlled Android settings page such as app details, app permissions, notifications, battery optimization, Bluetooth, location, overlay, or exact alarm.",
+                        whenToUse = "Use when a runtime prompt is unavailable, the user must change a system switch, or permission recovery requires Settings.",
+                        resultSemantics = "opened=true only means Android accepted the settings Intent; the user still has to change the setting manually."
+                    )
+                )
+            }
         )
     }
 
-    fun appFacingIntentControl(): AndroidSkill {
+    fun appFacingIntentControl(requireUserConfirmation: Boolean = true): AndroidSkill {
+        val confirmationInstruction = if (requireUserConfirmation) {
+            "Before any user-visible external action, call show_user_confirmation_dialog immediately before launch_android_app_intent. Set target.toolName to launch_android_app_intent and target.input to the complete JSON input for the exact next call, including the actual target and parameters values; then call launch_android_app_intent with the identical input. selectedButtonId only records which dialog button the user chose; it does not authorize a protected Tool by itself. Do not infer authorization from the button id when the target or its input is missing or changed; the host-issued ticket must match."
+        } else {
+            AgentConfirmationPolicy.FULL_AUTHORIZATION_AGENT_INSTRUCTION
+        }
         return AndroidSkill(
             id = "app-facing-intent-control",
             description = "Use Android's native Intent resolver for user-visible app actions such as opening a URL, camera, dialer, map, share sheet, or media picker.",
@@ -245,24 +268,30 @@ object AndroidSystemSkills {
                 For a website or link, use target open_url with parameters.url. Do not use terminal_bash_execute, am, pm, or shell commands to launch Android apps or to infer whether a browser is installed. The terminal runs inside the host app's private runtime and is not Android Shell.
 
                 Supported targets include camera_capture, video_capture, pick_image, record_audio, dial_phone, send_sms, send_email, open_url, open_map, share_text, web_search, and open_app_market.
-                Before any user-visible external action, call show_user_confirmation_dialog immediately before launch_android_app_intent. Set target.toolName to launch_android_app_intent and target.input to the complete JSON input for the exact next call, including the actual target and parameters values; then call launch_android_app_intent with the identical input. For example, the confirmation target for a URL is {"toolName":"launch_android_app_intent","input":{"target":"open_url","parameters":{"url":"https://example.com"}}}. The confirmation target object is separate from any protected Tool input's own target field.
-                selectedButtonId only records which dialog button the user chose; it does not authorize a protected Tool by itself. Do not infer authorization from the button id when the target or its input is missing or changed; the host-issued ticket must match.
+                $confirmationInstruction
+                In confirmation mode, the confirmation target object is separate from any protected Tool input's own target field. In full authorization mode, never create a confirmation ToolCall.
                 launched=true means Android accepted and dispatched the Intent; it does not prove that the target app completed its UI action. If the tool returns no_handler or launch_failed, report that exact limitation and do not claim the action happened.
             """.trimIndent(),
-            methods = listOf(
-                AndroidSkillMethod(
-                    toolName = "show_user_confirmation_dialog",
-                    purpose = "Shows a parameterized confirmation dialog before a user-visible external Intent.",
-                    whenToUse = "Use before opening a URL, launching an external app, sharing, messaging, dialing, recording, or using camera/media pickers.",
-                    resultSemantics = "The request must include target.toolName and target.input for the exact next protected Tool; selectedButtonId records the user's choice but does not authorize that Tool by itself."
-                ),
-                AndroidSkillMethod(
-                    toolName = "launch_android_app_intent",
-                    purpose = "Dispatches a whitelisted Android app-facing Intent such as open_url, camera_capture, dial_phone, open_map, or share_text.",
-                    whenToUse = "Use instead of terminal commands whenever the user asks to open or hand data to an Android application.",
-                    resultSemantics = "launched=true means the Intent was dispatched; resolvedPackage identifies the selected Android handler when available."
+            methods = buildList {
+                if (requireUserConfirmation) {
+                    add(
+                        AndroidSkillMethod(
+                            toolName = "show_user_confirmation_dialog",
+                            purpose = "Shows a parameterized confirmation dialog before a user-visible external Intent.",
+                            whenToUse = "Use before opening a URL, launching an external app, sharing, messaging, dialing, recording, or using camera/media pickers.",
+                            resultSemantics = "The request must include target.toolName and target.input for the exact next protected Tool; selectedButtonId records the user's choice but does not authorize that Tool by itself."
+                        )
+                    )
+                }
+                add(
+                    AndroidSkillMethod(
+                        toolName = "launch_android_app_intent",
+                        purpose = "Dispatches a whitelisted Android app-facing Intent such as open_url, camera_capture, dial_phone, open_map, or share_text.",
+                        whenToUse = "Use instead of terminal commands whenever the user asks to open or hand data to an Android application.",
+                        resultSemantics = "launched=true means the Intent was dispatched; resolvedPackage identifies the selected Android handler when available."
+                    )
                 )
-            )
+            }
         )
     }
 }

@@ -63,6 +63,19 @@ class AndroidSystemSkillsTest {
         assertBoundConfirmationInstructions(skill.instructions)
     }
 
+    @Test
+    fun fullAuthorizationRemovesConfirmationMethodsFromAndroidSkills() {
+        val automation = AndroidSystemSkills.androidAutomationControl(requireUserConfirmation = false)
+        val permission = AndroidSystemSkills.permissionSettingsControl(requireUserConfirmation = false)
+        val intent = AndroidSystemSkills.appFacingIntentControl(requireUserConfirmation = false)
+
+        assertFalse(permission.methods.any { it.toolName == "show_user_confirmation_dialog" })
+        assertFalse(intent.methods.any { it.toolName == "show_user_confirmation_dialog" })
+        assertTrue(automation.instructions.contains("Do not call show_user_confirmation_dialog"))
+        assertTrue(permission.instructions.contains("Do not call show_user_confirmation_dialog"))
+        assertTrue(intent.instructions.contains("Do not call show_user_confirmation_dialog"))
+    }
+
     private fun assertBoundConfirmationInstructions(instructions: String) {
         assertTrue(instructions.contains("target.toolName"))
         assertTrue(instructions.contains("target.input"))
