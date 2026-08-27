@@ -150,32 +150,54 @@ object Ui {
     // Dynamic theme state
     val isDark: Boolean get() = ThemeManager.isDark
 
-    val Surface: Int get() = if (isDark) Color.rgb(17, 22, 20) else Color.rgb(248, 250, 247)
-    val SurfaceElevated: Int get() = if (isDark) Color.rgb(27, 36, 33) else Color.rgb(255, 255, 255)
-    val SurfaceSoft: Int get() = if (isDark) Color.rgb(36, 48, 44) else Color.rgb(238, 243, 240)
-    val SurfaceSubtle: Int get() = if (isDark) Color.rgb(22, 31, 28) else Color.rgb(243, 247, 244)
-    val Mint: Int get() = if (isDark) Color.rgb(47, 211, 155) else Color.rgb(17, 126, 92)
-    val MintLight: Int get() = if (isDark) Color.rgb(22, 58, 45) else Color.rgb(222, 245, 235)
-    val MintDark: Int get() = if (isDark) Color.rgb(38, 189, 137) else Color.rgb(17, 107, 79)
-    val MintStroke: Int get() = if (isDark) Color.rgb(36, 94, 73) else Color.rgb(176, 228, 206)
-    val TextPrimary: Int get() = if (isDark) Color.rgb(230, 240, 235) else Color.rgb(17, 28, 26)
-    val TextSecondary: Int get() = if (isDark) Color.rgb(158, 173, 167) else Color.rgb(83, 100, 96)
-    val TextMuted: Int get() = if (isDark) Color.rgb(108, 125, 118) else Color.rgb(139, 158, 153)
-    val Outline: Int get() = if (isDark) Color.rgb(44, 59, 53) else Color.rgb(224, 231, 226)
-    val OutlineFocus: Int get() = if (isDark) Color.rgb(47, 211, 155) else Color.rgb(17, 126, 92)
-    val UserBubble: Int get() = if (isDark) Color.rgb(26, 59, 47) else Color.rgb(222, 245, 235)
-    val UserStroke: Int get() = if (isDark) Color.rgb(45, 93, 75) else Color.rgb(176, 228, 206)
-    val AssistantBubble: Int get() = if (isDark) Color.rgb(27, 36, 33) else Color.rgb(255, 255, 255)
-    val AssistantStroke: Int get() = if (isDark) Color.rgb(44, 59, 53) else Color.rgb(224, 231, 226)
-    val CodeBg: Int get() = if (isDark) Color.rgb(22, 31, 28) else Color.rgb(236, 242, 239)
-    val CodeText: Int get() = if (isDark) Color.rgb(74, 222, 128) else Color.rgb(17, 107, 79)
-    val Success: Int get() = if (isDark) Color.rgb(52, 211, 153) else Color.rgb(38, 142, 98)
-    val SuccessSoft: Int get() = if (isDark) Color.rgb(19, 54, 40) else Color.rgb(233, 248, 240)
-    val Warning: Int get() = if (isDark) Color.rgb(251, 191, 36) else Color.rgb(180, 115, 20)
+    val Surface: Int get() = if (isDark) Color.rgb(18, 19, 22) else Color.rgb(251, 249, 245)
+    val SurfaceElevated: Int get() = if (isDark) Color.rgb(26, 27, 31) else Color.rgb(255, 255, 255)
+    val SurfaceSoft: Int get() = if (isDark) Color.rgb(36, 38, 43) else Color.rgb(240, 236, 229)
+    val SurfaceSubtle: Int get() = if (isDark) Color.rgb(30, 32, 36) else Color.rgb(245, 242, 236)
+    
+    // 主品牌与核心强调色：活力温暖橙红
+    val Mint: Int get() = if (isDark) Color.rgb(255, 110, 74) else Color.rgb(234, 84, 52)
+    val MintLight: Int get() = if (isDark) Color.rgb(58, 36, 30) else Color.rgb(253, 238, 233)
+    val MintDark: Int get() = if (isDark) Color.rgb(255, 131, 98) else Color.rgb(206, 62, 31)
+    val MintStroke: Int get() = if (isDark) Color.rgb(104, 58, 47) else Color.rgb(247, 195, 182)
+    
+    // 文字体系：浅色暖炭黑，深色通透灰白（绝不发绿）
+    val TextPrimary: Int get() = if (isDark) Color.rgb(240, 242, 245) else Color.rgb(28, 26, 23)
+    val TextSecondary: Int get() = if (isDark) Color.rgb(156, 161, 174) else Color.rgb(107, 102, 94)
+    val TextMuted: Int get() = if (isDark) Color.rgb(101, 106, 118) else Color.rgb(158, 152, 142)
+    
+    // 描边体系：浅色米灰，深色冷灰
+    val Outline: Int get() = if (isDark) Color.rgb(47, 50, 56) else Color.rgb(229, 224, 216)
+    val OutlineFocus: Int get() = if (isDark) Color.rgb(255, 110, 74) else Color.rgb(234, 84, 52)
+    
+    // 气泡色彩：用户暖橙粉底，助手纯白/纯炭黑底
+    val UserBubble: Int get() = if (isDark) Color.rgb(46, 34, 30) else Color.rgb(253, 238, 233)
+    val UserStroke: Int get() = if (isDark) Color.rgb(78, 52, 43) else Color.rgb(247, 195, 182)
+    val AssistantBubble: Int get() = if (isDark) Color.rgb(26, 27, 31) else Color.rgb(255, 255, 255)
+    val AssistantStroke: Int get() = if (isDark) Color.rgb(47, 50, 56) else Color.rgb(234, 229, 220)
+    
+    // 代码卡片与文本：深浅双模精致配色
+    val CodeBg: Int get() = if (isDark) Color.rgb(21, 22, 25) else Color.rgb(245, 242, 236)
+    val CodeText: Int get() = if (isDark) Color.rgb(110, 231, 183) else Color.rgb(45, 106, 79)
+    
+    // 清爽点缀色：淡青绿/草木绿
+    val Success: Int get() = if (isDark) Color.rgb(110, 231, 183) else Color.rgb(46, 125, 94)
+    val SuccessSoft: Int get() = if (isDark) Color.rgb(22, 46, 36) else Color.rgb(232, 245, 238)
+    
+    // 警告与危险提示色
+    val Warning: Int get() = if (isDark) Color.rgb(251, 191, 36) else Color.rgb(196, 126, 24)
     val WarningSoft: Int get() = if (isDark) Color.rgb(51, 39, 17) else Color.rgb(254, 247, 233)
     val WarningStroke: Int get() = if (isDark) Color.rgb(94, 72, 29) else Color.rgb(245, 224, 180)
-    val Danger: Int get() = if (isDark) Color.rgb(248, 113, 113) else Color.rgb(198, 54, 54)
+    val Danger: Int get() = if (isDark) Color.rgb(248, 113, 113) else Color.rgb(209, 57, 57)
     val DangerSoft: Int get() = if (isDark) Color.rgb(54, 25, 25) else Color.rgb(254, 238, 238)
+
+    // 新增语义化别名 Tokens
+    val Accent: Int get() = Mint
+    val AccentLight: Int get() = MintLight
+    val AccentDark: Int get() = MintDark
+    val AccentStroke: Int get() = MintStroke
+    val Sage: Int get() = Success
+    val SageSoft: Int get() = SuccessSoft
 
     fun dialogTheme(): Int = if (ThemeManager.isDark) {
         android.R.style.Theme_DeviceDefault_Dialog_Alert
