@@ -71,6 +71,7 @@ class AgentFloatingWindow(private val context: Context) : ConfirmationOverlayHos
     private var expandedY = dp(160)
     private var collapsedX = dp(16)
     private var collapsedY = dp(180)
+    private var externalAutomationMode = false
 
     var onSendMessage: ((String) -> Boolean)? = null
     var onStopAgent: (() -> Unit)? = null
@@ -122,6 +123,7 @@ class AgentFloatingWindow(private val context: Context) : ConfirmationOverlayHos
         expandedParams.y = clampY(collapsedY, expandedParams.height)
         expandedX = expandedParams.x
         expandedY = expandedParams.y
+        expandedParams.flags = expandedWindowFlags(forceFocusable = pendingConfirmation != null)
 
         val view = buildExpandedView()
         if (addViewSafely(view, expandedParams)) {
@@ -150,6 +152,7 @@ class AgentFloatingWindow(private val context: Context) : ConfirmationOverlayHos
         pendingConfirmation = request.toOverlayConfirmation()
         snapshot = snapshot.copy(pendingConfirmation = pendingConfirmation)
         if (expandedView == null) showExpanded()
+        updateExpandedWindowFlags(forceFocusable = true)
         renderSnapshot()
         return expandedView != null
     }
@@ -158,7 +161,11 @@ class AgentFloatingWindow(private val context: Context) : ConfirmationOverlayHos
         pendingConfirmation = null
         confirmationResult = null
         snapshot = snapshot.copy(pendingConfirmation = null)
-        renderSnapshot()
+        if (externalAutomationMode && expandedView != null) {
+            collapseToBubble()
+        } else {
+            renderSnapshot()
+        }
     }
 
     /** Render a stable, complete snapshot with bounded confirmation summaries. */
@@ -213,6 +220,23 @@ class AgentFloatingWindow(private val context: Context) : ConfirmationOverlayHos
     fun setSending(sending: Boolean) {
         snapshot = snapshot.copy(isBusy = sending)
         renderSnapshot()
+    }
+
+    /**
+     * Keeps the cross-app automation surface from stealing focus or covering
+     * the target app while AccessibilityService tools are running.
+     *
+     * The bubble remains available as a small status entry point. An expanded
+     * surface is temporarily allowed to receive focus only while a
+     * confirmation card is visible, because the user must be able to press a
+     * confirmation button.
+     */
+    fun setExternalAutomationMode(active: Boolean) {
+        externalAutomationMode = active
+        if (active && expandedView != null && pendingConfirmation == null) {
+            collapseToBubble()
+        }
+        updateExpandedWindowFlags(forceFocusable = pendingConfirmation != null)
     }
 
     /** Synchronize the hidden overlay composer with the main Activity draft. */
@@ -575,6 +599,26 @@ class AgentFloatingWindow(private val context: Context) : ConfirmationOverlayHos
         imm.hideSoftInputFromWindow(field.windowToken, 0)
     }
 
+    private fun expandedWindowFlags(forceFocusable: Boolean): Int {
+        val focusFlag = if (externalAutomationMode && !forceFocusable) {
+            WindowManager.LayoutParams.FLAG_NOT_FOCUSABLE
+        } else {
+            0
+        }
+        return WindowManager.LayoutParams.FLAG_NOT_TOUCH_MODAL or focusFlag
+    }
+
+    private fun updateExpandedWindowFlags(forceFocusable: Boolean) {
+        expandedParams.flags = expandedWindowFlags(forceFocusable)
+        expandedView?.let { view ->
+            runCatching {
+                windowManager.updateViewLayout(view, expandedParams)
+            }.onFailure {
+                Log.w(TAG, "Unable to update Agent overlay focus mode", it)
+            }
+        }
+    }
+
     private fun renderSnapshot() {
         collapsedTitleText?.text = snapshot.title
         collapsedStatusText?.apply {
@@ -759,6 +803,9 @@ class AgentFloatingWindow(private val context: Context) : ConfirmationOverlayHos
         snapshot = snapshot.copy(pendingConfirmation = null)
         renderSnapshot()
         callback?.invoke(buttonId)
+        if (externalAutomationMode) {
+            collapseToBubble()
+        }
     }
 
     private fun addSectionLabel(container: LinearLayout, text: String) {

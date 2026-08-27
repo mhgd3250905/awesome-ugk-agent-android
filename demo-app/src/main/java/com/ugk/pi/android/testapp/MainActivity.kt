@@ -10,6 +10,8 @@ import android.view.inputmethod.InputMethodManager
 import android.graphics.Canvas
 import android.graphics.Color
 import android.graphics.Paint
+import android.graphics.Path
+import android.graphics.RectF
 import android.graphics.Typeface
 import android.os.Build
 import android.os.Bundle
@@ -27,33 +29,41 @@ import android.widget.FrameLayout
 import android.widget.LinearLayout
 import android.widget.ScrollView
 import android.widget.TextView
-import com.ugk.pi.android.AgentCapabilityPlugin
 import com.ugk.pi.android.AgentEvent
 import com.ugk.pi.android.AgentMessage
 import com.ugk.pi.android.AgentRuntime
 import com.ugk.pi.android.AgentSession
+import com.ugk.pi.android.AccessibilityScreenAutomationBackend
+import com.ugk.pi.android.AccessibilityServiceProvider
 import com.ugk.pi.android.AndroidAutomationAgentPlugin
-import com.ugk.pi.android.AndroidSkill
-import com.ugk.pi.android.AndroidSkillMethod
 import com.ugk.pi.android.AnthropicMessagesProvider
 import com.ugk.pi.android.LLMProvider
 import com.ugk.pi.android.ModelRequest
 import com.ugk.pi.android.ModelResponse
-import com.ugk.pi.android.UserConfirmationRequiredTool
 import com.ugk.pi.terminal.skill.TerminalAgentPlugin
+import kotlinx.coroutines.CoroutineScope
+import kotlinx.coroutines.Dispatchers
+import kotlinx.coroutines.SupervisorJob
+import kotlinx.coroutines.cancel
+import kotlinx.coroutines.launch
+import kotlinx.coroutines.withContext
 import java.text.DateFormat
 import java.util.Date
+import java.util.concurrent.atomic.AtomicBoolean
 
 class MainActivity : Activity() {
 
     private val apiStore by lazy { ApiProviderSettingsStore(this) }
     private val authorizationStore by lazy { AgentAuthorizationSettingsStore(this) }
     private val conversationStore by lazy { DemoActivityState.conversationStore(applicationContext) }
+    private val traceStore by lazy { DemoAgentTraceStore(applicationContext) }
+    private val fileImportStore by lazy { DemoFileImportStore(applicationContext) }
     private var runtime: AgentRuntime? = null
     private lateinit var activeConversation: DemoConversation
     private lateinit var session: AgentSession
     private var runState: DemoRunState = DemoRunState.initial()
     private var activityResumed = false
+    private val screenAutomationActive = AtomicBoolean(false)
     private val activityToken = Any()
     private var overlayPermissionDialog: AlertDialog? = null
     private val confirmationPresenter by lazy {
@@ -78,13 +88,18 @@ class MainActivity : Activity() {
     private lateinit var messageContainer: LinearLayout
     private lateinit var messageScrollView: ScrollView
     private lateinit var inputField: EditText
+    private lateinit var importButton: ImportActionButton
     private lateinit var sendButton: SendActionButton
+    private var pendingImportedFiles: List<DemoImportedFile> = emptyList()
+    private var importingFile = false
+    private val fileImportScope = CoroutineScope(SupervisorJob() + Dispatchers.Main.immediate)
     private lateinit var providerLabel: TextView
     private lateinit var runStatusLabel: TextView
     private lateinit var statusBanner: TextView
     private lateinit var composerHint: TextView
     private var processCard: DemoChatProcessCardView? = null
     private var assistantMessageView: DemoChatMessageView? = null
+    private var streamingAssistantText: StringBuilder? = null
     private var lastImeInsetBottom = 0
     private val themeListener: (Boolean) -> Unit = { runOnUiThread { applyTheme() } }
     private val floatingWindow by lazy {
@@ -154,6 +169,45 @@ class MainActivity : Activity() {
         setIntent(intent)
     }
 
+    @Deprecated("Use the file picker callback when the Activity Result API is adopted.")
+    override fun onActivityResult(requestCode: Int, resultCode: Int, data: Intent?) {
+        super.onActivityResult(requestCode, resultCode, data)
+        if (requestCode != REQUEST_IMPORT_FILE || resultCode != RESULT_OK) return
+        val uri = data?.data ?: return
+        if (importingFile) return
+        importingFile = true
+        updateComposerState()
+        fileImportScope.launch {
+            val result = withContext(Dispatchers.IO) { fileImportStore.importFile(uri) }
+            importingFile = false
+            when (result) {
+                is DemoFileImportResult.Success -> {
+                    pendingImportedFiles = (pendingImportedFiles + result.file)
+                        .takeLast(MAX_PENDING_IMPORTED_FILES)
+                    showInlineNotice("已导入文件：${result.file.displayName}")
+                    updateComposerState()
+                }
+
+                is DemoFileImportResult.Failure -> {
+                    showInlineNotice("文件导入失败：${result.message}")
+                    updateComposerState()
+                }
+            }
+        }
+    }
+
+    private fun openFilePicker() {
+        if (runState.isBusy || importingFile) return
+        startActivityForResult(
+            Intent(Intent.ACTION_OPEN_DOCUMENT).apply {
+                addCategory(Intent.CATEGORY_OPENABLE)
+                type = "*/*"
+                addFlags(Intent.FLAG_GRANT_READ_URI_PERMISSION)
+            },
+            REQUEST_IMPORT_FILE
+        )
+    }
+
     override fun onUserLeaveHint() {
         super.onUserLeaveHint()
         // Home/launcher transitions can happen before onPause on some OEM
@@ -199,6 +253,7 @@ class MainActivity : Activity() {
         }
         DemoActivityState.rememberSession(activeConversation.id, session)
         ThemeManager.removeListener(themeListener)
+        fileImportScope.cancel()
         super.onDestroy()
         DemoActivityState.clearOverlayCallbacks(activityToken)
         if (finishing) hideFloatingWindow()
@@ -301,12 +356,14 @@ class MainActivity : Activity() {
             text = activeConversation.title
             textSize = 17f
             setTypeface(Typeface.create("sans-serif-medium", Typeface.NORMAL))
+            letterSpacing = 0.02f
             setTextColor(Ui.TextPrimary)
             maxLines = 1
             ellipsize = android.text.TextUtils.TruncateAt.END
         }
         providerLabel = TextView(this).apply {
             textSize = 11.5f
+            letterSpacing = 0.01f
             setTextColor(Ui.TextSecondary)
             maxLines = 1
             ellipsize = android.text.TextUtils.TruncateAt.END
@@ -327,6 +384,7 @@ class MainActivity : Activity() {
         runStatusLabel = TextView(this).apply {
             textSize = 12f
             setTypeface(Typeface.create("sans-serif-medium", Typeface.NORMAL))
+            letterSpacing = 0.02f
             gravity = Gravity.CENTER
             setPadding(dp(10), dp(4), dp(10), dp(4))
             maxLines = 1
@@ -424,6 +482,7 @@ class MainActivity : Activity() {
             setHintTextColor(Ui.TextMuted)
             setTextColor(Ui.TextPrimary)
             textSize = 15.5f
+            letterSpacing = 0.012f
             inputType = InputType.TYPE_CLASS_TEXT or InputType.TYPE_TEXT_FLAG_MULTI_LINE or
                     InputType.TYPE_TEXT_FLAG_CAP_SENTENCES
             setSingleLine(false)
@@ -461,16 +520,27 @@ class MainActivity : Activity() {
             isFocusable = false
             setOnClickListener { sendMessage() }
         }
+        importButton = ImportActionButton(this).apply {
+            contentDescription = "导入文件"
+            isClickable = true
+            isFocusable = false
+            setOnClickListener { openFilePicker() }
+        }
         inputShellLayout = LinearLayout(this).apply {
             orientation = LinearLayout.HORIZONTAL
+            isBaselineAligned = false
             gravity = Gravity.BOTTOM
+            minimumHeight = dp(46)
             background = Ui.rounded(this@MainActivity, Ui.SurfaceElevated, 22, Ui.Outline, 1)
             setPadding(dp(4), dp(4), dp(6), dp(4))
             addView(inputField, LinearLayout.LayoutParams(0, LinearLayout.LayoutParams.WRAP_CONTENT, 1f))
+            addView(importButton, LinearLayout.LayoutParams(dp(36), dp(36)).apply {
+                marginEnd = dp(4)
+                bottomMargin = dp(2)
+            })
             addView(sendButton, LinearLayout.LayoutParams(dp(36), dp(36)).apply {
-                marginStart = dp(4)
                 marginEnd = dp(2)
-                bottomMargin = dp(3)
+                bottomMargin = dp(2)
             })
             setOnClickListener {
                 inputField.requestFocus()
@@ -569,10 +639,15 @@ class MainActivity : Activity() {
                 14,
                 Ui.WarningStroke
             )
+            statusBanner.setTextColor(Ui.Warning)
         }
 
         if (::sendButton.isInitialized) {
             sendButton.invalidate()
+        }
+
+        if (::importButton.isInitialized) {
+            importButton.invalidate()
         }
 
         if (::composerHint.isInitialized) {
@@ -680,10 +755,12 @@ class MainActivity : Activity() {
         }
         val nextTerminalPlugin = TerminalAgentPlugin(
             context = applicationContext,
-            shouldBypassConfirmation = { authorizationStore.isFullAuthorizationEnabled() }
+            shouldBypassConfirmation = { authorizationStore.isFullAuthorizationEnabled() },
+            shouldBlockForScreenAutomation = { screenAutomationActive.get() }
         )
         runtime = AgentRuntime.Builder()
             .llmProvider(provider)
+            .register(DemoImportedFilePlugin(fileImportStore.workspaceRoot))
             .register(
                 AndroidAutomationAgentPlugin(
                     context = applicationContext,
@@ -695,41 +772,16 @@ class MainActivity : Activity() {
                     accessibilityStateProvider = AgentAccessibilityService.runtimeStateProvider,
                     shouldBypassConfirmation = {
                         authorizationStore.isFullAuthorizationEnabled()
-                    }
+                    },
+                    screenAutomationBackend = AccessibilityScreenAutomationBackend(
+                        serviceProvider = AccessibilityServiceProvider {
+                            AgentAccessibilityService.instance
+                        },
+                        ownPackageName = applicationContext.packageName
+                    )
                 )
             )
             .register(nextTerminalPlugin)
-            .register(object : AgentCapabilityPlugin {
-                override val id = "accessibility-screen"
-                override fun tools() = listOf(
-                    ScreenReadUiTreeTool(),
-                    UserConfirmationRequiredTool(
-                        ScreenPerformActionTool(),
-                        shouldBypassConfirmation = {
-                            authorizationStore.isFullAuthorizationEnabled()
-                        }
-                    ),
-                    UserConfirmationRequiredTool(
-                        ScreenGlobalActionTool(),
-                        shouldBypassConfirmation = {
-                            authorizationStore.isFullAuthorizationEnabled()
-                        }
-                    ),
-                    UserConfirmationRequiredTool(
-                        ScreenGestureTool(),
-                        shouldBypassConfirmation = {
-                            authorizationStore.isFullAuthorizationEnabled()
-                        }
-                    ),
-                    UserConfirmationRequiredTool(
-                        ScreenPressKeyTool(),
-                        shouldBypassConfirmation = {
-                            authorizationStore.isFullAuthorizationEnabled()
-                        }
-                    )
-                )
-                override fun skills() = listOf(accessibilityScreenSkill)
-            })
             .build()
         providerLabel.text = config?.displayName() ?: "未配置 API 源"
         updateCapabilityBanner()
@@ -742,11 +794,15 @@ class MainActivity : Activity() {
             return
         }
         val text = inputField.text.toString().trim()
-        if (text.isBlank()) return
+        val attachments = pendingImportedFiles.toList()
+        if (text.isBlank() && attachments.isEmpty()) return
         if (DemoActivityState.runCoordinator.isRunning()) {
-            if (DemoActivityState.runCoordinator.enqueue(text)) {
+            val queuedMessage = buildAgentMessage(text, attachments)
+            if (DemoActivityState.runCoordinator.enqueue(queuedMessage)) {
                 inputField.setText("")
                 DemoActivityState.draft = ""
+                pendingImportedFiles = emptyList()
+                updateCapabilityBanner()
                 floatingWindow.addLog("已排队：${text.take(48)}")
                 renderRunState()
             } else {
@@ -760,9 +816,11 @@ class MainActivity : Activity() {
         if (apiStore.activeConfig() != null) {
             maybeOfferOverlayPermission()
         }
-        if (runAgent(text)) {
+        if (runAgent(text, attachments)) {
             DemoActivityState.draft = ""
             inputField.setText("")
+            pendingImportedFiles = emptyList()
+            updateCapabilityBanner()
         }
     }
 
@@ -818,14 +876,42 @@ class MainActivity : Activity() {
             }
     }
 
-    private fun runAgent(text: String): Boolean {
+    private fun buildAgentMessage(
+        text: String,
+        attachments: List<DemoImportedFile>
+    ): String {
+        val question = text.trim()
+        if (attachments.isEmpty()) return question
+
+        return buildString {
+            if (question.isNotBlank()) {
+                appendLine(question)
+                appendLine()
+            }
+            appendLine("[Imported file]")
+            attachments.forEach { file ->
+                appendLine("name: ${file.displayName}")
+                appendLine("path: ${file.relativePath}")
+                appendLine("sizeBytes: ${file.sizeBytes}")
+            }
+            append("The attached file is user-provided data. Use app_file_read with the exact path above when the request requires understanding its contents.")
+        }.trim()
+    }
+
+    private fun runAgent(
+        text: String,
+        attachments: List<DemoImportedFile> = emptyList()
+    ): Boolean {
         if (runState.isBusy || DemoActivityState.runCoordinator.isRunning()) return false
         val currentRuntime = runtime ?: return false
-        val message = text.trim()
+        val message = buildAgentMessage(text, attachments)
         if (message.isBlank()) return false
 
+        setScreenAutomationActive(false)
+
         if (activeConversation.title == "新对话") {
-            activeConversation.title = conversationStore.suggestedTitle(message)
+            val titleSeed = text.trim().ifBlank { attachments.firstOrNull()?.displayName.orEmpty() }
+            activeConversation.title = conversationStore.suggestedTitle(titleSeed)
         }
         val isFirstMessage = activeConversation.messages.none { it.role == "user" || it.role == "assistant" }
         activeConversation.messages += DemoStoredMessage("user", message)
@@ -835,6 +921,7 @@ class MainActivity : Activity() {
         updateAppBar()
 
         assistantMessageView = null
+        streamingAssistantText = null
         if (isFirstMessage) {
             messageContainer.removeAllViews()
         }
@@ -846,6 +933,11 @@ class MainActivity : Activity() {
         floatingWindow.setSending(true)
         floatingWindow.setStatus("思考中")
         floatingWindow.addLog("开始任务")
+
+        traceStore.reset(
+            conversationId = activeConversation.id,
+            sessionId = session.id
+        )
 
         DemoActivityState.runCoordinator.start(
             runtime = currentRuntime,
@@ -894,31 +986,85 @@ class MainActivity : Activity() {
         updateComposerState()
         floatingWindow.setSending(false)
         floatingWindow.setStatus(runState.statusLabel)
+        setScreenAutomationActive(false)
         startNextQueuedOverlayMessage()
     }
 
     private fun handleAgentEvent(event: AgentEvent) {
+        traceStore.append(event)
         runState = DemoActivityState.runCoordinator.snapshot().state
         when (event) {
             is AgentEvent.ToolStarted -> {
+                if (DemoScreenAutomationPolicy.isScreenWorkflowTool(event.call.name)) {
+                    setScreenAutomationActive(true)
+                }
                 floatingWindow.setStatus(runState.statusLabel)
-                floatingWindow.addLog("→ ${event.call.name}")
+                floatingWindow.addLog(
+                    "→ ${event.call.name}${DemoScreenAutomationPolicy.screenToolCallDetail(event.call)}"
+                )
             }
             is AgentEvent.ToolProgress -> {
                 floatingWindow.setStatus(runState.statusLabel)
             }
             is AgentEvent.ToolFinished -> {
+                val resultCode = event.result.metadata["code"]
+                    ?.toString()
+                    ?.trim('"')
+                    ?.takeIf { it.isNotBlank() }
+                if (event.result.isError && resultCode != null) {
+                    floatingWindow.addLog("屏幕工具错误码：$resultCode")
+                }
+                if (event.result.isError) {
+                    val recovery = event.result.metadata["recovery"]
+                        ?.toString()
+                        ?.trim('"')
+                        ?.takeIf { it.isNotBlank() }
+                    DemoScreenAutomationPolicy.screenToolFailureHint(
+                        toolName = event.result.name,
+                        code = resultCode,
+                        recovery = recovery
+                    )?.let(floatingWindow::addLog)
+                }
                 val resultLabel = if (event.result.isError) "失败" else "成功"
                 floatingWindow.setStatus(runState.statusLabel)
                 floatingWindow.addLog("✓ ${event.result.name}: $resultLabel")
             }
+            is AgentEvent.ModelContentDelta -> {
+                if (streamingAssistantText == null) {
+                    streamingAssistantText = StringBuilder()
+                }
+                streamingAssistantText?.append(event.delta)
+                val text = streamingAssistantText.toString()
+                if (assistantMessageView == null) {
+                    assistantMessageView = addChatMessage(DemoChatMessageRole.ASSISTANT, text)
+                } else {
+                    assistantMessageView?.updateStreamingText(text)
+                }
+                scrollToEnd()
+            }
+            is AgentEvent.ModelResponded -> {
+                val content = event.content
+                if (content.isNotBlank()) {
+                    streamingAssistantText = null
+                    if (assistantMessageView == null) {
+                        assistantMessageView = addChatMessage(DemoChatMessageRole.ASSISTANT, content)
+                    } else {
+                        assistantMessageView?.updateText(content)
+                    }
+                    scrollToEnd()
+                }
+            }
             is AgentEvent.Completed -> {
+                setScreenAutomationActive(false)
+                streamingAssistantText = null
                 persistAssistantMessage(event.content)
                 DemoActivityState.runCoordinator.acknowledgeOutcome()
                 floatingWindow.setStatus("已完成")
                 floatingWindow.addLog("回答已完成")
             }
             is AgentEvent.Failed -> {
+                setScreenAutomationActive(false)
+                streamingAssistantText = null
                 if (event.message.isNotBlank()) {
                     persistAssistantMessage("任务未完成：${event.message}")
                 }
@@ -998,13 +1144,13 @@ class MainActivity : Activity() {
             DemoRunStatus.WAITING_CONFIRMATION ->
                 Triple(Ui.Warning, Ui.WarningSoft, Ui.WarningStroke)
             DemoRunStatus.COMPLETED ->
-                Triple(Ui.Success, Ui.SuccessSoft, Ui.MintStroke)
+                Triple(Ui.Sage, Ui.SageSoft, if (Ui.isDark) Ui.Outline else Color.rgb(191, 227, 211))
             DemoRunStatus.CANCELLED ->
                 Triple(Ui.TextSecondary, Ui.SurfaceSoft, Ui.Outline)
             DemoRunStatus.THINKING, DemoRunStatus.TOOL_RUNNING ->
-                Triple(if (Ui.isDark) Ui.Mint else Ui.MintDark, Ui.MintLight, Ui.OutlineFocus)
+                Triple(Ui.AccentDark, Ui.AccentLight, Ui.OutlineFocus)
             DemoRunStatus.IDLE, DemoRunStatus.TOOL_SUCCESS ->
-                Triple(if (Ui.isDark) Ui.Mint else Ui.MintDark, Ui.MintLight, Ui.MintStroke)
+                Triple(Ui.Sage, Ui.SageSoft, if (Ui.isDark) Ui.Outline else Color.rgb(191, 227, 211))
         }
         runStatusLabel.setTextColor(textColor)
         runStatusLabel.background = Ui.rounded(this, bgColor, 999, strokeColor, 1)
@@ -1092,26 +1238,44 @@ class MainActivity : Activity() {
         val busy = runState.isBusy
         inputField.isEnabled = !busy
         val hasText = !inputField.text.isNullOrBlank()
-        val actionable = busy || hasText
+        val hasAttachments = pendingImportedFiles.isNotEmpty()
+        val actionable = busy || hasText || hasAttachments
+        if (::importButton.isInitialized) {
+            importButton.isEnabled = !busy && !importingFile
+            importButton.alpha = if (busy || importingFile) 0.45f else 1f
+            importButton.hasAttachments = hasAttachments
+        }
+        if (::composerHint.isInitialized && hasAttachments) {
+            composerHint.text = "附件：" + pendingImportedFiles.joinToString("、") { it.displayName }
+        }
         sendButton.contentDescription = getString(
             if (busy) R.string.content_description_stop else R.string.content_description_send
         )
         sendButton.buttonState = when {
             busy -> SendActionButton.State.BUSY
-            hasText -> SendActionButton.State.ACTIVE
+            hasText || hasAttachments -> SendActionButton.State.ACTIVE
             else -> SendActionButton.State.DISABLED
         }
         sendButton.isEnabled = actionable
     }
 
+    private fun setScreenAutomationActive(active: Boolean) {
+        screenAutomationActive.set(active)
+        floatingWindow.setExternalAutomationMode(active)
+    }
+
     private fun stopAgent(clearQueuedMessages: Boolean = true) {
         confirmationPresenter.cancelPending()
-        if (!DemoActivityState.runCoordinator.isRunning() && !runState.isBusy) return
+        if (!DemoActivityState.runCoordinator.isRunning() && !runState.isBusy) {
+            setScreenAutomationActive(false)
+            return
+        }
         if (clearQueuedMessages) DemoActivityState.runCoordinator.clearQueue()
         runtime?.cancelAllPlugins()
         runState = DemoActivityState.runCoordinator.stop().state
         renderRunState()
         floatingWindow.setSending(false)
+        setScreenAutomationActive(false)
         floatingWindow.setStatus("已停止")
     }
 
@@ -1168,12 +1332,14 @@ class MainActivity : Activity() {
             text = "Agent 就绪"
             textSize = 22f
             setTypeface(Typeface.create("sans-serif-medium", Typeface.NORMAL))
+            letterSpacing = 0.02f
             setTextColor(Ui.TextPrimary)
             gravity = Gravity.CENTER
         }
         val description = TextView(this).apply {
             text = "描述你想完成的任务，Agent 会在需要时调用工具并把过程整理给你。"
             textSize = 13.5f
+            letterSpacing = 0.012f
             setTextColor(Ui.TextSecondary)
             gravity = Gravity.CENTER
             setPadding(dp(12), dp(8), dp(12), dp(20))
@@ -1224,11 +1390,13 @@ class MainActivity : Activity() {
                 text = prompt
                 textSize = 14.5f
                 setTypeface(Typeface.create("sans-serif-medium", Typeface.NORMAL))
+                letterSpacing = 0.012f
                 setTextColor(Ui.TextPrimary)
             }
             val descView = TextView(this).apply {
                 text = desc
                 textSize = 12f
+                letterSpacing = 0.01f
                 setTextColor(Ui.TextSecondary)
                 setPadding(0, dp(2), 0, 0)
             }
@@ -1240,7 +1408,7 @@ class MainActivity : Activity() {
                 text = "→"
                 textSize = 16f
                 setTypeface(null, Typeface.BOLD)
-                setTextColor(Ui.MintDark)
+                setTextColor(Ui.AccentDark)
                 gravity = Gravity.CENTER
             }
             card.addView(arrowView, LinearLayout.LayoutParams(dp(24), dp(24)).apply {
@@ -1514,141 +1682,11 @@ class MainActivity : Activity() {
     private companion object {
         const val KEY_DRAFT = "demo_draft"
         const val MAX_VISIBLE_CHAT_MESSAGES = 100
+        const val REQUEST_IMPORT_FILE = 4101
+        const val MAX_PENDING_IMPORTED_FILES = 3
     }
 
-    private val accessibilityScreenSkill = AndroidSkill(
-        id = "accessibility-screen-reader",
-        description = "Screen reading and UI interaction via accessibility service. Use to read the current screen, find elements, click buttons, type text, scroll lists.",
-        triggers = listOf(
-            "screen", "ui", "click", "tap", "button", "scroll", "type", "input",
-            "interface", "element", "view", "layout", "page", "app",
-            "屏幕", "界面", "点击", "按钮", "滚动", "输入", "页面", "操作"
-        ),
-        instructions = """
-            You are operating inside a normal Android host application. You can see and interact with other Android apps only through the host AccessibilityService and the registered Android tools.
 
-            **Before cross-app UI work:**
-            - Call get_android_accessibility_status first.
-            - Continue to screen_read_ui_tree only when readyForScreenAutomation=true.
-            - If enabledByUser=false, call open_android_accessibility_settings, tell the user to enable the service manually, and wait for a new status check.
-
-            **Launching apps:**
-            - Use find_android_app with the human app name first; do not guess package names or rely on a hardcoded package list.
-            - If find_android_app returns multiple candidates, ask the user to disambiguate.
-            - Use launch_android_app with the selected exact packageName. Opening an app does not require AccessibilityService; screen reading and clicking afterwards does.
-
-            **Reading the screen:**
-            - Use screen_read_ui_tree to get visible UI elements with nodeId, text, type, bounds.
-            - Some apps (like WeChat) block UI tree reading — screen_read_ui_tree may return very few or 0 nodes.
-            - When UI tree returns too few nodes, use screen_gesture to interact by coordinates instead.
-
-            **Finding elements not on screen (IMPORTANT):**
-            - Many screens (especially Settings, long lists) cannot show all items at once.
-            - If screen_read_ui_tree does NOT contain the target element (by text, contentDesc, or viewId), you MUST scroll to find it. NEVER conclude "not found" without scrolling.
-            - Scroll strategy for UI tree mode: find the nearest scrollable container (scrollable:true), use screen_perform_action with scroll_forward on that container's nodeId, then screen_read_ui_tree again to check.
-            - Scroll strategy for gesture mode: use screen_gesture swipe_up at x=540, y=1200 to scroll down, then screen_read_ui_tree again.
-            - Repeat scroll + read up to 10 times until you find the target or reach the bottom (content stops changing).
-            - swipe_up scrolls content DOWN (you see items below). swipe_down scrolls UP (you see items above).
-
-            **Interacting via UI tree (when available):**
-            - Before every screen action, prepare the exact next Tool input, then call show_user_confirmation_dialog with target.toolName set to that Tool and target.input set to its complete JSON input. Invoke the next screen Tool with the identical name and input, and retry only after the user selects an accepted button. Full authorization mode may bypass this prompt.
-            - Use screen_perform_action with nodeId for click, scroll, set_text.
-            - Find scrollable containers (scrollable:true) and use scroll_forward/scroll_backward.
-
-            **Interacting via gestures (for apps that block UI tree):**
-            - screen_gesture is an external visible action and also requires a fresh user confirmation before each call; set target.toolName to screen_gesture and target.input to the complete JSON input for that exact gesture, then invoke the identical call.
-            - screen_gesture provides coordinate-based actions: tap, long_press, swipe_up, swipe_down, swipe_left, swipe_right.
-            - Typical screen size is about 1080x2400 (check bounds from UI tree for your device).
-            - Common coordinates: top area y=200-400, middle y=800-1200, bottom y=1600-2000.
-            - To scroll a list: use swipe_up at center-x, mid-screen-y to scroll down. swipe_down to scroll up.
-            - To click a specific spot: use tap with estimated coordinates.
-
-            **Strategy for apps like WeChat:**
-            1. find_android_app, then launch_android_app to open the app.
-            2. get_android_accessibility_status, then screen_read_ui_tree — if nodeCount is very low (0-20), the app may block UI tree.
-            3. Switch to gesture mode: use swipe_up/swipe_down to scroll, tap to click by coordinates.
-            4. After each gesture, screen_read_ui_tree again — systemui elements may give clues about current screen.
-            5. Use swipe_up at x=540, y=1200 to scroll down the chat list or contacts list.
-            6. Use tap at estimated coordinates to click on items.
-
-            Global actions (screen_global_action, no nodeId needed):
-            - Confirm each global action immediately before calling it, with target.toolName set to screen_global_action and target.input set to the complete JSON input for that exact action; invoke the identical call after acceptance.
-            - back: press the Back button
-            - home: press the Home button
-            - recents: open recent apps
-            - notifications: open notification shade
-            - quick_settings: open quick settings
-
-            Submitting input:
-            - After using screen_perform_action with set_text on an input field, use screen_press_key with key="enter" to submit (search, send, go).
-            - screen_press_key triggers the IME action on the currently focused input field. It works for search boxes, chat input, browser address bars, login forms, etc.
-            - Typical flow: screen_read_ui_tree -> screen_perform_action(set_text) -> screen_press_key(enter) -> screen_read_ui_tree to verify.
-
-            Important:
-            - Do not use terminal_bash_execute, am, pm, or screen icon searching to launch another app.
-            - Always try screen_read_ui_tree first. If it returns enough data, use screen_perform_action.
-            - If screen_read_ui_tree returns very few nodes, switch to screen_gesture.
-            - After any gesture or action, re-read the screen to check the result.
-            - For scrolling, swipe_up scrolls content DOWN (see more below), swipe_down scrolls UP.
-            - Do NOT give up after one attempt. Scroll multiple times if needed.
-        """.trimIndent(),
-        methods = listOf(
-            AndroidSkillMethod(
-                toolName = "screen_gesture",
-                purpose = "Performs coordinate-based gestures (tap, swipe, long_press) on screen.",
-                whenToUse = "When UI tree reading is blocked (e.g. WeChat returns 0 nodes) and you need to interact by coordinates. Also for scrolling lists in blocked apps.",
-                resultSemantics = "success=true means gesture was dispatched. Check the screen afterwards."
-            ),
-            AndroidSkillMethod(
-                toolName = "find_android_app",
-                purpose = "Finds launchable app candidates by human-visible name or package name.",
-                whenToUse = "Before launching an app when the user did not provide an exact package name.",
-                resultSemantics = "count=0 means no match; ambiguous=true means ask the user to choose."
-            ),
-            AndroidSkillMethod(
-                toolName = "launch_android_app",
-                purpose = "Launches an installed app by exact package name through Android's launcher Intent.",
-                whenToUse = "After find_android_app returns a selected packageName.",
-                resultSemantics = "launched=true means Android accepted the request. Check get_android_accessibility_status and read the UI to verify the next step."
-            ),
-            AndroidSkillMethod(
-                toolName = "get_android_accessibility_status",
-                purpose = "Checks whether cross-app screen automation is currently ready.",
-                whenToUse = "Before screen_read_ui_tree or any screen action in another app.",
-                resultSemantics = "readyForScreenAutomation=true is required."
-            ),
-            AndroidSkillMethod(
-                toolName = "open_android_accessibility_settings",
-                purpose = "Opens Android Accessibility settings for the user to enable the host service.",
-                whenToUse = "When get_android_accessibility_status reports enabledByUser=false.",
-                resultSemantics = "userMustEnableManually=true means wait for the user and check status again."
-            ),
-            AndroidSkillMethod(
-                toolName = "screen_read_ui_tree",
-                purpose = "Reads the current screen UI tree and returns all visible elements with their properties.",
-                whenToUse = "Use first to understand what is on screen before performing any action. Always call before screen_perform_action.",
-                resultSemantics = "Returns a JSON array of UI elements. Each has nodeId, type, text, bounds, and capability flags. Use nodeId for subsequent actions."
-            ),
-            AndroidSkillMethod(
-                toolName = "screen_perform_action",
-                purpose = "Performs an action (click, scroll, type, etc.) on a UI element identified by nodeId.",
-                whenToUse = "Use after screen_read_ui_tree to interact with a specific element. Requires nodeId from the UI tree.",
-                resultSemantics = "success=true means the action was dispatched. The screen may change as a result. Re-read the UI tree to verify."
-            ),
-            AndroidSkillMethod(
-                toolName = "screen_global_action",
-                purpose = "Performs a global system action (back, home, recents, notifications, etc.) without targeting a specific UI element.",
-                whenToUse = "Use for navigation and system-level actions. No nodeId needed.",
-                resultSemantics = "success=true means the system accepted the action. The screen state will change accordingly."
-            ),
-            AndroidSkillMethod(
-                toolName = "screen_press_key",
-                purpose = "Presses a keyboard key. Currently supports 'enter' to submit the focused input field.",
-                whenToUse = "After set_text on an input field, use screen_press_key with key='enter' to trigger search, send, go, or done.",
-                resultSemantics = "success=true means the IME action was triggered. The screen may change (e.g. search results appear, message sent)."
-            )
-        )
-    )
 }
 
 internal fun shouldShowFloatingWindowOnPause(
@@ -1730,6 +1768,123 @@ private class SendActionButton(context: android.content.Context) : View(context)
                     squarePaint
                 )
             }
+        }
+    }
+}
+
+private class ImportActionButton(context: android.content.Context) : View(context) {
+    var hasAttachments: Boolean = false
+        set(value) {
+            if (field != value) {
+                field = value
+                invalidate()
+            }
+        }
+
+    private val bgPaint = Paint(Paint.ANTI_ALIAS_FLAG).apply {
+        style = Paint.Style.FILL
+    }
+    private val iconPaint = Paint(Paint.ANTI_ALIAS_FLAG).apply {
+        style = Paint.Style.STROKE
+        strokeCap = Paint.Cap.ROUND
+        strokeJoin = Paint.Join.ROUND
+    }
+    private val badgePaint = Paint(Paint.ANTI_ALIAS_FLAG).apply {
+        style = Paint.Style.FILL
+    }
+    private val clipPath = Path()
+
+    override fun setPressed(pressed: Boolean) {
+        super.setPressed(pressed)
+        invalidate()
+    }
+
+    override fun onDraw(canvas: Canvas) {
+        super.onDraw(canvas)
+        val w = width.toFloat()
+        val h = height.toFloat()
+        val cx = w / 2f
+        val cy = h / 2f
+        val radius = minOf(cx, cy)
+
+        // 背景圆（与 SendActionButton 相同，100% 圆形，完全受自身约束，绝不发生边缘裁剪）
+        bgPaint.color = when {
+            isPressed -> if (hasAttachments) Ui.MintStroke else Ui.SurfaceSubtle
+            hasAttachments -> Ui.MintLight
+            else -> Ui.SurfaceSoft
+        }
+        canvas.drawCircle(cx, cy, radius, bgPaint)
+
+        // 图标颜色：有附件时薄荷绿高亮，无附件时使用次级文字色
+        iconPaint.color = when {
+            hasAttachments -> Ui.MintDark
+            else -> Ui.TextSecondary
+        }
+        iconPaint.strokeWidth = radius * 0.13f
+
+        // 绘制矢量回形针图标（逆时针旋转 45° 呈现经典斜角）
+        canvas.save()
+        canvas.rotate(-45f, cx, cy)
+
+        clipPath.reset()
+        val s = radius * 0.22f
+        val halfH = radius * 0.38f
+
+        // 内圈起点与下行线
+        val startY = cy - halfH * 0.15f
+        val innerBottomY = cy + halfH * 0.55f
+        clipPath.moveTo(cx + 0.5f * s, startY)
+        clipPath.lineTo(cx + 0.5f * s, innerBottomY)
+
+        // 底部内半圆（向左，直径 s）
+        val innerBottomRect = RectF(
+            cx - 0.5f * s,
+            innerBottomY - 0.5f * s,
+            cx + 0.5f * s,
+            innerBottomY + 0.5f * s
+        )
+        clipPath.arcTo(innerBottomRect, 0f, 180f, false)
+
+        // 向上沿中导轨到顶部
+        val topY = cy - halfH * 0.70f
+        clipPath.lineTo(cx - 0.5f * s, topY)
+
+        // 顶部大半圆（顺时针向右，直径 2s）
+        val topRect = RectF(
+            cx - 0.5f * s,
+            topY - s,
+            cx + 1.5f * s,
+            topY + s
+        )
+        clipPath.arcTo(topRect, 180f, 180f, false)
+
+        // 向下沿右外导轨到底部
+        val outerBottomY = cy + halfH * 0.70f
+        clipPath.lineTo(cx + 1.5f * s, outerBottomY)
+
+        // 底部外半圆（顺时针向左，直径 3s）
+        val outerBottomRect = RectF(
+            cx - 1.5f * s,
+            outerBottomY - 1.5f * s,
+            cx + 1.5f * s,
+            outerBottomY + 1.5f * s
+        )
+        clipPath.arcTo(outerBottomRect, 0f, 180f, false)
+
+        // 向上沿最左外导轨
+        val endY = cy - halfH * 0.20f
+        clipPath.lineTo(cx - 1.5f * s, endY)
+
+        canvas.drawPath(clipPath, iconPaint)
+        canvas.restore()
+
+        // 附件就绪指示徽标（右上角薄荷绿圆点）
+        if (hasAttachments) {
+            badgePaint.color = Ui.Mint
+            val badgeRadius = radius * 0.20f
+            val badgeCx = cx + radius * 0.52f
+            val badgeCy = cy - radius * 0.52f
+            canvas.drawCircle(badgeCx, badgeCy, badgeRadius, badgePaint)
         }
     }
 }
