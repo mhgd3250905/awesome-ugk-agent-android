@@ -1,9 +1,8 @@
 package com.ugk.pi.android.testapp
 
 /**
- * The subset of provider settings that is captured when an AgentRuntime is
- * built. Session compaction settings are deliberately not part of this value:
- * they are synced independently when the Activity returns to the foreground.
+ * The provider and transcript-preparation settings captured when an
+ * AgentRuntime is built.
  */
 internal data class DemoRuntimeConfig(
     val baseUrl: String,
@@ -11,6 +10,9 @@ internal data class DemoRuntimeConfig(
     val model: String,
     val maxOutputTokens: Int,
     val protocol: ProviderProtocol,
+    val contextWindow: String,
+    val autoCompaction: Boolean,
+    val compactionThreshold: Double,
 ) {
     companion object {
         fun from(config: ApiProviderConfig?): DemoRuntimeConfig? = config?.let {
@@ -20,6 +22,9 @@ internal data class DemoRuntimeConfig(
                 model = it.model,
                 maxOutputTokens = it.maxOutputTokens ?: 8192,
                 protocol = it.protocol,
+                contextWindow = ContextProfile.configValueOrDefault(it.contextWindow),
+                autoCompaction = it.autoCompaction ?: true,
+                compactionThreshold = it.compactionThreshold ?: ContextCompactor.DEFAULT_THRESHOLD,
             )
         }
     }

@@ -14,22 +14,30 @@ class DemoRuntimeLifecyclePolicyTest {
         tracer.resume(initial)
         val firstRuntime = tracer.runtimeIdentity
 
+        tracer.resume(initial.copy(name = "仅更新展示名称"))
+
+        assertEquals(listOf("create", "reuse"), tracer.events)
+        assertEquals(firstRuntime, tracer.runtimeIdentity)
+
         tracer.resume(
             initial.copy(
-                name = "仅更新展示名称",
                 contextWindow = "32K",
                 autoCompaction = false,
                 compactionThreshold = 0.85
             )
         )
 
-        assertEquals(listOf("create", "reuse"), tracer.events)
-        assertEquals(firstRuntime, tracer.runtimeIdentity)
+        assertEquals(listOf("create", "reuse", "stop", "close", "create"), tracer.events)
+        val secondRuntime = tracer.runtimeIdentity
 
         tracer.resume(initial.copy(model = "changed-model"))
 
-        assertEquals(listOf("create", "reuse", "stop", "close", "create"), tracer.events)
-        assertNotEquals(firstRuntime, tracer.runtimeIdentity)
+        assertEquals(
+            listOf("create", "reuse", "stop", "close", "create", "stop", "close", "create"),
+            tracer.events
+        )
+        assertNotEquals(firstRuntime, secondRuntime)
+        assertNotEquals(secondRuntime, tracer.runtimeIdentity)
     }
 
     @Test

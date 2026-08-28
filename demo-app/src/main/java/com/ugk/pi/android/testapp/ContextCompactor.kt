@@ -1,8 +1,11 @@
 package com.ugk.pi.android.testapp
 
 import com.ugk.pi.android.AgentMessage
-import com.ugk.pi.android.AgentSession
+import com.ugk.pi.android.ToolCall
+import com.ugk.pi.android.TranscriptPreparation
+import com.ugk.pi.android.TranscriptPreparationPolicy
 import kotlin.math.roundToInt
+import java.util.Collections
 
 /**
  * 结构化上下文智能压缩结果。
@@ -17,6 +20,12 @@ data class CompactionSummary(
     val messageCountBefore: Int = 0,
     val messageCountAfter: Int = 0,
     val reason: String = ""
+)
+
+/** Pure output of the demo transcript preparation strategy. */
+data class ContextCompactionResult(
+    val messages: List<AgentMessage>,
+    val summary: CompactionSummary
 )
 
 /**
@@ -103,79 +112,140 @@ object ContextCompactor {
      * 核心压缩执行入口：检查并执行阶梯式压缩。
      */
     fun compactIfNeeded(
-        session: AgentSession,
+        messages: List<AgentMessage>,
         contextWindow: String? = null,
         thresholdRatio: Double = DEFAULT_THRESHOLD,
         autoCompaction: Boolean = true
-    ): CompactionSummary {
-        if (!autoCompaction || session.messages.isEmpty()) {
-            return CompactionSummary(triggered = false, reason = "自动压缩未开启或会话为空")
+    ): ContextCompactionResult {
+        val originalMessages = messages.toList()
+        if (originalMessages.isEmpty()) {
+            return ContextCompactionResult(
+                messages = ownedMessages(emptyList()),
+                summary = CompactionSummary(triggered = false, reason = "会话为空")
+            )
         }
 
-        val originalChars = calculateTotalChars(session.messages)
-        val msgCountBefore = session.messages.size
+        val originalChars = calculateTotalChars(originalMessages)
+        val msgCountBefore = originalMessages.size
         val maxTokens = parseContextWindowTokens(contextWindow)
-        val currentTokens = estimateTokens(session.messages)
+        val currentTokens = estimateTokens(originalMessages)
         val usageRatio = currentTokens.toDouble() / maxTokens.toDouble()
+        val profile = ContextProfile.resolve(contextWindow)
+        val shouldCompact = autoCompaction && usageRatio >= thresholdRatio
 
-        if (usageRatio < thresholdRatio) {
-            return CompactionSummary(
-                triggered = false,
-                originalChars = originalChars,
-                compressedChars = originalChars,
-                messageCountBefore = msgCountBefore,
-                messageCountAfter = msgCountBefore,
-                reason = "当前使用率 ${(usageRatio * 100).toInt()}% 未达触发阈值 ${(thresholdRatio * 100).toInt()}%"
+        if (!shouldCompact) {
+            val boundedMessages = boundToProfile(originalMessages, profile)
+            return ContextCompactionResult(
+                messages = ownedMessages(boundedMessages),
+                summary = CompactionSummary(
+                    triggered = false,
+                    originalChars = originalChars,
+                    compressedChars = calculateTotalChars(boundedMessages),
+                    messageCountBefore = msgCountBefore,
+                    messageCountAfter = boundedMessages.size,
+                    reason = if (!autoCompaction) {
+                        "自动压缩未开启；已保留 transcript 安全边界"
+                    } else {
+                        "当前使用率 ${(usageRatio * 100).toInt()}% 未达触发阈值 ${(thresholdRatio * 100).toInt()}%"
+                    }
+                )
             )
         }
 
         // ====== Level 1: 历史长工具调用结果剪枝 (Tool Result Pruning) ======
-        val level1Messages = pruneOldToolResults(session.messages)
+        val level1Messages = pruneOldToolResults(originalMessages)
         val level1Tokens = estimateTokens(level1Messages)
         val level1Ratio = level1Tokens.toDouble() / maxTokens.toDouble()
+        val candidate: List<AgentMessage>
+        val level: Int
+        val reason: String
 
         if (level1Ratio < thresholdRatio * 0.95) {
             // Level 1 剪枝已成功释放足够空间
-            session.messages.clear()
-            session.messages.addAll(level1Messages)
-            val afterChars = calculateTotalChars(session.messages)
-            val savedChars = originalChars - afterChars
-            val savedRatio = if (originalChars > 0) savedChars.toDouble() / originalChars else 0.0
-            return CompactionSummary(
+            candidate = level1Messages
+            level = 1
+            reason = "Level 1 工具结果剪枝完成：使用率从 ${(usageRatio * 100).toInt()}% 降至 ${(level1Ratio * 100).toInt()}%"
+        } else {
+            // ====== Level 2: 早期多轮对话结构化提炼 (Summarization Compaction) ======
+            val level2Messages = compactOlderTurnsIntoSummary(level1Messages)
+            candidate = ensureAtomicInvariants(level2Messages)
+            level = 2
+            reason = "Level 2 结构化提炼完成"
+        }
+
+        val preparedMessages = boundToProfile(candidate, profile)
+        val afterChars = calculateTotalChars(preparedMessages)
+        val savedChars = originalChars - afterChars
+        val savedRatio = if (originalChars > 0) savedChars.toDouble() / originalChars else 0.0
+
+        return ContextCompactionResult(
+            messages = ownedMessages(preparedMessages),
+            summary = CompactionSummary(
                 triggered = true,
-                level = 1,
+                level = level,
                 originalChars = originalChars,
                 compressedChars = afterChars,
                 savedChars = savedChars,
                 savedRatio = savedRatio,
                 messageCountBefore = msgCountBefore,
-                messageCountAfter = session.messages.size,
-                reason = "Level 1 工具结果剪枝完成：使用率从 ${(usageRatio * 100).toInt()}% 降至 ${(level1Ratio * 100).toInt()}%"
+                messageCountAfter = preparedMessages.size,
+                reason = "$reason：释放 ${(savedRatio * 100).toInt()}% 字符容量"
             )
-        }
-
-        // ====== Level 2: 早期多轮对话结构化提炼 (Summarization Compaction) ======
-        val level2Messages = compactOlderTurnsIntoSummary(level1Messages)
-        val level3Messages = ensureAtomicInvariants(level2Messages)
-
-        session.messages.clear()
-        session.messages.addAll(level3Messages)
-
-        val afterChars = calculateTotalChars(session.messages)
-        val savedChars = originalChars - afterChars
-        val savedRatio = if (originalChars > 0) savedChars.toDouble() / originalChars else 0.0
-
-        return CompactionSummary(
-            triggered = true,
-            level = 2,
-            originalChars = originalChars,
-            compressedChars = afterChars,
-            savedChars = savedChars,
-            savedRatio = savedRatio,
-            messageCountBefore = msgCountBefore,
-            messageCountAfter = session.messages.size,
-            reason = "Level 2 结构化提炼完成：释放 ${(savedRatio * 100).toInt()}% 字符容量"
         )
+    }
+
+    /** Keep the configured message and per-message character limits at every policy boundary. */
+    private fun boundToProfile(
+        messages: List<AgentMessage>,
+        profile: ContextProfile
+    ): List<AgentMessage> {
+        val system = messages
+            .filterIsInstance<AgentMessage.System>()
+            .take(1)
+            .map { compactMessage(it, profile.sessionMaxChars) }
+        val nonSystem = messages.filterNot { it is AgentMessage.System }
+        val budget = (profile.sessionMaxMessages - system.size).coerceAtLeast(1)
+        val boundedNonSystem = if (nonSystem.size <= budget) {
+            nonSystem
+        } else {
+            trimAtSafeBoundaries(nonSystem, budget)
+        }
+        return ensureAtomicInvariants(
+            system + boundedNonSystem.map { compactMessage(it, profile.sessionMaxChars) }
+        )
+    }
+
+    /**
+     * Bounds [messages] without splitting a user turn or an assistant
+     * tool-use/result group.
+     */
+    private fun trimAtSafeBoundaries(messages: List<AgentMessage>, budget: Int): List<AgentMessage> {
+        val kept = trailingWholeGroups(messages, budget)
+        val firstUserInKept = kept.indexOfFirst { it is AgentMessage.User }
+        if (firstUserInKept > 0) return kept.subList(firstUserInKept, kept.size)
+        if (firstUserInKept == 0) return kept
+
+        val enclosingUserIndex = messages.indexOfLast { it is AgentMessage.User }
+        if (enclosingUserIndex < 0) return kept
+        val tail = trailingWholeGroups(
+            messages.subList(enclosingUserIndex + 1, messages.size),
+            budget - 1
+        )
+        return listOf(messages[enclosingUserIndex]) + tail
+    }
+
+    private fun trailingWholeGroups(messages: List<AgentMessage>, budget: Int): List<AgentMessage> {
+        val result = ArrayList<AgentMessage>()
+        var end = messages.size
+        while (end > 0 && result.size < budget) {
+            var start = end - 1
+            while (start > 0 && messages[start] is AgentMessage.Tool) start--
+            val group = messages.subList(start, end)
+            if (result.size + group.size > budget) break
+            result.addAll(0, group)
+            end = start
+        }
+        return result
     }
 
     /**
@@ -183,7 +253,7 @@ object ContextCompactor {
      */
     internal fun pruneOldToolResults(messages: List<AgentMessage>): List<AgentMessage> {
         val turns = splitIntoTurns(messages)
-        if (turns.size <= 2) return messages
+        if (turns.size <= 2) return ownedMessages(messages)
 
         val result = mutableListOf<AgentMessage>()
         val totalTurns = turns.size
@@ -206,7 +276,7 @@ object ContextCompactor {
                 }
             }
         }
-        return result
+        return ownedMessages(result)
     }
 
     /**
@@ -218,7 +288,7 @@ object ContextCompactor {
         val turns = splitIntoTurns(nonSystemMessages)
 
         if (turns.size <= MIN_RECENT_TURNS_PRESERVED) {
-            return messages
+            return ownedMessages(messages)
         }
 
         val preservedTurnCount = MIN_RECENT_TURNS_PRESERVED.coerceAtLeast(turns.size / 3)
@@ -236,7 +306,7 @@ object ContextCompactor {
         result.addAll(systemMessages)
         result.add(summaryUserMessage)
         recentTurns.forEach { result.addAll(it) }
-        return result
+        return ownedMessages(result)
     }
 
     /**
@@ -292,36 +362,105 @@ object ContextCompactor {
     internal fun ensureAtomicInvariants(messages: List<AgentMessage>): List<AgentMessage> {
         val system = messages.filterIsInstance<AgentMessage.System>()
         val nonSystem = messages.filterNot { it is AgentMessage.System }
-        if (nonSystem.isEmpty()) return messages
+        if (nonSystem.isEmpty()) return ownedMessages(system)
 
         val validNonSystem = mutableListOf<AgentMessage>()
-        var pendingToolUses = mutableSetOf<String>()
-
-        nonSystem.forEach { msg ->
-            when (msg) {
+        var index = 0
+        while (index < nonSystem.size) {
+            when (val message = nonSystem[index]) {
                 is AgentMessage.User -> {
-                    validNonSystem.add(msg)
+                    validNonSystem += message
+                    index++
                 }
                 is AgentMessage.Assistant -> {
-                    validNonSystem.add(msg)
-                    pendingToolUses = msg.toolCalls.map { it.id }.toMutableSet()
+                    if (message.toolCalls.isEmpty()) {
+                        validNonSystem += message
+                        index++
+                        continue
+                    }
+
+                    val expectedIds = message.toolCalls.map { it.id }
+                    var resultIndex = index + 1
+                    val resultIds = mutableSetOf<String>()
+                    var validGroup = expectedIds.size == expectedIds.toSet().size
+                    while (
+                        resultIndex < nonSystem.size &&
+                        nonSystem[resultIndex] is AgentMessage.Tool
+                    ) {
+                        val resultId = (nonSystem[resultIndex] as AgentMessage.Tool).result.toolCallId
+                        if (resultId !in expectedIds || !resultIds.add(resultId)) {
+                            validGroup = false
+                        }
+                        resultIndex++
+                    }
+                    if (resultIds != expectedIds.toSet()) validGroup = false
+                    if (validGroup) {
+                        validNonSystem += message
+                        validNonSystem.addAll(nonSystem.subList(index + 1, resultIndex))
+                    }
+                    // Drop an incomplete/invalid envelope and all its adjacent
+                    // results as one unit; later user turns remain usable.
+                    index = resultIndex
                 }
                 is AgentMessage.Tool -> {
-                    if (pendingToolUses.contains(msg.result.toolCallId) || validNonSystem.any { it is AgentMessage.Assistant }) {
-                        validNonSystem.add(msg)
-                    }
+                    // Orphan results are never safe to persist.
+                    index++
                 }
-                else -> validNonSystem.add(msg)
+                is AgentMessage.System -> {
+                    index++
+                }
             }
         }
 
         val firstUserIndex = validNonSystem.indexOfFirst { it is AgentMessage.User }
-        val finalNonSystem = if (firstUserIndex > 0) {
-            validNonSystem.subList(firstUserIndex, validNonSystem.size)
-        } else {
-            validNonSystem
-        }
+        if (firstUserIndex < 0) return ownedMessages(system)
+        return ownedMessages(system + validNonSystem.drop(firstUserIndex))
+    }
 
-        return system + finalNonSystem
+    private fun compactMessage(message: AgentMessage, maxChars: Int): AgentMessage = when (message) {
+        is AgentMessage.System -> message.copy(content = message.content.take(maxChars))
+        is AgentMessage.User -> AgentMessage.User(
+            content = message.content.take(maxChars),
+            timeContext = message.timeContext
+        )
+        is AgentMessage.Assistant -> message.copy(
+            toolCalls = ownedToolCalls(message.toolCalls),
+            content = message.content.take(maxChars),
+            reasoningContent = message.reasoningContent?.take(maxChars)
+        )
+        is AgentMessage.Tool -> AgentMessage.Tool(
+            message.result.copy(
+                content = message.result.content.take(maxChars),
+                images = emptyList(),
+                imageContext = null,
+                transientModelContent = null
+            )
+        )
+    }
+
+    /** Every public preparation result owns a fresh immutable outer list. */
+    private fun ownedMessages(messages: Iterable<AgentMessage>): List<AgentMessage> =
+        Collections.unmodifiableList(
+            ArrayList(messages.map { compactMessage(it, Int.MAX_VALUE) })
+        )
+
+    private fun ownedToolCalls(toolCalls: List<ToolCall>): List<ToolCall> =
+        Collections.unmodifiableList(ArrayList(toolCalls.map { it.copy() }))
+}
+
+/** Demo adapter from provider settings to the Core transcript policy seam. */
+internal class DemoContextCompactionPolicy(
+    private val contextWindow: String?,
+    private val thresholdRatio: Double,
+    private val autoCompaction: Boolean
+) : TranscriptPreparationPolicy {
+    override fun prepare(snapshot: List<AgentMessage>): TranscriptPreparation {
+        val result = ContextCompactor.compactIfNeeded(
+            messages = snapshot,
+            contextWindow = contextWindow,
+            thresholdRatio = thresholdRatio,
+            autoCompaction = autoCompaction
+        )
+        return TranscriptPreparation(result.messages)
     }
 }

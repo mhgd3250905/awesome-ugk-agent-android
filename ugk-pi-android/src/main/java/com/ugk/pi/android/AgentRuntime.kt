@@ -17,7 +17,9 @@ class AgentRuntime(
     private val skillResolver: AndroidSkillResolver = KeywordAndroidSkillResolver(),
     private val skillPromptBuilder: AndroidSkillPromptBuilder = AndroidSkillPromptBuilder(),
     private val timeContextProvider: AgentTimeContextProvider = SystemAgentTimeContextProvider,
-    private val agentInstructions: List<String> = emptyList()
+    private val agentInstructions: List<String> = emptyList(),
+    private val transcriptPreparationPolicy: TranscriptPreparationPolicy =
+        NoOpTranscriptPreparationPolicy
 ) {
     private var lifecyclePlugins: List<AgentCapabilityPlugin> = emptyList()
     private var lifecyclePluginsAttached = false
@@ -30,6 +32,8 @@ class AgentRuntime(
         private var skillResolver: AndroidSkillResolver = KeywordAndroidSkillResolver()
         private var skillPromptBuilder: AndroidSkillPromptBuilder = AndroidSkillPromptBuilder()
         private var timeContextProvider: AgentTimeContextProvider = SystemAgentTimeContextProvider
+        private var transcriptPreparationPolicy: TranscriptPreparationPolicy =
+            NoOpTranscriptPreparationPolicy
         private val skills = mutableListOf<AndroidSkill>()
         private var customSkillProvider: AndroidSkillProvider? = null
         private val agentInstructions = mutableListOf<String>()
@@ -81,6 +85,11 @@ class AgentRuntime(
             return this
         }
 
+        fun transcriptPreparationPolicy(policy: TranscriptPreparationPolicy): Builder {
+            transcriptPreparationPolicy = policy
+            return this
+        }
+
         /**
          * Adds a global system-level contract for the runtime Agent without
          * mutating the conversation history. Plugin-provided instructions are
@@ -112,7 +121,8 @@ class AgentRuntime(
                 agentInstructions = agentInstructions
                     .map(String::trim)
                     .filter(String::isNotBlank)
-                    .distinct()
+                    .distinct(),
+                transcriptPreparationPolicy = transcriptPreparationPolicy
             ).also { runtime ->
                 runtime.attachLifecyclePlugins(plugins.toList())
             }
@@ -189,7 +199,9 @@ class AgentRuntime(
     ): Flow<AgentEvent> = flow {
         require(maxIterations > 0) { "maxIterations must be greater than 0" }
 
-        session.messages += userMessageWithTimeContext(input.content, input.images)
+        val inputImages = immutableListSnapshot(input.images)
+        val inputMessage = userMessageWithTimeContext(input.content)
+        session.append(inputMessage)
         emit(
             AgentEvent.Started(
                 sessionId = session.id,
@@ -205,16 +217,41 @@ class AgentRuntime(
         var modelRequestIteration = 0
         var consecutiveIncompleteResponses = 0
         var incompleteResponseCorrection: AgentMessage.System? = null
+        var transientInputAttachment: AgentMessage.User? = if (inputImages.isEmpty()) {
+            null
+        } else {
+            AgentMessage.User(
+                content = "",
+                timeContext = null,
+                images = inputImages
+            )
+        }
         var transientModelMessages: List<AgentMessage> = emptyList()
 
         while (completedIterations < maxIterations) {
             modelRequestIteration++
+            val preparedSessionMessages = try {
+                session.prepareTranscript(transcriptPreparationPolicy)
+            } catch (error: CancellationException) {
+                throw error
+            } catch (error: Throwable) {
+                emit(
+                    AgentEvent.Failed(
+                        transcriptPreparationFailureMessage(error)
+                    )
+                )
+                return@flow
+            }
             val requestMessages = buildRequestMessages(
-                sessionMessages = session.messages.toList(),
+                sessionMessages = preparedSessionMessages,
                 activeSkillMessage = activeSkillMessage,
                 transientSystemMessage = incompleteResponseCorrection,
+                transientInputAttachment = transientInputAttachment,
                 transientModelMessages = transientModelMessages
             )
+            // Each transient attachment belongs to this one request only.
+            transientInputAttachment = null
+            transientModelMessages = emptyList()
             val tools = toolRegistry.definitions()
             emit(
                 AgentEvent.ModelRequestStarted(
@@ -271,6 +308,11 @@ class AgentRuntime(
                 )
             )
 
+            if (!response.toolCalls.hasUniqueIds()) {
+                emit(AgentEvent.Failed(DUPLICATE_TOOL_CALL_IDS_FAILURE_MESSAGE))
+                return@flow
+            }
+
             if (response.toolCalls.isEmpty()) {
                 if (response.isIncompleteFinalResponse()) {
                     consecutiveIncompleteResponses++
@@ -284,7 +326,8 @@ class AgentRuntime(
                     continue
                 }
                 transientModelMessages = emptyList()
-                session.messages += AgentMessage.Assistant(response.content)
+                session.append(AgentMessage.Assistant(response.content))
+                if (!prepareTranscriptAtCompletion(session)) return@flow
                 emit(AgentEvent.Completed(response.content))
                 return@flow
             }
@@ -293,11 +336,11 @@ class AgentRuntime(
             consecutiveIncompleteResponses = 0
             incompleteResponseCorrection = null
             transientModelMessages = emptyList()
-            session.messages += AgentMessage.Assistant(
+            session.append(AgentMessage.Assistant(
                 content = response.content,
                 toolCalls = response.toolCalls,
                 reasoningContent = response.reasoningContent
-            )
+            ))
 
             val nextTransientModelMessages = mutableListOf<AgentMessage>()
             try {
@@ -320,18 +363,23 @@ class AgentRuntime(
                         imageContext = null,
                         transientModelContent = null
                     )
-                    session.messages += AgentMessage.Tool(durableResult)
+                    session.append(AgentMessage.Tool(durableResult))
                     if (result.images.isNotEmpty() || result.transientModelContent != null) {
                         nextTransientModelMessages += AgentMessage.User(
                             content = result.transientModelContent
                                 ?: result.imageContext
                                 ?: "The previous tool returned a screen image. Use only the visible screen content when reasoning about the next step.",
-                            images = result.images
+                            images = immutableListSnapshot(result.images)
                         )
                     }
                     emit(AgentEvent.ToolFinished(durableResult))
                     terminalCompletion(durableResult)?.let { completion ->
-                        session.messages += AgentMessage.Assistant(completion)
+                        session.completeToolBatch(
+                            response.toolCalls,
+                            missingResultContent = "Tool execution was skipped because another tool ended the turn."
+                        )
+                        session.append(AgentMessage.Assistant(completion))
+                        if (!prepareTranscriptAtCompletion(session)) return@flow
                         emit(AgentEvent.Completed(completion))
                         return@flow
                     }
@@ -341,7 +389,8 @@ class AgentRuntime(
                 // without results: providers reject the whole next request when a
                 // tool_use has no tool_result, which would break the session
                 // permanently. Answer every unanswered call, then rethrow.
-                appendCancelledToolResults(session, response.toolCalls)
+                session.completeToolBatch(response.toolCalls)
+                prepareTranscriptAfterCancellation(session)
                 throw cancelled
             }
             transientModelMessages = nextTransientModelMessages
@@ -350,13 +399,38 @@ class AgentRuntime(
                 .map { it.trim() }
                 .filter { it.isNotBlank() }
                 .forEach { message ->
-                    session.messages += userMessageWithTimeContext(message)
+                    session.append(userMessageWithTimeContext(message))
                     emit(AgentEvent.UserMessageAppended(message))
                 }
         }
 
         val message = "Agent loop exceeded maxIterations=$maxIterations"
+        if (!prepareTranscriptAtCompletion(session)) return@flow
         emit(AgentEvent.Failed(message))
+    }
+
+    private suspend fun kotlinx.coroutines.flow.FlowCollector<AgentEvent>.prepareTranscriptAtCompletion(
+        session: AgentSession
+    ): Boolean {
+        return try {
+            session.prepareTranscript(transcriptPreparationPolicy)
+            true
+        } catch (error: CancellationException) {
+            throw error
+        } catch (error: Throwable) {
+            emit(AgentEvent.Failed(transcriptPreparationFailureMessage(error)))
+            false
+        }
+    }
+
+    /** Cancellation has precedence over a policy failure, but still gets a best-effort boundary. */
+    private fun prepareTranscriptAfterCancellation(session: AgentSession) {
+        try {
+            session.prepareTranscript(transcriptPreparationPolicy)
+        } catch (_: Throwable) {
+            // The original CancellationException remains the run outcome and
+            // Session's transactional replacement keeps the old transcript.
+        }
     }
 
     private fun buildActiveSkillMessage(userMessage: String): AgentMessage.System? {
@@ -381,6 +455,7 @@ class AgentRuntime(
         sessionMessages: List<AgentMessage>,
         activeSkillMessage: AgentMessage.System?,
         transientSystemMessage: AgentMessage.System? = null,
+        transientInputAttachment: AgentMessage.User? = null,
         transientModelMessages: List<AgentMessage> = emptyList()
     ): List<AgentMessage> {
         val runtimeAgentMessages = agentInstructions
@@ -392,13 +467,36 @@ class AgentRuntime(
             .toList()
         val systemMessages = sessionMessages.filterIsInstance<AgentMessage.System>()
         val nonSystemMessages = sessionMessages.filterNot { it is AgentMessage.System }
-        val requestMessages =
+        val requestConversationMessages =
             runtimeAgentMessages +
                 systemMessages +
                 listOfNotNull(activeSkillMessage, transientSystemMessage) +
-                nonSystemMessages +
-                transientModelMessages
-        return requestMessages.withUserTimePrefixes()
+                nonSystemMessages
+        val transientRequestMessages = listOfNotNull(transientInputAttachment) +
+            transientModelMessages.withUserTimePrefixes()
+        return immutableListSnapshot(
+            (requestConversationMessages.withUserTimePrefixes() + transientRequestMessages)
+                .mergeAdjacentUserMessages()
+        )
+    }
+
+    private fun List<AgentMessage>.mergeAdjacentUserMessages(): List<AgentMessage> {
+        val merged = mutableListOf<AgentMessage>()
+        forEach { message ->
+            val previous = merged.lastOrNull() as? AgentMessage.User
+            if (previous != null && message is AgentMessage.User) {
+                merged[merged.lastIndex] = AgentMessage.User(
+                    content = listOf(previous.content, message.content)
+                        .filter(String::isNotBlank)
+                        .joinToString("\n"),
+                    timeContext = previous.timeContext ?: message.timeContext,
+                    images = immutableListSnapshot(previous.images + message.images)
+                )
+            } else {
+                merged += message
+            }
+        }
+        return merged
     }
 
     private fun List<AgentMessage>.withUserTimePrefixes(): List<AgentMessage> {
@@ -420,14 +518,10 @@ class AgentRuntime(
         )
     }
 
-    private fun userMessageWithTimeContext(
-        content: String,
-        images: List<AgentImageContent> = emptyList()
-    ): AgentMessage.User {
+    private fun userMessageWithTimeContext(content: String): AgentMessage.User {
         return AgentMessage.User(
             content = content,
-            timeContext = timeContextProvider.currentContext(),
-            images = images
+            timeContext = timeContextProvider.currentContext()
         )
     }
 
@@ -450,7 +544,7 @@ class AgentRuntime(
                 call = call,
                 context = ToolExecutionContext(
                     sessionId = session.id,
-                    priorMessages = session.messages.toList(),
+                    priorMessages = session.snapshot(),
                     runSource = input.source,
                     taskId = input.taskId,
                     visibleInConversation = input.visibleInConversation,
@@ -483,40 +577,6 @@ class AgentRuntime(
             ?: result.content
     }
 
-    /**
-     * Answers every tool call of the current assistant envelope that has not
-     * produced a result yet. Only the session transcript is repaired; no
-     * events are emitted because the collecting coroutine is already
-     * cancelled.
-     */
-    private fun appendCancelledToolResults(
-        session: AgentSession,
-        toolCalls: List<ToolCall>
-    ) {
-        // Consider only results appended after the current envelope: providers
-        // may reuse tool-call ids across responses, and matching the whole
-        // history would then leave this envelope unrepaired.
-        val envelopeIndex = session.messages.indexOfLast {
-            it is AgentMessage.Assistant && it.toolCalls.isNotEmpty()
-        }
-        val answeredIds = session.messages
-            .drop(if (envelopeIndex >= 0) envelopeIndex + 1 else 0)
-            .filterIsInstance<AgentMessage.Tool>()
-            .map { it.result.toolCallId }
-            .toSet()
-        toolCalls.forEach { call ->
-            if (call.id in answeredIds) return@forEach
-            session.messages += AgentMessage.Tool(
-                ToolResult(
-                    toolCallId = call.id,
-                    name = call.name,
-                    content = "Tool execution was cancelled before this call completed. " +
-                        "The user stopped the run or the runtime shut down.",
-                    isError = true
-                )
-            )
-        }
-    }
 }
 
 /**
@@ -532,6 +592,11 @@ private fun sessionAlreadyRunningMessage(sessionId: String): String =
     "AgentSession '$sessionId' is already running."
 private const val INCOMPLETE_RESPONSE_FAILURE_MESSAGE =
     "Model returned an incomplete final response three consecutive times."
+private const val DUPLICATE_TOOL_CALL_IDS_FAILURE_MESSAGE =
+    "Model response contained duplicate tool call ids."
+
+private fun List<ToolCall>.hasUniqueIds(): Boolean =
+    size == map { it.id }.toSet().size
 
 private fun incompleteResponseRetryPrompt(partialContent: String): String {
     val partial = partialContent.trim()
@@ -543,3 +608,6 @@ private fun incompleteResponseRetryPrompt(partialContent: String): String {
     return "$detail Reproduce the complete final answer from the beginning using the existing conversation and tool results. " +
         "If more information is genuinely required, call only the next necessary tool. Do not repeat completed tool calls."
 }
+
+private fun transcriptPreparationFailureMessage(error: Throwable): String =
+    "Transcript preparation failed: ${error.message ?: error::class.java.name}"

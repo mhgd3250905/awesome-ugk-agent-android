@@ -10,8 +10,10 @@ class RuntimeAgentInstructionsTest {
     @Test
     fun `runtime instructions are global and do not enter session history`() = runBlocking {
         val provider = RecordingProvider()
-        val session = AgentSession(id = "runtime-instructions")
-        session.messages += AgentMessage.System("Host system prompt")
+        val session = AgentSession(
+            id = "runtime-instructions",
+            messages = listOf(AgentMessage.System("Host system prompt"))
+        )
         val runtime = AgentRuntime(
             llmProvider = provider,
             toolRegistry = ToolRegistry(),

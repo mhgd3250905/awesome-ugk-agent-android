@@ -138,8 +138,12 @@
 
 实现范围：
 
-- `AgentSession` 增加非构造参数的内部 `Mutex`，不改变现有构造函数、`data class`
-  equality 或 `messages` 数据结构。
+- `AgentSession` 保留非构造参数的内部 `Mutex` 作为 `runGate`，并新增独立的
+  `transcriptLock` 与 copy-on-write transcript；构造仍接收 `List<AgentMessage>`，但不再
+  暴露 `MutableList`，`messages` 改为受锁保护的不可变快照。由此带来的 data class
+  equality、`copy`/`componentN` 和可变 `messages` source compatibility 影响，统一以
+  [D-023](terminal-runtime-decisions.md#d-023-agentsession-取得-transcript-ownership并在请求前统一准备)
+  为准。
 - `AgentRuntime` 最深层 `run()` 在 Flow 收集时使用 `tryLock()`；同一 Session 已被占用时，
   使用现有 `AgentEvent.Failed` 返回明确结果，不新增 sealed event，不等待或排队第二次运行。
 - 运行主体通过 `try/finally` 释放 Mutex，覆盖正常完成、Flow 取消、Provider/Tool 之外的异常路径。

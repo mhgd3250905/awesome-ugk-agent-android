@@ -5,6 +5,7 @@ import com.ugk.pi.android.AgentSession
 import com.ugk.pi.android.ToolCall
 import com.ugk.pi.android.ToolResult
 import kotlinx.serialization.json.JsonObject
+import java.lang.reflect.InvocationTargetException
 import org.junit.Assert.assertEquals
 import org.junit.Assert.assertFalse
 import org.junit.Assert.assertTrue
@@ -115,37 +116,218 @@ class ContextCompactorTest {
     }
 
     @Test
+    fun testCompactionReturnsAResultWithoutMutatingInput() {
+        val messages = mutableListOf<AgentMessage>(
+            AgentMessage.User("原始问题"),
+            AgentMessage.Assistant("原始回答")
+        )
+        val before = messages.toList()
+
+        val result = ContextCompactor.compactIfNeeded(
+            messages = messages,
+            contextWindow = "32K",
+            autoCompaction = false
+        )
+
+        assertEquals(before, messages)
+        assertEquals(before, result.messages)
+    }
+
+    @Test
+    fun testCompactionResultOwnsOuterAndAssistantToolCallLists() {
+        val toolCall = ToolCall("owned-call", "tool", emptyJson)
+        val sourceToolCalls = mutableListOf(toolCall)
+        val result = ContextCompactor.compactIfNeeded(
+            messages = listOf(
+                AgentMessage.User("question"),
+                AgentMessage.Assistant("calling", toolCalls = sourceToolCalls),
+                AgentMessage.Tool(ToolResult("owned-call", "tool", "done"))
+            ),
+            contextWindow = "32K",
+            autoCompaction = false
+        )
+
+        sourceToolCalls += ToolCall("outside", "tool", emptyJson)
+        val outerFailure = runCatching {
+            java.util.List::class.java
+                .getMethod("add", Any::class.java)
+                .invoke(result.messages, AgentMessage.User("outside"))
+        }.exceptionOrNull()
+        val toolCalls = result.messages
+            .filterIsInstance<AgentMessage.Assistant>()
+            .single()
+            .toolCalls
+        val innerFailure = runCatching {
+            java.util.List::class.java
+                .getMethod("add", Any::class.java)
+                .invoke(toolCalls, ToolCall("outside-2", "tool", emptyJson))
+        }.exceptionOrNull()
+
+        assertTrue(
+            ((outerFailure as? InvocationTargetException)?.cause ?: outerFailure)
+                is UnsupportedOperationException
+        )
+        assertTrue(
+            ((innerFailure as? InvocationTargetException)?.cause ?: innerFailure)
+                is UnsupportedOperationException
+        )
+        assertEquals(1, toolCalls.size)
+        assertEquals("owned-call", toolCalls.single().id)
+    }
+
+    @Test
     fun testCompactIfNeededTriggeredAndUntriggered() {
-        val session = AgentSession(id = "test-session")
-        session.messages.add(AgentMessage.User("简单问答"))
-        session.messages.add(AgentMessage.Assistant("简短回答"))
+        val sessionMessages = listOf(
+            AgentMessage.User("简单问答"),
+            AgentMessage.Assistant("简短回答")
+        )
 
         // Untriggered on small content
         val untriggered = ContextCompactor.compactIfNeeded(
-            session = session,
+            messages = sessionMessages,
             contextWindow = "32K",
             thresholdRatio = 0.70,
             autoCompaction = true
         )
-        assertFalse(untriggered.triggered)
+        assertFalse(untriggered.summary.triggered)
 
         // Create heavy session with multiple large turns to exceed 70% of 32K (~23K tokens / ~75K chars)
-        val heavySession = AgentSession(id = "heavy-session")
+        val heavyMessages = mutableListOf<AgentMessage>()
         for (i in 1..10) {
-            heavySession.messages.add(AgentMessage.User("第 $i 轮大型任务查询"))
-            heavySession.messages.add(AgentMessage.Assistant("执行大型分析任务 $i", toolCalls = listOf(ToolCall("id_$i", "cmd", emptyJson))))
-            heavySession.messages.add(AgentMessage.Tool(ToolResult("id_$i", "cmd", "DATA_CHUNK_" + "ABCD_".repeat(2500))))
+            heavyMessages.add(AgentMessage.User("第 $i 轮大型任务查询"))
+            heavyMessages.add(AgentMessage.Assistant("执行大型分析任务 $i", toolCalls = listOf(ToolCall("id_$i", "cmd", emptyJson))))
+            heavyMessages.add(AgentMessage.Tool(ToolResult("id_$i", "cmd", "DATA_CHUNK_" + "ABCD_".repeat(2500))))
         }
 
         val triggered = ContextCompactor.compactIfNeeded(
-            session = heavySession,
+            messages = heavyMessages,
             contextWindow = "32K",
             thresholdRatio = 0.70,
             autoCompaction = true
         )
 
-        assertTrue(triggered.triggered)
-        assertTrue(triggered.savedChars > 0)
-        assertTrue(triggered.savedRatio > 0.3)
+        assertTrue(triggered.summary.triggered)
+        assertTrue(triggered.summary.savedChars > 0)
+        assertTrue(triggered.summary.savedRatio > 0.3)
+    }
+
+    @Test
+    fun `auto compaction level one keeps the first user and complete tool groups`() {
+        val longToolOutput = "START_" + "X".repeat(120_000) + "_END"
+        val messages = listOf(
+            AgentMessage.System("system prompt"),
+            AgentMessage.User("old request"),
+            AgentMessage.Assistant(
+                "old tool call",
+                toolCalls = listOf(ToolCall("old-call", "tool", emptyJson))
+            ),
+            AgentMessage.Tool(ToolResult("old-call", "tool", longToolOutput)),
+            AgentMessage.User("recent request"),
+            AgentMessage.Assistant("recent answer"),
+            AgentMessage.User("latest request"),
+            AgentMessage.Assistant("latest answer")
+        )
+
+        val result = ContextCompactor.compactIfNeeded(
+            messages = messages,
+            contextWindow = "32K",
+            thresholdRatio = 0.70,
+            autoCompaction = true
+        )
+
+        assertTrue(result.summary.triggered)
+        assertEquals(1, result.summary.level)
+        assertConversationInvariants(result.messages)
+    }
+
+    @Test
+    fun `auto compaction level two keeps the first user and complete tool groups`() {
+        val messages = buildList {
+            repeat(8) { turn ->
+                add(AgentMessage.User("request $turn " + "x".repeat(10_000)))
+                add(AgentMessage.Assistant("answer $turn " + "y".repeat(10_000)))
+            }
+        }
+
+        val result = ContextCompactor.compactIfNeeded(
+            messages = messages,
+            contextWindow = "32K",
+            thresholdRatio = 0.70,
+            autoCompaction = true
+        )
+
+        assertTrue(result.summary.triggered)
+        assertEquals(2, result.summary.level)
+        assertConversationInvariants(result.messages)
+    }
+
+    @Test
+    fun `auto compaction level two preserves multi tool envelopes across queued transcript`() {
+        val messages = buildList {
+            add(AgentMessage.System("system prompt"))
+            repeat(10) { turn ->
+                val firstCall = ToolCall("level2-$turn-first", "tool", emptyJson)
+                val secondCall = ToolCall("level2-$turn-second", "tool", emptyJson)
+                add(AgentMessage.User("request $turn " + "x".repeat(10_000)))
+                add(
+                    AgentMessage.Assistant(
+                        "working $turn " + "y".repeat(10_000),
+                        toolCalls = listOf(firstCall, secondCall)
+                    )
+                )
+                add(AgentMessage.Tool(ToolResult(firstCall.id, firstCall.name, "result-$turn-first")))
+                add(AgentMessage.Tool(ToolResult(secondCall.id, secondCall.name, "result-$turn-second")))
+                if (turn % 2 == 0) {
+                    add(AgentMessage.User("queued follow-up $turn " + "q".repeat(2_000)))
+                }
+            }
+        }
+
+        val result = ContextCompactor.compactIfNeeded(
+            messages = messages,
+            contextWindow = "32K",
+            thresholdRatio = 0.70,
+            autoCompaction = true
+        )
+
+        assertTrue(result.summary.triggered)
+        assertEquals(2, result.summary.level)
+        assertConversationInvariants(result.messages)
+
+        val session = AgentSession("level-two-output", result.messages)
+        assertConversationInvariants(session.messages)
+    }
+
+    private fun assertConversationInvariants(messages: List<AgentMessage>) {
+        val nonSystem = messages.filterNot { it is AgentMessage.System }
+        assertTrue(nonSystem.isNotEmpty())
+        assertTrue(nonSystem.first() is AgentMessage.User)
+
+        var index = 0
+        while (index < nonSystem.size) {
+            when (val message = nonSystem[index]) {
+                is AgentMessage.User -> index++
+                is AgentMessage.Assistant -> {
+                    if (message.toolCalls.isEmpty()) {
+                        index++
+                        continue
+                    }
+                    val expectedIds = message.toolCalls.map { it.id }.toSet()
+                    val results = mutableListOf<String>()
+                    var resultIndex = index + 1
+                    while (resultIndex < nonSystem.size && nonSystem[resultIndex] is AgentMessage.Tool) {
+                        results += (nonSystem[resultIndex] as AgentMessage.Tool).result.toolCallId
+                        resultIndex++
+                    }
+                    assertEquals(expectedIds, results.toSet())
+                    assertEquals(expectedIds.size, results.size)
+                    index = resultIndex
+                }
+                is AgentMessage.Tool -> {
+                    throw AssertionError("orphan tool result")
+                }
+                is AgentMessage.System -> index++
+            }
+        }
     }
 }

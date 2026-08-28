@@ -112,7 +112,7 @@ class DemoAgentRunCoordinatorTest {
     }
 
     @Test
-    fun stopInvalidatesOldRunAndStillBoundsSessionAfterCancellation() {
+    fun stopInvalidatesOldRunAndStillRunsSessionFinalizerAfterCancellation() {
         val enteredProvider = CountDownLatch(1)
         val releaseProvider = CountDownLatch(1)
         var finalizedSession: AgentSession? = null
@@ -141,7 +141,6 @@ class DemoAgentRunCoordinatorTest {
         assertTrue(finished.await(2, TimeUnit.SECONDS))
         assertEquals(DemoRunStatus.CANCELLED, coordinator.snapshot().state.status)
         assertSame(session, finalizedSession)
-        assertTrue(session.messages.size <= 160)
     }
 
     private fun runtimeReturning(content: String): AgentRuntime = AgentRuntime.Builder()

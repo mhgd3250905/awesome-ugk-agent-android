@@ -100,6 +100,13 @@ internal object DemoAgentRuntimeFactory {
         val builder = AgentRuntime.Builder()
             .llmProvider(provider)
             .maxIterations(maxIterations)
+            .transcriptPreparationPolicy(
+                DemoContextCompactionPolicy(
+                    contextWindow = config?.let { ContextProfile.configValueOrDefault(it.contextWindow) },
+                    thresholdRatio = config?.compactionThreshold ?: ContextCompactor.DEFAULT_THRESHOLD,
+                    autoCompaction = config?.autoCompaction ?: true
+                )
+            )
         capabilityPlugins.forEach { plugin -> builder.register(plugin) }
 
         if (isBackgroundRun) {

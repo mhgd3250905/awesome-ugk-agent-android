@@ -322,6 +322,56 @@ class AgentRuntimeTest {
     }
 
     @Test
+    fun `tool attachments are consumed by the next request and not an incomplete retry`() = runBlocking {
+        val secret = "one-request-only"
+        val call = ToolCall(
+            id = "attachment-retry",
+            name = "attachment_tool",
+            input = JsonObject(emptyMap())
+        )
+        val provider = ScriptedLLMProvider(
+            ModelResponse(content = "observe", toolCalls = listOf(call)),
+            ModelResponse(content = "partial", stopReason = "max_tokens"),
+            ModelResponse(content = "recognized")
+        )
+        val tool = object : AgentTool {
+            override val name = "attachment_tool"
+            override val description = "Returns one transient image and text payload."
+            override val inputSchema = JsonObject(emptyMap())
+
+            override suspend fun execute(
+                call: ToolCall,
+                context: ToolExecutionContext
+            ): ToolResult = ToolResult(
+                toolCallId = call.id,
+                name = name,
+                content = "metadata only",
+                images = listOf(AgentImageContent("AQID")),
+                transientModelContent = secret
+            )
+        }
+        val runtime = AgentRuntime(
+            llmProvider = provider,
+            toolRegistry = ToolRegistry().register(tool)
+        )
+
+        val events = runtime.run(AgentSession("attachment-retry"), "inspect").toList()
+
+        assertEquals(AgentEvent.Completed("recognized"), events.last())
+        assertEquals(3, provider.requests.size)
+        val attachmentRequest = provider.requests[1]
+        assertEquals(
+            listOf(AgentImageContent("AQID")),
+            attachmentRequest.messages.filterIsInstance<AgentMessage.User>().flatMap { it.images }
+        )
+        assertTrue(attachmentRequest.messages.any { it is AgentMessage.User && it.content.contains(secret) })
+
+        val retryRequest = provider.requests[2]
+        assertTrue(retryRequest.messages.filterIsInstance<AgentMessage.User>().all { it.images.isEmpty() })
+        assertTrue(retryRequest.messages.none { it is AgentMessage.User && it.content.contains(secret) })
+    }
+
+    @Test
     fun `preserves tool call reasoning content in subsequent model requests`() = runBlocking {
         val call = ToolCall(
             id = "tool-1",
