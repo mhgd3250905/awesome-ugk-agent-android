@@ -35,10 +35,10 @@ class SettingsActivity : Activity() {
     private val scope = CoroutineScope(Dispatchers.Main)
 
     private var selectedConfigId: String? = null
-    private var selectedContextWindow: String = "200K"
+    private var selectedContextWindow: String = ContextProfile.DEFAULT_CONFIG
     private var selectedMaxOutputTokens: Int = 8192
 
-    private val contextWindowOptions = listOf("64K", "128K", "200K", "1M", "2M", "32K")
+    private val contextWindowOptions = ContextProfile.uiOrdered
     private val maxOutputOptions = listOf(
         4096 to "4K",
         8192 to "8K (通用)",
@@ -449,7 +449,7 @@ class SettingsActivity : Activity() {
             urlInput.setText(config.baseUrl)
             modelInput.setText(config.model)
             keyInput.setText(config.apiKey)
-            selectedContextWindow = config.contextWindow?.ifBlank { "200K" } ?: "200K"
+            selectedContextWindow = ContextProfile.configValueOrDefault(config.contextWindow)
             selectedMaxOutputTokens = config.maxOutputTokens ?: 8192
             selectedAutoCompaction = config.autoCompaction ?: true
             selectedCompactionThreshold = config.compactionThreshold ?: 0.70
@@ -460,7 +460,7 @@ class SettingsActivity : Activity() {
             urlInput.setText("")
             modelInput.setText("")
             keyInput.setText("")
-            selectedContextWindow = "200K"
+            selectedContextWindow = ContextProfile.DEFAULT_CONFIG
             selectedMaxOutputTokens = 8192
             selectedAutoCompaction = true
             selectedCompactionThreshold = 0.70
@@ -527,10 +527,10 @@ class SettingsActivity : Activity() {
 
     private fun renderContextWindowChips() {
         contextRow.removeAllViews()
-        contextWindowOptions.forEach { opt ->
-            val isSelected = opt.equals(selectedContextWindow, ignoreCase = true)
+        contextWindowOptions.forEach { profile ->
+            val isSelected = profile.stableId.equals(selectedContextWindow, ignoreCase = true)
             val chip = TextView(this).apply {
-                text = opt
+                text = profile.displayLabel
                 textSize = 12.5f
                 setTypeface(null, if (isSelected) Typeface.BOLD else Typeface.NORMAL)
                 setPadding(dp(14), dp(7), dp(14), dp(7))
@@ -542,7 +542,7 @@ class SettingsActivity : Activity() {
                     background = Ui.rounded(this@SettingsActivity, Ui.SurfaceSoft, 14, Ui.Outline)
                 }
                 setOnClickListener {
-                    selectedContextWindow = opt
+                    selectedContextWindow = profile.stableId
                     renderContextWindowChips()
                 }
             }

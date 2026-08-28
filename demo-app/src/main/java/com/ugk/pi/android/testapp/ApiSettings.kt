@@ -18,7 +18,7 @@ data class ApiProviderConfig(
     val apiKey: String,
     val model: String,
     val name: String? = null,
-    val contextWindow: String? = "200K",
+    val contextWindow: String? = ContextProfile.DEFAULT_CONFIG,
     val maxOutputTokens: Int? = 8192,
     val autoCompaction: Boolean? = true,
     val compactionThreshold: Double? = 0.70
@@ -30,7 +30,7 @@ data class ApiProviderConfig(
     }
 
     fun formatSpec(): String {
-        val cw = contextWindow?.ifBlank { "200K" } ?: "200K"
+        val cw = ContextProfile.configValueOrDefault(contextWindow)
         val outVal = maxOutputTokens ?: 8192
         val outStr = if (outVal >= 1024) "${outVal / 1024}K" else "$outVal"
         val compStr = if (autoCompaction != false) " · ${((compactionThreshold ?: 0.70) * 100).toInt()}%压缩" else ""
@@ -80,7 +80,7 @@ object ApiProviderSettingsJson {
                 val apiKey = obj.stringValue("apiKey")
                 val model = obj.stringValue("model")
                 val name = obj.stringValue("name").ifBlank { null }
-                val contextWindow = obj.stringValue("contextWindow").ifBlank { "200K" }
+                val contextWindow = ContextProfile.configValueOrDefault(obj.stringValue("contextWindow"))
                 val maxOutputTokens = obj.stringValue("maxOutputTokens").toIntOrNull() ?: 8192
                 val autoCompaction = obj["autoCompaction"]?.jsonPrimitive?.contentOrNull?.toBooleanStrictOrNull() ?: true
                 val compactionThreshold = obj["compactionThreshold"]?.jsonPrimitive?.contentOrNull?.toDoubleOrNull() ?: 0.70

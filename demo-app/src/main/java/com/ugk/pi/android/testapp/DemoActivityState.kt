@@ -131,16 +131,8 @@ object DemoActivityState {
     }
 
     fun budgetForContextWindow(contextWindow: String? = activeContextWindow): Pair<Int, Int> {
-        val cw = (contextWindow ?: activeContextWindow)?.trim()?.uppercase() ?: "128K"
-        return when {
-            cw.startsWith("2M") -> 800 to 80_000
-            cw.startsWith("1M") -> 400 to 50_000
-            cw.startsWith("200K") -> 220 to 30_000
-            cw.startsWith("128K") -> 160 to 20_000
-            cw.startsWith("64K") -> 100 to 12_000
-            cw.startsWith("32K") -> 60 to 8_000
-            else -> 160 to 20_000
-        }
+        val profile = ContextProfile.resolve(contextWindow ?: activeContextWindow)
+        return profile.sessionMaxMessages to profile.sessionMaxChars
     }
 
     /**

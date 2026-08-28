@@ -37,16 +37,7 @@ object ContextCompactor {
      * 将上下文规格字符串转换为对应的最大 Token 容量。
      */
     fun parseContextWindowTokens(contextWindow: String?): Int {
-        val cw = contextWindow?.trim()?.uppercase().orEmpty()
-        return when {
-            cw.startsWith("2M") -> 2_097_152
-            cw.startsWith("1M") -> 1_048_576
-            cw.startsWith("200K") -> 204_800
-            cw.startsWith("128K") -> 131_072
-            cw.startsWith("64K") -> 65_536
-            cw.startsWith("32K") -> 32_768
-            else -> 131_072
-        }
+        return ContextProfile.resolve(contextWindow).tokenCapacity
     }
 
     /**
