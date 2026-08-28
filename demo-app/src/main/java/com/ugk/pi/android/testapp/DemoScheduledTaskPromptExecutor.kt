@@ -24,7 +24,8 @@ internal class DemoScheduledTaskPromptExecutor(
     override suspend fun execute(task: AgentTask): AgentTaskActionExecutionResult {
         val action = task.action as? AgentTaskAction.RunAgentPrompt
             ?: return failure("任务动作不是 RUN_AGENT_PROMPT。")
-        val conversationStore = processScope.conversationStore
+        val conversationRuntime = processScope.conversationRuntime
+        val conversationStore = conversationRuntime.conversationStore
         val conversation = conversationStore.get(task.sessionId)
             ?: return failure("找不到任务关联的会话：${task.sessionId}")
 

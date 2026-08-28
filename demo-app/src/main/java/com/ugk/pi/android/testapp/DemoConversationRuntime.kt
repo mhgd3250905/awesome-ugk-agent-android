@@ -1,23 +1,47 @@
 package com.ugk.pi.android.testapp
 
+import android.content.Context
 import com.ugk.pi.android.AgentMessage
 import com.ugk.pi.android.AgentSession
+import kotlinx.coroutines.CoroutineDispatcher
+import kotlinx.coroutines.Dispatchers
 
 /**
- * Process-scoped state for the demo Activity.
+ * Process-owned conversation runtime for the demo.
  *
- * The demo is intentionally a single-screen test harness. Keeping the
- * conversation outside the Activity prevents a normal Activity recreation
- * (launcher re-entry, configuration change, or permission/settings return)
- * from looking like a full app restart. It does not hold Views or an Activity
- * reference, so it cannot keep the old window alive.
+ * It owns the application-scoped conversation store, the Agent run
+ * coordinator, and all conversation/session state that must survive an
+ * Activity recreation. It deliberately contains no Activity or View.
  */
-data class DemoTranscriptEntry(
-    val role: String,
-    val text: String
-)
+class DemoConversationRuntime private constructor(
+    private val appContext: Context?,
+    mainDispatcher: CoroutineDispatcher
+) {
+    /** Production constructor: all durable storage is rooted at application context. */
+    constructor(context: Context) : this(
+        appContext = context.applicationContext,
+        mainDispatcher = Dispatchers.Main.immediate
+    )
 
-object DemoActivityState {
+    /** Pure JVM state constructor used by unit tests that do not need Android storage. */
+    internal constructor() : this(
+        appContext = null,
+        mainDispatcher = Dispatchers.Unconfined
+    )
+
+    val conversationStore: DemoConversationStore by lazy {
+        DemoConversationStore(
+            requireNotNull(appContext) {
+                "DemoConversationRuntime.conversationStore requires an Android Context"
+            }
+        )
+    }
+
+    val runCoordinator: DemoAgentRunCoordinator = DemoAgentRunCoordinator(
+        mainDispatcher = mainDispatcher,
+        sessionFinalizer = { value -> boundSession(value) }
+    )
+
     var session: AgentSession? = null
     var activeConversationId: String? = null
     var draft: String = ""
@@ -144,7 +168,14 @@ object DemoActivityState {
         )
     }
 
-    private const val MAX_SESSION_CACHE = 30
-    private const val MAX_SESSION_MESSAGES = 160
-    private const val MAX_MESSAGE_CHARS = 16_000
+    private companion object {
+        const val MAX_SESSION_CACHE = 30
+        const val MAX_MESSAGE_CHARS = 16_000
+    }
 }
+
+/** Compatibility transcript entry retained for the runtime's existing transcript model. */
+data class DemoTranscriptEntry(
+    val role: String,
+    val text: String
+)

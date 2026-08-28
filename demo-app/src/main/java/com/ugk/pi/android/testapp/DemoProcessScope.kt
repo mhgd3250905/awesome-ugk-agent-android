@@ -12,14 +12,11 @@ class DemoProcessScope private constructor(context: Context) {
 
     private val appContext = context.applicationContext
 
-    val runCoordinator: DemoAgentRunCoordinator = DemoAgentRunCoordinator(
-        sessionFinalizer = { session -> DemoActivityState.boundSession(session) }
-    )
+    val conversationRuntime: DemoConversationRuntime by lazy {
+        DemoConversationRuntime(appContext)
+    }
     val confirmationPresenter: ActivityUserConfirmationDialogPresenter =
         ActivityUserConfirmationDialogPresenter()
-    val conversationStore: DemoConversationStore by lazy {
-        DemoConversationStore(appContext)
-    }
     val overlayController: DemoOverlayController = DemoOverlayController(appContext)
 
     companion object {

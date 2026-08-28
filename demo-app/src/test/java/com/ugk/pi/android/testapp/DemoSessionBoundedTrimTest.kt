@@ -16,7 +16,7 @@ import org.junit.Test
  * 2. no orphaned tool_result may survive without its assistant envelope;
  * 3. the first non-system message must be a user message.
  *
- * DemoActivityState.boundSession() trims long in-memory sessions after a
+ * DemoConversationRuntime.boundSession() trims long in-memory sessions after a
  * run, so its cut point must respect these invariants. Breaking them makes
  * every later model request on that session fail with a provider 400.
  */
@@ -34,6 +34,7 @@ class DemoSessionBoundedTrimTest {
 
     @Test
     fun `bound session keeps assistant tool_use paired with tool_result`() {
+        val runtime = DemoConversationRuntime()
         val session = AgentSession("session-trim")
         session.messages += AgentMessage.System("system prompt")
         session.messages += AgentMessage.User("please run the checks")
@@ -43,13 +44,14 @@ class DemoSessionBoundedTrimTest {
             session.messages += result
         }
 
-        DemoActivityState.boundSession(session)
+        runtime.boundSession(session)
 
         assertConversationInvariants(session.messages)
     }
 
     @Test
     fun `bound session starts with a user message after trimming`() {
+        val runtime = DemoConversationRuntime()
         val session = AgentSession("session-first-message")
         session.messages += AgentMessage.System("system prompt")
         session.messages += AgentMessage.User("first turn")
@@ -60,13 +62,14 @@ class DemoSessionBoundedTrimTest {
         }
         session.messages += AgentMessage.Assistant("all done")
 
-        DemoActivityState.boundSession(session)
+        runtime.boundSession(session)
 
         assertConversationInvariants(session.messages)
     }
 
     @Test
     fun `bound session handles a single turn larger than the cap`() {
+        val runtime = DemoConversationRuntime()
         val session = AgentSession("session-mega-turn")
         session.messages += AgentMessage.System("system prompt")
         session.messages += AgentMessage.User("one very long turn")
@@ -76,13 +79,14 @@ class DemoSessionBoundedTrimTest {
             session.messages += result
         }
 
-        DemoActivityState.boundSession(session)
+        runtime.boundSession(session)
 
         assertConversationInvariants(session.messages)
     }
 
     @Test
     fun `bound session stays within the message cap`() {
+        val runtime = DemoConversationRuntime()
         val session = AgentSession("session-cap")
         session.messages += AgentMessage.System("system prompt")
         session.messages += AgentMessage.User("first turn")
@@ -94,7 +98,7 @@ class DemoSessionBoundedTrimTest {
         }
         session.messages += AgentMessage.Assistant("final answer")
 
-        DemoActivityState.boundSession(session)
+        runtime.boundSession(session)
 
         assertConversationInvariants(session.messages)
         assertTrue(
@@ -106,6 +110,7 @@ class DemoSessionBoundedTrimTest {
 
     @Test
     fun `bound session keeps earlier turns when budget allows`() {
+        val runtime = DemoConversationRuntime()
         // 60 turns of [U, A, T]: the naive "keep only the last turn" trim
         // would retain 3 messages; the budget has room for ~159.
         val session = AgentSession("session-retention")
@@ -117,7 +122,7 @@ class DemoSessionBoundedTrimTest {
             session.messages += result
         }
 
-        DemoActivityState.boundSession(session)
+        runtime.boundSession(session)
 
         assertConversationInvariants(session.messages)
         val nonSystem = session.messages.filterNot { it is AgentMessage.System }
@@ -129,6 +134,7 @@ class DemoSessionBoundedTrimTest {
 
     @Test
     fun `bound session trims on user boundaries with interleaved pending messages`() {
+        val runtime = DemoConversationRuntime()
         // Mirrors AgentRuntime appending queued user messages between tool
         // batches: [U, A, T, U, A, T, ...].
         val session = AgentSession("session-interleaved")
@@ -141,7 +147,7 @@ class DemoSessionBoundedTrimTest {
         }
         session.messages += AgentMessage.User("follow-up")
 
-        DemoActivityState.boundSession(session)
+        runtime.boundSession(session)
 
         assertConversationInvariants(session.messages)
         val nonSystem = session.messages.filterNot { it is AgentMessage.System }

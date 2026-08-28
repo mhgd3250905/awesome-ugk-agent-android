@@ -59,11 +59,14 @@ import java.util.concurrent.atomic.AtomicBoolean
 class MainActivity : Activity() {
 
     private val processScope by lazy { (application as DemoApplication).processScope }
+    private val conversationRuntime: DemoConversationRuntime
+        get() = processScope.conversationRuntime
     private val runCoordinator: DemoAgentRunCoordinator
-        get() = processScope.runCoordinator
+        get() = conversationRuntime.runCoordinator
     private val apiStore by lazy { ApiProviderSettingsStore(this) }
     private val authorizationStore by lazy { AgentAuthorizationSettingsStore(this) }
-    private val conversationStore by lazy { processScope.conversationStore }
+    private val conversationStore: DemoConversationStore
+        get() = conversationRuntime.conversationStore
     private val traceStore by lazy { DemoAgentTraceStore(applicationContext) }
     private val fileImportStore by lazy { DemoFileImportStore(applicationContext) }
     private val scheduledTaskStore by lazy { AndroidAgentTaskStore(applicationContext) }
@@ -71,7 +74,10 @@ class MainActivity : Activity() {
     private var runtime: AgentRuntime? = null
     private var appliedRuntimeConfig: DemoRuntimeConfig? = null
     private lateinit var activeConversation: DemoConversation
-    private lateinit var session: AgentSession
+    private val session: AgentSession
+        get() = checkNotNull(conversationRuntime.session) {
+            "Active conversation session has not been initialized"
+        }
     private var runState: DemoRunState = DemoRunState.initial()
     private var activityResumed = false
     private val screenAutomationActive = AtomicBoolean(false)
@@ -149,13 +155,13 @@ class MainActivity : Activity() {
         window.navigationBarColor = Color.TRANSPARENT
         window.setSoftInputMode(WindowManager.LayoutParams.SOFT_INPUT_ADJUST_RESIZE)
         activeConversation = conversationStore.get(
-            DemoActivityState.activeConversationId ?: conversationStore.activeId()
+            conversationRuntime.activeConversationId ?: conversationStore.activeId()
         ) ?: conversationStore.ensureActive()
-        DemoActivityState.activeConversationId = activeConversation.id
+        conversationRuntime.activeConversationId = activeConversation.id
         conversationStore.setActive(activeConversation.id)
-        session = DemoActivityState.sessionFor(activeConversation.id)
+        conversationRuntime.session = conversationRuntime.sessionFor(activeConversation.id)
             ?: createDemoAgentSession(activeConversation).also {
-                DemoActivityState.rememberSession(activeConversation.id, it)
+                conversationRuntime.rememberSession(activeConversation.id, it)
             }
         setContentView(buildUi())
         processScope.overlayController.bindCommands(
@@ -176,7 +182,7 @@ class MainActivity : Activity() {
                     }
                 },
                 onHide = { runOnUiThread { hideFloatingWindow() } },
-                onDraftChanged = { draft -> DemoActivityState.draft = draft }
+                onDraftChanged = { draft -> conversationRuntime.draft = draft }
             )
         )
         restoreDraft(savedInstanceState)
@@ -328,8 +334,8 @@ class MainActivity : Activity() {
         confirmationPresenter.onActivityResumed()
         refreshActiveConversationFromStore()
         updateCapabilityBanner()
-        if (::inputField.isInitialized && inputField.text.toString() != DemoActivityState.draft) {
-            inputField.setText(DemoActivityState.draft)
+        if (::inputField.isInitialized && inputField.text.toString() != conversationRuntime.draft) {
+            inputField.setText(conversationRuntime.draft)
             inputField.setSelection(inputField.length())
         }
         renderRunState()
@@ -360,7 +366,7 @@ class MainActivity : Activity() {
             runCoordinator.detach(activityToken)
             confirmationPresenter.detach(this)
         }
-        DemoActivityState.rememberSession(activeConversation.id, session)
+        conversationRuntime.rememberSession(activeConversation.id, session)
         ThemeManager.removeListener(themeListener)
         fileImportScope.cancel()
         super.onDestroy()
@@ -611,8 +617,8 @@ class MainActivity : Activity() {
         inputField.addTextChangedListener(object : TextWatcher {
             override fun beforeTextChanged(text: CharSequence?, start: Int, count: Int, after: Int) = Unit
             override fun onTextChanged(text: CharSequence?, start: Int, before: Int, count: Int) {
-                DemoActivityState.draft = text?.toString().orEmpty()
-                floatingWindow.setComposerDraft(DemoActivityState.draft)
+                conversationRuntime.draft = text?.toString().orEmpty()
+                floatingWindow.setComposerDraft(conversationRuntime.draft)
                 updateComposerState()
             }
             override fun afterTextChanged(editable: Editable?) = Unit
@@ -966,9 +972,9 @@ class MainActivity : Activity() {
     }
 
     private fun refreshRuntimeState(config: ApiProviderConfig?) {
-        DemoActivityState.activeContextWindow = config?.contextWindow
-        DemoActivityState.activeAutoCompaction = config?.autoCompaction ?: true
-        DemoActivityState.activeCompactionThreshold = config?.compactionThreshold ?: ContextCompactor.DEFAULT_THRESHOLD
+        conversationRuntime.activeContextWindow = config?.contextWindow
+        conversationRuntime.activeAutoCompaction = config?.autoCompaction ?: true
+        conversationRuntime.activeCompactionThreshold = config?.compactionThreshold ?: ContextCompactor.DEFAULT_THRESHOLD
         providerLabel.text = config?.let { "${it.displayName()} (${it.formatSpec()})" } ?: "未配置 API 源"
         updateCapabilityBanner()
         renderConversation()
@@ -1004,7 +1010,7 @@ class MainActivity : Activity() {
             val queuedMessage = buildAgentMessage(effectiveText, attachments)
             if (runCoordinator.enqueue(queuedMessage)) {
                 inputField.setText("")
-                DemoActivityState.draft = ""
+                conversationRuntime.draft = ""
                 pendingImportedFiles = emptyList()
                 pendingImage = null
                 pendingImagePreviewContainer.visibility = View.GONE
@@ -1023,7 +1029,7 @@ class MainActivity : Activity() {
             maybeOfferOverlayPermission()
         }
         if (runAgent(text, attachments, image)) {
-            DemoActivityState.draft = ""
+            conversationRuntime.draft = ""
             inputField.setText("")
             pendingImportedFiles = emptyList()
             pendingImage = null
@@ -1060,11 +1066,11 @@ class MainActivity : Activity() {
         if (!AgentOverlayPolicy.shouldOfferPermission(
                 permissionGranted = Settings.canDrawOverlays(this),
                 hasActiveRun = true
-            ) || DemoActivityState.overlayPromptShown || isFinishing
+            ) || conversationRuntime.overlayPromptShown || isFinishing
         ) {
             return
         }
-        DemoActivityState.overlayPromptShown = true
+        conversationRuntime.overlayPromptShown = true
         overlayPermissionDialog = AlertDialog.Builder(this, Ui.dialogTheme())
             .setTitle("开启跨 App 悬浮窗")
             .setMessage("离开 Agent Test 后，悬浮小窗可以继续显示任务进度，并发送后续消息，不会打断当前 Agent 操作。")
@@ -1145,7 +1151,7 @@ class MainActivity : Activity() {
         }
         addChatMessage(DemoChatMessageRole.USER, message, image?.file?.absolutePath)
         addProcessCard()
-        DemoActivityState.activeConversationId = activeConversation.id
+        conversationRuntime.activeConversationId = activeConversation.id
 
         floatingWindow.clear()
         floatingWindow.setSending(true)
@@ -1529,7 +1535,7 @@ class MainActivity : Activity() {
      */
     private fun updateContextUsageIndicator() {
         if (!::contextUsageLayout.isInitialized) return
-        val currentSession = session ?: DemoActivityState.session
+        val currentSession = conversationRuntime.session
         val usedTokens = if (currentSession != null && currentSession.messages.isNotEmpty()) {
             ContextCompactor.estimateTokens(currentSession.messages)
         } else if (::activeConversation.isInitialized && activeConversation.messages.isNotEmpty()) {
@@ -1537,22 +1543,22 @@ class MainActivity : Activity() {
         } else {
             0
         }
-        val maxTokens = ContextCompactor.parseContextWindowTokens(DemoActivityState.activeContextWindow)
+        val maxTokens = ContextCompactor.parseContextWindowTokens(conversationRuntime.activeContextWindow)
         val ratio = (usedTokens.toDouble() / maxTokens.toDouble()).coerceIn(0.0, 1.0)
         val percent = (ratio * 100).toInt()
 
         // 动态色彩映射阶梯 (<50% 清新绿, 50%~70% 天空蓝, 70%~85% 琥珀黄, >=85% 警戒红)
         val statusColor = when {
             ratio < 0.50 -> Ui.Success
-            ratio < DemoActivityState.activeCompactionThreshold -> if (ThemeManager.isDark) Color.parseColor("#38BDF8") else Color.parseColor("#0284C7")
+            ratio < conversationRuntime.activeCompactionThreshold -> if (ThemeManager.isDark) Color.parseColor("#38BDF8") else Color.parseColor("#0284C7")
             ratio < 0.85 -> if (ThemeManager.isDark) Color.parseColor("#FBBF24") else Color.parseColor("#D97706")
             else -> Ui.Danger
         }
 
         val usedStr = ContextCompactor.formatTokenCount(usedTokens)
         val maxStr = ContextCompactor.formatTokenCount(maxTokens)
-        val compactionStr = if (DemoActivityState.activeAutoCompaction) {
-            val threshInt = (DemoActivityState.activeCompactionThreshold * 100).toInt()
+        val compactionStr = if (conversationRuntime.activeAutoCompaction) {
+            val threshInt = (conversationRuntime.activeCompactionThreshold * 100).toInt()
             " · ${threshInt}%压缩"
         } else {
             ""
@@ -1756,25 +1762,25 @@ class MainActivity : Activity() {
     }
 
     override fun onSaveInstanceState(outState: Bundle) {
-        DemoActivityState.rememberSession(activeConversation.id, session)
+        conversationRuntime.rememberSession(activeConversation.id, session)
         conversationStore.save(activeConversation)
         val draft = if (::inputField.isInitialized) inputField.text?.toString().orEmpty() else ""
-        DemoActivityState.draft = draft
+        conversationRuntime.draft = draft
         outState.putString(KEY_DRAFT, draft)
         super.onSaveInstanceState(outState)
     }
 
     private fun restoreDraft(savedInstanceState: Bundle?) {
-        val draft = savedInstanceState?.getString(KEY_DRAFT) ?: DemoActivityState.draft
+        val draft = savedInstanceState?.getString(KEY_DRAFT) ?: conversationRuntime.draft
         inputField.setText(draft)
         inputField.setSelection(inputField.length())
     }
 
     private fun syncTranscript() {
-        DemoActivityState.transcript.clear()
+        conversationRuntime.transcript.clear()
         activeConversation.messages.forEach { message ->
             if (message.role == "user" || message.role == "assistant") {
-                DemoActivityState.transcript += DemoTranscriptEntry(message.role, message.content)
+                conversationRuntime.transcript += DemoTranscriptEntry(message.role, message.content)
             }
         }
     }
@@ -1794,8 +1800,8 @@ class MainActivity : Activity() {
             return
         }
         activeConversation = latest
-        session = createDemoAgentSession(latest)
-        DemoActivityState.rememberSession(latest.id, session)
+        conversationRuntime.session = createDemoAgentSession(latest)
+        conversationRuntime.rememberSession(latest.id, session)
         syncTranscript()
         renderConversation()
     }
@@ -1809,11 +1815,11 @@ class MainActivity : Activity() {
         val conversation = conversationStore.get(id) ?: return
         activeConversation = conversation
         conversationStore.setActive(conversation.id)
-        DemoActivityState.activeConversationId = conversation.id
+        conversationRuntime.activeConversationId = conversation.id
         runCoordinator.resetForConversation(conversation.id)
-        session = DemoActivityState.sessionFor(conversation.id)
+        conversationRuntime.session = conversationRuntime.sessionFor(conversation.id)
             ?: createDemoAgentSession(conversation).also {
-                DemoActivityState.rememberSession(conversation.id, it)
+                conversationRuntime.rememberSession(conversation.id, it)
             }
         runState = runCoordinator.snapshot().state
         floatingWindow.clear()
@@ -1826,10 +1832,10 @@ class MainActivity : Activity() {
         if (runState.isBusy || runCoordinator.isRunning()) stopAgent()
         val conversation = conversationStore.create()
         activeConversation = conversation
-        DemoActivityState.activeConversationId = conversation.id
+        conversationRuntime.activeConversationId = conversation.id
         runCoordinator.resetForConversation(conversation.id)
-        session = createDemoAgentSession(conversation)
-        DemoActivityState.rememberSession(conversation.id, session)
+        conversationRuntime.session = createDemoAgentSession(conversation)
+        conversationRuntime.rememberSession(conversation.id, session)
         runState = runCoordinator.snapshot().state
         floatingWindow.clear()
         syncTranscript()

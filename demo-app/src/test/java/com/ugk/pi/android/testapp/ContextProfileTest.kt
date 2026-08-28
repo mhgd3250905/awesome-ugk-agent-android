@@ -76,12 +76,13 @@ class ContextProfileTest {
 
     @Test
     fun contextConsumersSafelyFallBackTo128KForNullAndUnknownValues() {
+        val runtime = DemoConversationRuntime()
         assertEquals("128K", ContextProfile.resolve(null).stableId)
         assertEquals("128K", ContextProfile.resolve("future-window").stableId)
         assertEquals(131_072, ContextCompactor.parseContextWindowTokens(null))
         assertEquals(131_072, ContextCompactor.parseContextWindowTokens("future-window"))
-        assertEquals(160 to 20_000, DemoActivityState.budgetForContextWindow(null))
-        assertEquals(160 to 20_000, DemoActivityState.budgetForContextWindow("future-window"))
+        assertEquals(160 to 20_000, runtime.budgetForContextWindow(null))
+        assertEquals(160 to 20_000, runtime.budgetForContextWindow("future-window"))
     }
 
     private data class ProfileExpectation(

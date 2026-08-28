@@ -126,22 +126,23 @@ class ApiContextSettingsTest {
 
     @Test
     fun testBudgetForContextWindow() {
-        val b2M = DemoActivityState.budgetForContextWindow("2M")
+        val runtime = DemoConversationRuntime()
+        val b2M = runtime.budgetForContextWindow("2M")
         assertEquals(800 to 80_000, b2M)
 
-        val b1M = DemoActivityState.budgetForContextWindow("1M")
+        val b1M = runtime.budgetForContextWindow("1M")
         assertEquals(400 to 50_000, b1M)
 
-        val b200K = DemoActivityState.budgetForContextWindow("200K")
+        val b200K = runtime.budgetForContextWindow("200K")
         assertEquals(220 to 30_000, b200K)
 
-        val b128K = DemoActivityState.budgetForContextWindow("128K")
+        val b128K = runtime.budgetForContextWindow("128K")
         assertEquals(160 to 20_000, b128K)
 
-        val b64K = DemoActivityState.budgetForContextWindow("64K")
+        val b64K = runtime.budgetForContextWindow("64K")
         assertEquals(100 to 12_000, b64K)
 
-        val b32K = DemoActivityState.budgetForContextWindow("32K")
+        val b32K = runtime.budgetForContextWindow("32K")
         assertEquals(60 to 8_000, b32K)
     }
 }
