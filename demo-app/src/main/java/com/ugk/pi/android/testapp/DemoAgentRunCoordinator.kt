@@ -41,7 +41,8 @@ data class DemoAgentRunSnapshot(
 )
 
 class DemoAgentRunCoordinator(
-    private val mainDispatcher: CoroutineDispatcher = Dispatchers.Main.immediate
+    private val mainDispatcher: CoroutineDispatcher = Dispatchers.Main.immediate,
+    private val sessionFinalizer: (AgentSession) -> Unit = {}
 ) {
     private val scope = CoroutineScope(SupervisorJob() + mainDispatcher)
     private val queuedMessages = ArrayDeque<String>()
@@ -111,7 +112,7 @@ class DemoAgentRunCoordinator(
                 }
             } finally {
                 withContext(NonCancellable + mainDispatcher) {
-                    DemoActivityState.boundSession(runSession)
+                    runCatching { sessionFinalizer(runSession) }
                     if (job !== launchedJob) return@withContext
                     job = null
                     finishListener?.invoke()

@@ -152,7 +152,7 @@ class SettingsActivity : Activity() {
 
     override fun onResume() {
         super.onResume()
-        DemoActivityState.floatingWindow(this).hide()
+        (application as DemoApplication).processScope.overlayController.window.hide()
     }
 
     override fun onDestroy() {

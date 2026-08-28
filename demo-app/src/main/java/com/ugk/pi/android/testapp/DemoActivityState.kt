@@ -1,6 +1,5 @@
 package com.ugk.pi.android.testapp
 
-import android.content.Context
 import com.ugk.pi.android.AgentMessage
 import com.ugk.pi.android.AgentSession
 
@@ -19,11 +18,6 @@ data class DemoTranscriptEntry(
 )
 
 object DemoActivityState {
-    val runCoordinator = DemoAgentRunCoordinator()
-    val confirmationPresenter: ActivityUserConfirmationDialogPresenter by lazy {
-        ActivityUserConfirmationDialogPresenter()
-    }
-
     var session: AgentSession? = null
     var activeConversationId: String? = null
     var draft: String = ""
@@ -35,56 +29,6 @@ object DemoActivityState {
     var activeContextWindow: String? = null
     var activeAutoCompaction: Boolean = true
     var activeCompactionThreshold: Double = ContextCompactor.DEFAULT_THRESHOLD
-
-    private var sharedFloatingWindow: AgentFloatingWindow? = null
-    private var sharedConversationStore: DemoConversationStore? = null
-    private var overlayOwner: Any? = null
-    var overlaySend: ((String) -> Boolean)? = null
-        private set
-    var overlayStop: (() -> Unit)? = null
-        private set
-    var overlayOpenApp: (() -> Unit)? = null
-        private set
-    var overlayHide: (() -> Unit)? = null
-        private set
-
-    fun floatingWindow(context: Context): AgentFloatingWindow {
-        return sharedFloatingWindow ?: AgentFloatingWindow(context.applicationContext).also {
-            sharedFloatingWindow = it
-        }
-    }
-
-    @Synchronized
-    fun conversationStore(context: Context): DemoConversationStore {
-        return sharedConversationStore ?: DemoConversationStore(context.applicationContext).also {
-            sharedConversationStore = it
-        }
-    }
-
-    fun bindOverlayCallbacks(
-        owner: Any,
-        onSend: (String) -> Boolean,
-        onStop: () -> Unit,
-        onOpenApp: () -> Unit,
-        onHide: () -> Unit
-    ) {
-        overlayOwner = owner
-        overlaySend = onSend
-        overlayStop = onStop
-        overlayOpenApp = onOpenApp
-        overlayHide = onHide
-    }
-
-    fun unbindOverlayCallbacks(owner: Any) {
-        if (overlayOwner !== owner) return
-        overlayOwner = null
-        overlaySend = null
-        overlayStop = null
-        overlayOpenApp = null
-        overlayHide = null
-    }
-
-    fun clearOverlayCallbacks(owner: Any) = unbindOverlayCallbacks(owner)
 
     fun rememberSession(conversationId: String, session: AgentSession) {
         activeConversationId = conversationId

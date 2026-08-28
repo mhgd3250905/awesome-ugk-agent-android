@@ -58,9 +58,12 @@ import java.util.concurrent.atomic.AtomicBoolean
 
 class MainActivity : Activity() {
 
+    private val processScope by lazy { (application as DemoApplication).processScope }
+    private val runCoordinator: DemoAgentRunCoordinator
+        get() = processScope.runCoordinator
     private val apiStore by lazy { ApiProviderSettingsStore(this) }
     private val authorizationStore by lazy { AgentAuthorizationSettingsStore(this) }
-    private val conversationStore by lazy { DemoActivityState.conversationStore(applicationContext) }
+    private val conversationStore by lazy { processScope.conversationStore }
     private val traceStore by lazy { DemoAgentTraceStore(applicationContext) }
     private val fileImportStore by lazy { DemoFileImportStore(applicationContext) }
     private val scheduledTaskStore by lazy { AndroidAgentTaskStore(applicationContext) }
@@ -75,7 +78,7 @@ class MainActivity : Activity() {
     private val activityToken = Any()
     private var overlayPermissionDialog: AlertDialog? = null
     private val confirmationPresenter by lazy {
-        DemoActivityState.confirmationPresenter.also { presenter ->
+        processScope.confirmationPresenter.also { presenter ->
             presenter.attach(
                 activity = this,
                 isResumed = { activityResumed },
@@ -123,15 +126,8 @@ class MainActivity : Activity() {
     private val streamingRenderRunnable = Runnable { flushStreamingAssistantText() }
     private var lastImeInsetBottom = 0
     private val themeListener: (Boolean) -> Unit = { runOnUiThread { applyTheme() } }
-    private val floatingWindow by lazy {
-        DemoActivityState.floatingWindow(applicationContext).apply {
-            onSendMessage = { text -> DemoActivityState.overlaySend?.invoke(text) == true }
-            onStopAgent = { DemoActivityState.overlayStop?.invoke() }
-            onOpenApp = { DemoActivityState.overlayOpenApp?.invoke() }
-            onHide = { DemoActivityState.overlayHide?.invoke() }
-            onDraftChanged = { draft -> DemoActivityState.draft = draft }
-        }
-    }
+    private val floatingWindow: AgentFloatingWindow
+        get() = processScope.overlayController.window
 
     override fun onCreate(savedInstanceState: Bundle?) {
         super.onCreate(savedInstanceState)
@@ -162,23 +158,26 @@ class MainActivity : Activity() {
                 DemoActivityState.rememberSession(activeConversation.id, it)
             }
         setContentView(buildUi())
-        DemoActivityState.bindOverlayCallbacks(
+        processScope.overlayController.bindCommands(
             owner = activityToken,
-            // AgentFloatingWindow invokes touch callbacks on the main looper;
-            // return the enqueue result synchronously so a full queue keeps
-            // the user's draft instead of clearing it optimistically.
-            onSend = { text -> enqueueOverlayMessage(text) },
-            onStop = { runOnUiThread { stopAgent(clearQueuedMessages = true) } },
-            onOpenApp = {
-                runOnUiThread {
-                    startActivity(
-                        Intent(this@MainActivity, MainActivity::class.java).apply {
-                            addFlags(Intent.FLAG_ACTIVITY_REORDER_TO_FRONT)
-                        }
-                    )
-                }
-            },
-            onHide = { runOnUiThread { hideFloatingWindow() } }
+            commands = DemoOverlayCommands(
+                // AgentFloatingWindow invokes touch callbacks on the main looper;
+                // return the enqueue result synchronously so a full queue keeps
+                // the user's draft instead of clearing it optimistically.
+                onSend = { text -> enqueueOverlayMessage(text) },
+                onStop = { runOnUiThread { stopAgent(clearQueuedMessages = true) } },
+                onOpenApp = {
+                    runOnUiThread {
+                        startActivity(
+                            Intent(this@MainActivity, MainActivity::class.java).apply {
+                                addFlags(Intent.FLAG_ACTIVITY_REORDER_TO_FRONT)
+                            }
+                        )
+                    }
+                },
+                onHide = { runOnUiThread { hideFloatingWindow() } },
+                onDraftChanged = { draft -> DemoActivityState.draft = draft }
+            )
         )
         restoreDraft(savedInstanceState)
         refreshRuntime()
@@ -351,22 +350,22 @@ class MainActivity : Activity() {
         cancelPendingStreamingRender()
         val finishing = isFinishing && !isChangingConfigurations
         if (finishing) {
-            DemoActivityState.runCoordinator.stop()
-            DemoActivityState.runCoordinator.clearQueue()
-            DemoActivityState.runCoordinator.detach(activityToken)
+            runCoordinator.stop()
+            runCoordinator.clearQueue()
+            runCoordinator.detach(activityToken)
             runtime?.cancelAllPlugins()
             runtime?.close()
             confirmationPresenter.release()
         } else {
-            DemoActivityState.runCoordinator.detach(activityToken)
+            runCoordinator.detach(activityToken)
             confirmationPresenter.detach(this)
         }
         DemoActivityState.rememberSession(activeConversation.id, session)
         ThemeManager.removeListener(themeListener)
         fileImportScope.cancel()
         super.onDestroy()
-        DemoActivityState.clearOverlayCallbacks(activityToken)
         if (finishing) hideFloatingWindow()
+        processScope.overlayController.unbindCommands(activityToken)
     }
 
     private fun hideFloatingWindow() {
@@ -1000,10 +999,10 @@ class MainActivity : Activity() {
         val attachments = pendingImportedFiles.toList()
         val image = pendingImage
         if (text.isBlank() && attachments.isEmpty() && image == null) return
-        if (DemoActivityState.runCoordinator.isRunning()) {
+        if (runCoordinator.isRunning()) {
             val effectiveText = if (text.isBlank() && image != null) "请分析并识别这张图片" else text
             val queuedMessage = buildAgentMessage(effectiveText, attachments)
-            if (DemoActivityState.runCoordinator.enqueue(queuedMessage)) {
+            if (runCoordinator.enqueue(queuedMessage)) {
                 inputField.setText("")
                 DemoActivityState.draft = ""
                 pendingImportedFiles = emptyList()
@@ -1037,8 +1036,8 @@ class MainActivity : Activity() {
         val message = text.trim()
         if (message.isBlank()) return false
 
-        if (runState.isBusy || DemoActivityState.runCoordinator.isRunning()) {
-            if (!DemoActivityState.runCoordinator.enqueue(message)) {
+        if (runState.isBusy || runCoordinator.isRunning()) {
+            if (!runCoordinator.enqueue(message)) {
                 floatingWindow.addLog("消息队列已满，请稍后再试")
                 return false
             }
@@ -1051,8 +1050,8 @@ class MainActivity : Activity() {
     }
 
     private fun startNextQueuedOverlayMessage() {
-        if (runState.isBusy || DemoActivityState.runCoordinator.isRunning()) return
-        val next = DemoActivityState.runCoordinator.removeNextQueued() ?: return
+        if (runState.isBusy || runCoordinator.isRunning()) return
+        val next = runCoordinator.removeNextQueued() ?: return
         floatingWindow.addLog("开始处理排队消息")
         runAgent(next)
     }
@@ -1112,7 +1111,7 @@ class MainActivity : Activity() {
         attachments: List<DemoImportedFile> = emptyList(),
         image: ProcessedImage? = null
     ): Boolean {
-        if (runState.isBusy || DemoActivityState.runCoordinator.isRunning()) return false
+        if (runState.isBusy || runCoordinator.isRunning()) return false
         val currentRuntime = runtime ?: return false
         val effectiveText = if (text.isBlank() && image != null) "请分析并识别这张图片" else text
         val message = buildAgentMessage(effectiveText, attachments)
@@ -1164,20 +1163,20 @@ class MainActivity : Activity() {
             emptyList()
         }
 
-        DemoActivityState.runCoordinator.start(
+        runCoordinator.start(
             runtime = currentRuntime,
             session = session,
             conversationId = activeConversation.id,
             message = message,
             images = imageContents
         )
-        runState = DemoActivityState.runCoordinator.snapshot().state
+        runState = runCoordinator.snapshot().state
         renderRunState()
         return true
     }
 
     private fun attachRunCoordinator() {
-        val snapshot = DemoActivityState.runCoordinator.attach(
+        val snapshot = runCoordinator.attach(
             owner = activityToken,
             onEvent = { event ->
                 runOnUiThread { handleAgentEvent(event) }
@@ -1187,7 +1186,7 @@ class MainActivity : Activity() {
             }
         )
         runState = snapshot.state
-        DemoActivityState.runCoordinator
+        runCoordinator
             .consumePendingOutcome(activeConversation.id)
             ?.event
             ?.let { event ->
@@ -1209,7 +1208,7 @@ class MainActivity : Activity() {
 
     private fun finishAgentRun() {
         cancelPendingStreamingRender()
-        runState = DemoActivityState.runCoordinator.snapshot().state
+        runState = runCoordinator.snapshot().state
         updateComposerState()
         floatingWindow.setSending(false)
         floatingWindow.setStatus(runState.statusLabel)
@@ -1249,7 +1248,7 @@ class MainActivity : Activity() {
 
     private fun handleAgentEvent(event: AgentEvent) {
         traceStore.append(event)
-        runState = DemoActivityState.runCoordinator.snapshot().state
+        runState = runCoordinator.snapshot().state
         when (event) {
             is AgentEvent.ToolStarted -> {
                 if (DemoScreenAutomationPolicy.isScreenWorkflowTool(event.call.name)) {
@@ -1312,7 +1311,7 @@ class MainActivity : Activity() {
                 setScreenAutomationActive(false)
                 streamingAssistantText = null
                 persistAssistantMessage(event.content)
-                DemoActivityState.runCoordinator.acknowledgeOutcome()
+                runCoordinator.acknowledgeOutcome()
                 floatingWindow.setStatus("已完成")
                 floatingWindow.addLog("回答已完成")
             }
@@ -1323,13 +1322,13 @@ class MainActivity : Activity() {
                 if (event.message.isNotBlank()) {
                     persistAssistantMessage("任务未完成：${event.message}")
                 }
-                DemoActivityState.runCoordinator.acknowledgeOutcome()
+                runCoordinator.acknowledgeOutcome()
                 floatingWindow.setStatus("失败")
                 floatingWindow.addLog("失败：${event.message}")
             }
             else -> Unit
         }
-        runState = DemoActivityState.runCoordinator.snapshot().state
+        runState = runCoordinator.snapshot().state
         renderRunState()
         updateContextUsageIndicator()
     }
@@ -1380,8 +1379,8 @@ class MainActivity : Activity() {
         processCard?.let { messageContainer.removeView(it) }
         val card = DemoChatProcessCardView(this).apply {
             setOnExpandedChangeListener { expanded ->
-                DemoActivityState.runCoordinator.setDetailsExpanded(expanded)
-                runState = DemoActivityState.runCoordinator.snapshot().state
+                runCoordinator.setDetailsExpanded(expanded)
+                runState = runCoordinator.snapshot().state
             }
         }
         processCard = card
@@ -1461,7 +1460,7 @@ class MainActivity : Activity() {
                         )
                     },
                     isBusy = state.isBusy,
-                    queuedMessages = DemoActivityState.runCoordinator.snapshot().queuedMessages
+                    queuedMessages = runCoordinator.snapshot().queuedMessages
                 )
             )
             processCard?.bind(
@@ -1484,7 +1483,7 @@ class MainActivity : Activity() {
                     latestMessage = activeConversation.messages.lastOrNull()?.content,
                     latestMessageRole = activeConversation.messages.lastOrNull()?.role,
                     isBusy = state.isBusy,
-                    queuedMessages = DemoActivityState.runCoordinator.snapshot().queuedMessages
+                    queuedMessages = runCoordinator.snapshot().queuedMessages
                 )
             )
         }
@@ -1587,13 +1586,13 @@ class MainActivity : Activity() {
 
     private fun stopAgent(clearQueuedMessages: Boolean = true) {
         confirmationPresenter.cancelPending()
-        if (!DemoActivityState.runCoordinator.isRunning() && !runState.isBusy) {
+        if (!runCoordinator.isRunning() && !runState.isBusy) {
             setScreenAutomationActive(false)
             return
         }
-        if (clearQueuedMessages) DemoActivityState.runCoordinator.clearQueue()
+        if (clearQueuedMessages) runCoordinator.clearQueue()
         runtime?.cancelAllPlugins()
-        runState = DemoActivityState.runCoordinator.stop().state
+        runState = runCoordinator.stop().state
         renderRunState()
         floatingWindow.setSending(false)
         setScreenAutomationActive(false)
@@ -1787,7 +1786,7 @@ class MainActivity : Activity() {
      */
     private fun refreshActiveConversationFromStore() {
         if (!::activeConversation.isInitialized) return
-        if (runState.isBusy || DemoActivityState.runCoordinator.isRunning()) return
+        if (runState.isBusy || runCoordinator.isRunning()) return
         val latest = conversationStore.get(activeConversation.id) ?: return
         if (latest.updatedAt == activeConversation.updatedAt &&
             latest.messages == activeConversation.messages
@@ -1806,17 +1805,17 @@ class MainActivity : Activity() {
     }
 
     private fun selectConversation(id: String) {
-        if (runState.isBusy || DemoActivityState.runCoordinator.isRunning()) stopAgent()
+        if (runState.isBusy || runCoordinator.isRunning()) stopAgent()
         val conversation = conversationStore.get(id) ?: return
         activeConversation = conversation
         conversationStore.setActive(conversation.id)
         DemoActivityState.activeConversationId = conversation.id
-        DemoActivityState.runCoordinator.resetForConversation(conversation.id)
+        runCoordinator.resetForConversation(conversation.id)
         session = DemoActivityState.sessionFor(conversation.id)
             ?: createDemoAgentSession(conversation).also {
                 DemoActivityState.rememberSession(conversation.id, it)
             }
-        runState = DemoActivityState.runCoordinator.snapshot().state
+        runState = runCoordinator.snapshot().state
         floatingWindow.clear()
         syncTranscript()
         renderConversation()
@@ -1824,14 +1823,14 @@ class MainActivity : Activity() {
     }
 
     private fun createNewConversation() {
-        if (runState.isBusy || DemoActivityState.runCoordinator.isRunning()) stopAgent()
+        if (runState.isBusy || runCoordinator.isRunning()) stopAgent()
         val conversation = conversationStore.create()
         activeConversation = conversation
         DemoActivityState.activeConversationId = conversation.id
-        DemoActivityState.runCoordinator.resetForConversation(conversation.id)
+        runCoordinator.resetForConversation(conversation.id)
         session = createDemoAgentSession(conversation)
         DemoActivityState.rememberSession(conversation.id, session)
-        runState = DemoActivityState.runCoordinator.snapshot().state
+        runState = runCoordinator.snapshot().state
         floatingWindow.clear()
         syncTranscript()
         renderConversation()

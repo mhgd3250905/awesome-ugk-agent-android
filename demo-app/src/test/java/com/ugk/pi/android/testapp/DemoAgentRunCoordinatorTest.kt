@@ -10,6 +10,7 @@ import java.util.concurrent.CountDownLatch
 import java.util.concurrent.TimeUnit
 import org.junit.Assert.assertEquals
 import org.junit.Assert.assertFalse
+import org.junit.Assert.assertSame
 import org.junit.Assert.assertTrue
 import org.junit.Test
 
@@ -43,10 +44,81 @@ class DemoAgentRunCoordinatorTest {
     }
 
     @Test
+    fun sessionFinalizerRunsForACompletedRun() {
+        var finalizedSession: AgentSession? = null
+        val finished = CountDownLatch(1)
+        val coordinator = DemoAgentRunCoordinator(Dispatchers.Unconfined) { session ->
+            finalizedSession = session
+        }
+        val session = AgentSession("session-finalizer-complete")
+
+        coordinator.attach(Any(), onEvent = {}, onFinished = { finished.countDown() })
+        coordinator.start(runtimeReturning("done"), session, "conversation-finalizer-complete", "hello")
+
+        assertTrue(finished.await(2, TimeUnit.SECONDS))
+        assertSame(session, finalizedSession)
+    }
+
+    @Test
+    fun sessionFinalizerRunsForAFailedRun() {
+        var finalizedSession: AgentSession? = null
+        val finished = CountDownLatch(1)
+        val coordinator = DemoAgentRunCoordinator(Dispatchers.Unconfined) { session ->
+            finalizedSession = session
+        }
+        val session = AgentSession("session-finalizer-failed")
+
+        coordinator.attach(Any(), onEvent = {}, onFinished = { finished.countDown() })
+        coordinator.start(runtimeFailing("provider failed"), session, "conversation-finalizer-failed", "hello")
+
+        assertTrue(finished.await(2, TimeUnit.SECONDS))
+        assertSame(session, finalizedSession)
+        assertEquals(DemoRunStatus.FAILED, coordinator.snapshot().state.status)
+    }
+
+    @Test
+    fun failingSessionFinalizerDoesNotBlockCleanupOrNextRun() {
+        val firstFinished = CountDownLatch(1)
+        val coordinator = DemoAgentRunCoordinator(Dispatchers.Unconfined) {
+            error("boom")
+        }
+        val firstSession = AgentSession("session-finalizer-error-first")
+
+        coordinator.attach(Any(), onEvent = {}, onFinished = { firstFinished.countDown() })
+        coordinator.start(
+            runtimeReturning("first"),
+            firstSession,
+            "conversation-finalizer-error-first",
+            "hello"
+        )
+
+        assertTrue(firstFinished.await(2, TimeUnit.SECONDS))
+        assertFalse(coordinator.isRunning())
+        assertEquals(DemoRunStatus.COMPLETED, coordinator.snapshot().state.status)
+
+        val secondFinished = CountDownLatch(1)
+        val secondSession = AgentSession("session-finalizer-error-second")
+        coordinator.attach(Any(), onEvent = {}, onFinished = { secondFinished.countDown() })
+        coordinator.start(
+            runtimeReturning("second"),
+            secondSession,
+            "conversation-finalizer-error-second",
+            "again"
+        )
+
+        assertTrue(secondFinished.await(2, TimeUnit.SECONDS))
+        assertFalse(coordinator.isRunning())
+        assertEquals(DemoRunStatus.COMPLETED, coordinator.snapshot().state.status)
+    }
+
+    @Test
     fun stopInvalidatesOldRunAndStillBoundsSessionAfterCancellation() {
         val enteredProvider = CountDownLatch(1)
         val releaseProvider = CountDownLatch(1)
-        val coordinator = DemoAgentRunCoordinator(Dispatchers.Unconfined)
+        var finalizedSession: AgentSession? = null
+        val coordinator = DemoAgentRunCoordinator(Dispatchers.Unconfined) { session ->
+            finalizedSession = session
+        }
         val session = AgentSession("session-stop")
         val finished = CountDownLatch(1)
         val runtime = AgentRuntime.Builder()
@@ -68,6 +140,7 @@ class DemoAgentRunCoordinatorTest {
         releaseProvider.countDown()
         assertTrue(finished.await(2, TimeUnit.SECONDS))
         assertEquals(DemoRunStatus.CANCELLED, coordinator.snapshot().state.status)
+        assertSame(session, finalizedSession)
         assertTrue(session.messages.size <= 160)
     }
 
@@ -75,6 +148,14 @@ class DemoAgentRunCoordinatorTest {
         .llmProvider(object : LLMProvider {
             override suspend fun generate(request: ModelRequest): ModelResponse =
                 ModelResponse(content = content)
+        })
+        .build()
+
+    private fun runtimeFailing(message: String): AgentRuntime = AgentRuntime.Builder()
+        .llmProvider(object : LLMProvider {
+            override suspend fun generate(request: ModelRequest): ModelResponse {
+                error(message)
+            }
         })
         .build()
 }

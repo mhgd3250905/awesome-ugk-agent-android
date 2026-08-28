@@ -15,13 +15,16 @@ import kotlinx.coroutines.flow.collect
 import java.util.concurrent.atomic.AtomicBoolean
 
 /** Connects the generic task runtime to this Demo's real AgentRuntime graph. */
-internal class DemoScheduledTaskPromptExecutor(context: Context) : AgentTaskPromptExecutor {
+internal class DemoScheduledTaskPromptExecutor(
+    context: Context,
+    private val processScope: DemoProcessScope = DemoProcessScope.get(context)
+) : AgentTaskPromptExecutor {
     private val appContext = context.applicationContext
 
     override suspend fun execute(task: AgentTask): AgentTaskActionExecutionResult {
         val action = task.action as? AgentTaskAction.RunAgentPrompt
             ?: return failure("任务动作不是 RUN_AGENT_PROMPT。")
-        val conversationStore = DemoActivityState.conversationStore(appContext)
+        val conversationStore = processScope.conversationStore
         val conversation = conversationStore.get(task.sessionId)
             ?: return failure("找不到任务关联的会话：${task.sessionId}")
 
