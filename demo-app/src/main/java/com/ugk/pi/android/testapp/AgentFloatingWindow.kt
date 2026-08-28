@@ -55,7 +55,7 @@ class AgentFloatingWindow(private val context: Context) : ConfirmationOverlayHos
     private var inputField: EditText? = null
     private var sendButton: TextView? = null
     private var stopButton: TextView? = null
-    private var collapsedTitleText: TextView? = null
+    private var collapsedIconView: TextView? = null
     private var collapsedStatusText: TextView? = null
 
     private var snapshot = AgentOverlaySnapshot(
@@ -93,8 +93,8 @@ class AgentFloatingWindow(private val context: Context) : ConfirmationOverlayHos
     }
 
     private val collapsedParams = WindowManager.LayoutParams().apply {
-        width = dp(112)
-        height = dp(46)
+        width = dp(92)
+        height = dp(38)
         type = overlayType
         flags = WindowManager.LayoutParams.FLAG_NOT_FOCUSABLE or
                 WindowManager.LayoutParams.FLAG_NOT_TOUCH_MODAL
@@ -261,6 +261,8 @@ class AgentFloatingWindow(private val context: Context) : ConfirmationOverlayHos
     private fun hideCollapsed() {
         collapsedView?.let(::removeViewSafely)
         collapsedView = null
+        collapsedIconView = null
+        collapsedStatusText = null
     }
 
     private fun hideExpanded() {
@@ -292,40 +294,65 @@ class AgentFloatingWindow(private val context: Context) : ConfirmationOverlayHos
         showCollapsed()
     }
 
+    enum class CollapsedDisplayState(
+        val label: String,
+        val icon: String,
+        val colorProvider: () -> Int
+    ) {
+        RUNNING("运行中", "●", { Ui.Mint }),
+        CONFIRMING("待确认", "⚠", { Ui.Warning }),
+        COMPLETED("完成", "✓", { Ui.Success }),
+        FAILED("失败", "✕", { Ui.Danger }),
+        IDLE("就绪", "✦", { Ui.TextMuted })
+    }
+
+    private fun resolveCollapsedState(): CollapsedDisplayState {
+        if (snapshot.pendingConfirmation != null || snapshot.statusLabel.contains("确认")) {
+            return CollapsedDisplayState.CONFIRMING
+        }
+        if (snapshot.isBusy) {
+            return CollapsedDisplayState.RUNNING
+        }
+        val label = snapshot.statusLabel
+        return when {
+            label.contains("失败") || label.contains("错误") || label.contains("停止") || label.contains("取消") ->
+                CollapsedDisplayState.FAILED
+            label.contains("完成") || label.contains("成功") ->
+                CollapsedDisplayState.COMPLETED
+            else -> CollapsedDisplayState.IDLE
+        }
+    }
+
     @SuppressLint("ClickableViewAccessibility")
     private fun buildCollapsedView(): View {
+        val state = resolveCollapsedState()
         val root = LinearLayout(context).apply {
             orientation = LinearLayout.HORIZONTAL
-            gravity = Gravity.CENTER_VERTICAL
-            setPadding(dp(10), dp(5), dp(10), dp(5))
-            background = Ui.rounded(context, Ui.SurfaceElevated, 23, Ui.Outline)
-            contentDescription = "Agent 悬浮窗，点击展开"
+            gravity = Gravity.CENTER
+            setPadding(dp(10), dp(4), dp(10), dp(4))
+            background = Ui.rounded(context, Ui.SurfaceElevated, 19, Ui.Outline)
+            contentDescription = "Agent 悬浮窗 (${state.label})，点击展开"
         }
         val icon = TextView(context).apply {
-            text = "✦"
-            textSize = 16f
-            setTextColor(if (snapshot.isBusy) Ui.MintDark else Ui.Mint)
+            text = state.icon
+            textSize = 13f
+            setTextColor(state.colorProvider())
             gravity = Gravity.CENTER
         }
-        val labels = LinearLayout(context).apply {
-            orientation = LinearLayout.VERTICAL
-            setPadding(dp(6), 0, 0, 0)
-        }
-        collapsedTitleText = TextView(context).apply {
-            text = snapshot.title
-            textSize = 11f
-            setTypeface(null, Typeface.BOLD)
+        collapsedIconView = icon
+
+        val label = TextView(context).apply {
+            text = state.label
+            textSize = 12f
+            setTypeface(Typeface.create("sans-serif-medium", Typeface.BOLD))
             setTextColor(Ui.TextPrimary)
+            gravity = Gravity.CENTER_VERTICAL
+            setPadding(dp(5), 0, 0, 0)
         }
-        collapsedStatusText = TextView(context).apply {
-            text = snapshot.statusLabel
-            textSize = 10f
-            setTextColor(statusColor(snapshot.statusLabel))
-        }
-        labels.addView(collapsedTitleText)
-        labels.addView(collapsedStatusText)
-        root.addView(icon, LinearLayout.LayoutParams(dp(20), dp(34)))
-        root.addView(labels, LinearLayout.LayoutParams(0, LinearLayout.LayoutParams.WRAP_CONTENT, 1f))
+        collapsedStatusText = label
+
+        root.addView(icon, LinearLayout.LayoutParams(LinearLayout.LayoutParams.WRAP_CONTENT, LinearLayout.LayoutParams.WRAP_CONTENT))
+        root.addView(label, LinearLayout.LayoutParams(LinearLayout.LayoutParams.WRAP_CONTENT, LinearLayout.LayoutParams.WRAP_CONTENT))
 
         setupDrag(root, root, collapsedParams) {
             showExpanded()
@@ -620,11 +647,14 @@ class AgentFloatingWindow(private val context: Context) : ConfirmationOverlayHos
     }
 
     private fun renderSnapshot() {
-        collapsedTitleText?.text = snapshot.title
-        collapsedStatusText?.apply {
-            text = snapshot.statusLabel
-            setTextColor(statusColor(snapshot.statusLabel))
+        val collapsedState = resolveCollapsedState()
+        collapsedIconView?.apply {
+            text = collapsedState.icon
+            setTextColor(collapsedState.colorProvider())
         }
+        collapsedStatusText?.text = collapsedState.label
+        collapsedView?.contentDescription = "Agent 悬浮窗 (${collapsedState.label})，点击展开"
+
         titleText?.text = snapshot.title
         statusText?.apply {
             text = snapshot.statusLabel

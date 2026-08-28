@@ -14,6 +14,11 @@ import android.widget.EditText
 import android.widget.LinearLayout
 import android.widget.Switch
 import android.widget.TextView
+import android.widget.HorizontalScrollView
+import android.widget.ScrollView
+import kotlinx.coroutines.CoroutineScope
+import kotlinx.coroutines.Dispatchers
+import kotlinx.coroutines.launch
 import kotlinx.serialization.json.Json
 import kotlinx.serialization.json.JsonObject
 import kotlinx.serialization.json.buildJsonArray
@@ -30,11 +35,25 @@ data class ApiProviderConfig(
     val id: String,
     val baseUrl: String,
     val apiKey: String,
-    val model: String
+    val model: String,
+    val name: String? = null,
+    val contextWindow: String? = "200K",
+    val maxOutputTokens: Int? = 8192,
+    val autoCompaction: Boolean? = true,
+    val compactionThreshold: Double? = 0.70
 ) {
     fun displayName(): String {
+        if (!name.isNullOrBlank()) return name
         val host = runCatching { URI(baseUrl).host }.getOrNull().orEmpty()
         return if (host.isBlank()) model else "$model - $host"
+    }
+
+    fun formatSpec(): String {
+        val cw = contextWindow?.ifBlank { "200K" } ?: "200K"
+        val outVal = maxOutputTokens ?: 8192
+        val outStr = if (outVal >= 1024) "${outVal / 1024}K" else "$outVal"
+        val compStr = if (autoCompaction != false) " · ${((compactionThreshold ?: 0.70) * 100).toInt()}%压缩" else ""
+        return "$cw · ${outStr}输出$compStr"
     }
 }
 
@@ -59,6 +78,11 @@ object ApiProviderSettingsJson {
                     put("baseUrl", config.baseUrl)
                     put("apiKey", config.apiKey)
                     put("model", config.model)
+                    config.name?.let { put("name", it) }
+                    config.contextWindow?.let { put("contextWindow", it) }
+                    config.maxOutputTokens?.let { put("maxOutputTokens", it.toString()) }
+                    config.autoCompaction?.let { put("autoCompaction", it.toString()) }
+                    config.compactionThreshold?.let { put("compactionThreshold", it.toString()) }
                 })
             }
         })
@@ -74,8 +98,23 @@ object ApiProviderSettingsJson {
                 val baseUrl = obj.stringValue("baseUrl")
                 val apiKey = obj.stringValue("apiKey")
                 val model = obj.stringValue("model")
+                val name = obj.stringValue("name").ifBlank { null }
+                val contextWindow = obj.stringValue("contextWindow").ifBlank { "200K" }
+                val maxOutputTokens = obj.stringValue("maxOutputTokens").toIntOrNull() ?: 8192
+                val autoCompaction = obj["autoCompaction"]?.jsonPrimitive?.contentOrNull?.toBooleanStrictOrNull() ?: true
+                val compactionThreshold = obj["compactionThreshold"]?.jsonPrimitive?.contentOrNull?.toDoubleOrNull() ?: 0.70
                 if (id.isBlank() || baseUrl.isBlank() || apiKey.isBlank() || model.isBlank()) null
-                else ApiProviderConfig(id, baseUrl, apiKey, model)
+                else ApiProviderConfig(
+                    id = id,
+                    baseUrl = baseUrl,
+                    apiKey = apiKey,
+                    model = model,
+                    name = name,
+                    contextWindow = contextWindow,
+                    maxOutputTokens = maxOutputTokens,
+                    autoCompaction = autoCompaction,
+                    compactionThreshold = compactionThreshold
+                )
             } ?: emptyList()
             val activeId = root["activeId"]?.jsonPrimitive?.contentOrNull
                 ?.takeIf { active -> configs.any { it.id == active } }
@@ -109,6 +148,14 @@ class ApiProviderSettingsStore(context: Context) {
         val current = load()
         val configs = current.configs.filterNot { it.id == config.id } + config
         val next = ApiProviderSettingsState(config.id, configs)
+        save(next)
+        return next
+    }
+
+    fun activate(configId: String): ApiProviderSettingsState {
+        val current = load()
+        if (current.configs.none { it.id == configId }) return current
+        val next = ApiProviderSettingsState(configId, current.configs)
         save(next)
         return next
     }
@@ -272,27 +319,33 @@ class ApiSettingsDialog(
     private val authorizationStore: AgentAuthorizationSettingsStore? = null
 ) {
     private var selectedConfigId: String? = null
+    private var selectedContextWindow: String = "200K"
+    private var selectedMaxOutputTokens: Int = 8192
+    private val scope = CoroutineScope(Dispatchers.Main)
+
+    private val contextWindowOptions = listOf("64K", "128K", "200K", "1M", "2M", "32K")
+    private val maxOutputOptions = listOf(
+        4096 to "4K",
+        8192 to "8K (通用)",
+        16384 to "16K",
+        32768 to "32K",
+        65536 to "64K",
+        131072 to "128K (超大)"
+    )
 
     fun show() {
+        val scrollRoot = ScrollView(activity).apply {
+            isFillViewport = true
+        }
+
         val root = LinearLayout(activity).apply {
             orientation = LinearLayout.VERTICAL
-            setPadding(activity.dp(20), activity.dp(14), activity.dp(20), activity.dp(8))
+            setPadding(activity.dp(20), activity.dp(14), activity.dp(20), activity.dp(14))
             background = Ui.rounded(activity, Ui.SurfaceElevated, 18)
         }
+        scrollRoot.addView(root)
 
-        val urlInput = settingsInput("URL (例: https://api.deepseek.com/anthropic)")
-        val modelInput = settingsInput("模型名称 (例: deepseek-v4-flash)")
-        val keyInput = settingsInput("API Key").apply {
-            inputType = InputType.TYPE_CLASS_TEXT or InputType.TYPE_TEXT_VARIATION_PASSWORD
-        }
-        val errorText = TextView(activity).apply {
-            visibility = View.GONE
-            setTextColor(Ui.Danger)
-            textSize = 13f
-            setPadding(activity.dp(4), activity.dp(8), activity.dp(4), 0)
-        }
-
-        // 主题模式选择卡片
+        // 1. 主题模式选择卡片
         val themeContainer = LinearLayout(activity).apply {
             orientation = LinearLayout.VERTICAL
             background = Ui.rounded(activity, Ui.SurfaceSubtle, 12, Ui.Outline)
@@ -345,6 +398,7 @@ class ApiSettingsDialog(
         themeContainer.addView(themeTitle)
         themeContainer.addView(themeRow)
 
+        // 2. 全授权模式卡片
         val authContainer = authorizationStore?.let { authorization ->
             LinearLayout(activity).apply {
                 orientation = LinearLayout.VERTICAL
@@ -377,26 +431,345 @@ class ApiSettingsDialog(
             authorizationHint?.let { container.addView(it) }
         }
 
+        // 3. 已保存 API 配置 (预设选择与切换)
+        val presetContainer = LinearLayout(activity).apply {
+            orientation = LinearLayout.VERTICAL
+            background = Ui.rounded(activity, Ui.SurfaceSubtle, 12, Ui.Outline)
+            setPadding(activity.dp(14), activity.dp(10), activity.dp(14), activity.dp(12))
+        }
+        val presetHeader = LinearLayout(activity).apply {
+            orientation = LinearLayout.HORIZONTAL
+            gravity = Gravity.CENTER_VERTICAL
+        }
+        val presetTitle = TextView(activity).apply {
+            text = "API 配置预设"
+            textSize = 13.5f
+            setTypeface(null, android.graphics.Typeface.BOLD)
+            setTextColor(Ui.TextPrimary)
+        }
+        presetHeader.addView(presetTitle, LinearLayout.LayoutParams(0, LinearLayout.LayoutParams.WRAP_CONTENT, 1f))
+        presetContainer.addView(presetHeader)
+
+        val chipScroll = HorizontalScrollView(activity).apply {
+            isHorizontalScrollBarEnabled = false
+            setPadding(0, activity.dp(8), 0, 0)
+        }
+        val chipRow = LinearLayout(activity).apply {
+            orientation = LinearLayout.HORIZONTAL
+            gravity = Gravity.CENTER_VERTICAL
+        }
+        chipScroll.addView(chipRow)
+        presetContainer.addView(chipScroll)
+
+        // 4. 输入框字段
+        val nameInput = settingsInput("配置备注名称 (可选，例: DeepSeek 官方)")
+        val urlInput = settingsInput("URL (例: https://api.deepseek.com/anthropic)")
+        val modelInput = settingsInput("模型名称 (例: deepseek-chat)")
+        val keyInput = settingsInput("API Key").apply {
+            inputType = InputType.TYPE_CLASS_TEXT or InputType.TYPE_TEXT_VARIATION_PASSWORD
+        }
+
+        // 5. 上下文总窗口卡片
+        val contextWindowContainer = LinearLayout(activity).apply {
+            orientation = LinearLayout.VERTICAL
+            background = Ui.rounded(activity, Ui.SurfaceSubtle, 12, Ui.Outline)
+            setPadding(activity.dp(14), activity.dp(10), activity.dp(14), activity.dp(12))
+        }
+        val contextWindowTitle = TextView(activity).apply {
+            text = "上下文窗口 (Context Window)"
+            textSize = 13.5f
+            setTypeface(null, android.graphics.Typeface.BOLD)
+            setTextColor(Ui.TextPrimary)
+        }
+        val contextWindowScroll = HorizontalScrollView(activity).apply {
+            isHorizontalScrollBarEnabled = false
+            setPadding(0, activity.dp(8), 0, 0)
+        }
+        val contextWindowRow = LinearLayout(activity).apply {
+            orientation = LinearLayout.HORIZONTAL
+            gravity = Gravity.CENTER_VERTICAL
+        }
+        contextWindowScroll.addView(contextWindowRow)
+        contextWindowContainer.addView(contextWindowTitle)
+        contextWindowContainer.addView(contextWindowScroll)
+
+        // 6. 单次最大输出卡片
+        val maxOutputContainer = LinearLayout(activity).apply {
+            orientation = LinearLayout.VERTICAL
+            background = Ui.rounded(activity, Ui.SurfaceSubtle, 12, Ui.Outline)
+            setPadding(activity.dp(14), activity.dp(10), activity.dp(14), activity.dp(12))
+        }
+        val maxOutputTitle = TextView(activity).apply {
+            text = "单次最大生成 (Max Output Tokens)"
+            textSize = 13.5f
+            setTypeface(null, android.graphics.Typeface.BOLD)
+            setTextColor(Ui.TextPrimary)
+        }
+        val maxOutputScroll = HorizontalScrollView(activity).apply {
+            isHorizontalScrollBarEnabled = false
+            setPadding(0, activity.dp(8), 0, 0)
+        }
+        val maxOutputRow = LinearLayout(activity).apply {
+            orientation = LinearLayout.HORIZONTAL
+            gravity = Gravity.CENTER_VERTICAL
+        }
+        maxOutputScroll.addView(maxOutputRow)
+        maxOutputContainer.addView(maxOutputTitle)
+        maxOutputContainer.addView(maxOutputScroll)
+
+        val errorText = TextView(activity).apply {
+            visibility = View.GONE
+            setTextColor(Ui.Danger)
+            textSize = 13f
+            setPadding(activity.dp(4), activity.dp(8), activity.dp(4), 0)
+        }
+
+        // 7. 通信检测与额度卡片
+        val testStatusCard = LinearLayout(activity).apply {
+            orientation = LinearLayout.VERTICAL
+            background = Ui.rounded(activity, Ui.SurfaceSubtle, 12, Ui.Outline)
+            setPadding(activity.dp(14), activity.dp(10), activity.dp(14), activity.dp(10))
+            visibility = View.GONE
+        }
+        val connectivityResultText = TextView(activity).apply {
+            textSize = 13f
+            setTypeface(null, android.graphics.Typeface.BOLD)
+        }
+        val balanceResultText = TextView(activity).apply {
+            textSize = 12.5f
+            setPadding(0, activity.dp(4), 0, 0)
+        }
+        testStatusCard.addView(connectivityResultText)
+        testStatusCard.addView(balanceResultText)
+
+        // 测试按钮
+        val testButton = TextView(activity).apply {
+            text = "⚡ 检测通信与平台额度"
+            textSize = 13f
+            gravity = Gravity.CENTER
+            setTextColor(Ui.Mint)
+            setTypeface(null, android.graphics.Typeface.BOLD)
+            background = Ui.clickableRounded(activity, Ui.SurfaceSoft, Ui.SurfaceSubtle, 10, Ui.MintStroke)
+            setPadding(activity.dp(12), activity.dp(10), activity.dp(12), activity.dp(10))
+        }
+
+        // 挂载到 root
         root.addView(themeContainer, authContainerLayoutParams())
+        authContainer?.let { root.addView(it, authContainerLayoutParams()) }
+        root.addView(presetContainer, authContainerLayoutParams())
+        root.addView(nameInput, fieldLayoutParams())
         root.addView(urlInput, fieldLayoutParams())
         root.addView(modelInput, fieldLayoutParams())
         root.addView(keyInput, fieldLayoutParams())
-        authContainer?.let { root.addView(it, authContainerLayoutParams()) }
+        root.addView(contextWindowContainer, authContainerLayoutParams())
+        root.addView(maxOutputContainer, authContainerLayoutParams())
+        root.addView(testButton, fieldLayoutParams())
+        root.addView(testStatusCard, authContainerLayoutParams())
         root.addView(errorText)
 
+        var neutralButtonRef: android.widget.Button? = null
+
+        fun updateNeutralButtonVisibility() {
+            neutralButtonRef?.visibility = if (selectedConfigId != null) View.VISIBLE else View.GONE
+        }
+
+        fun renderContextWindowChips() {
+            contextWindowRow.removeAllViews()
+            contextWindowOptions.forEach { opt ->
+                val isSelected = opt.equals(selectedContextWindow, ignoreCase = true)
+                val chip = TextView(activity).apply {
+                    text = opt
+                    textSize = 12.5f
+                    setTypeface(null, if (isSelected) android.graphics.Typeface.BOLD else android.graphics.Typeface.NORMAL)
+                    setPadding(activity.dp(12), activity.dp(6), activity.dp(12), activity.dp(6))
+                    if (isSelected) {
+                        setTextColor(Ui.SurfaceElevated)
+                        background = Ui.rounded(activity, Ui.Mint, 14)
+                    } else {
+                        setTextColor(Ui.TextSecondary)
+                        background = Ui.rounded(activity, Ui.SurfaceSoft, 14, Ui.Outline)
+                    }
+                    setOnClickListener {
+                        selectedContextWindow = opt
+                        renderContextWindowChips()
+                    }
+                }
+                contextWindowRow.addView(chip, LinearLayout.LayoutParams(
+                    LinearLayout.LayoutParams.WRAP_CONTENT,
+                    LinearLayout.LayoutParams.WRAP_CONTENT
+                ).apply { marginEnd = activity.dp(8) })
+            }
+        }
+
+        fun renderMaxOutputChips() {
+            maxOutputRow.removeAllViews()
+            maxOutputOptions.forEach { (tokens, label) ->
+                val isSelected = tokens == selectedMaxOutputTokens
+                val chip = TextView(activity).apply {
+                    text = label
+                    textSize = 12.5f
+                    setTypeface(null, if (isSelected) android.graphics.Typeface.BOLD else android.graphics.Typeface.NORMAL)
+                    setPadding(activity.dp(12), activity.dp(6), activity.dp(12), activity.dp(6))
+                    if (isSelected) {
+                        setTextColor(Ui.SurfaceElevated)
+                        background = Ui.rounded(activity, Ui.Mint, 14)
+                    } else {
+                        setTextColor(Ui.TextSecondary)
+                        background = Ui.rounded(activity, Ui.SurfaceSoft, 14, Ui.Outline)
+                    }
+                    setOnClickListener {
+                        selectedMaxOutputTokens = tokens
+                        renderMaxOutputChips()
+                    }
+                }
+                maxOutputRow.addView(chip, LinearLayout.LayoutParams(
+                    LinearLayout.LayoutParams.WRAP_CONTENT,
+                    LinearLayout.LayoutParams.WRAP_CONTENT
+                ).apply { marginEnd = activity.dp(8) })
+            }
+        }
+
+        fun loadConfigToInputs(config: ApiProviderConfig?) {
+            if (config != null) {
+                selectedConfigId = config.id
+                nameInput.setText(config.name.orEmpty())
+                urlInput.setText(config.baseUrl)
+                modelInput.setText(config.model)
+                keyInput.setText(config.apiKey)
+                selectedContextWindow = config.contextWindow?.ifBlank { "200K" } ?: "200K"
+                selectedMaxOutputTokens = config.maxOutputTokens ?: 8192
+            } else {
+                selectedConfigId = null
+                nameInput.setText("")
+                urlInput.setText("")
+                modelInput.setText("")
+                keyInput.setText("")
+                selectedContextWindow = "200K"
+                selectedMaxOutputTokens = 8192
+            }
+            errorText.visibility = View.GONE
+            testStatusCard.visibility = View.GONE
+            renderContextWindowChips()
+            renderMaxOutputChips()
+            updateNeutralButtonVisibility()
+        }
+
+        fun renderChips() {
+            chipRow.removeAllViews()
+            val state = store.load()
+            state.configs.forEach { cfg ->
+                val isSelected = cfg.id == selectedConfigId
+                val isCurrentActive = cfg.id == state.activeId
+                val chip = TextView(activity).apply {
+                    val prefix = if (isCurrentActive) "● " else ""
+                    text = "$prefix${cfg.displayName()}"
+                    textSize = 12.5f
+                    setPadding(activity.dp(10), activity.dp(6), activity.dp(10), activity.dp(6))
+                    if (isSelected) {
+                        setTextColor(Ui.SurfaceElevated)
+                        background = Ui.rounded(activity, Ui.Mint, 14)
+                    } else {
+                        setTextColor(Ui.TextSecondary)
+                        background = Ui.rounded(activity, Ui.SurfaceSoft, 14, Ui.Outline)
+                    }
+                    setOnClickListener {
+                        loadConfigToInputs(cfg)
+                        renderChips()
+                    }
+                }
+                chipRow.addView(chip, LinearLayout.LayoutParams(
+                    LinearLayout.LayoutParams.WRAP_CONTENT,
+                    LinearLayout.LayoutParams.WRAP_CONTENT
+                ).apply { marginEnd = activity.dp(8) })
+            }
+
+            val newChip = TextView(activity).apply {
+                text = "+ 新增配置"
+                textSize = 12.5f
+                setPadding(activity.dp(10), activity.dp(6), activity.dp(10), activity.dp(6))
+                val isNew = selectedConfigId == null
+                if (isNew) {
+                    setTextColor(Ui.SurfaceElevated)
+                    background = Ui.rounded(activity, Ui.Mint, 14)
+                } else {
+                    setTextColor(Ui.Mint)
+                    background = Ui.rounded(activity, Ui.SurfaceSoft, 14, Ui.MintStroke)
+                }
+                setOnClickListener {
+                    loadConfigToInputs(null)
+                    renderChips()
+                }
+            }
+            chipRow.addView(newChip)
+        }
+
+        // 初始化数据
         val state = store.load()
         val active = state.activeConfig()
-        if (active != null) {
-            selectedConfigId = active.id
-            urlInput.setText(active.baseUrl)
-            modelInput.setText(active.model)
-            keyInput.setText(active.apiKey)
+        loadConfigToInputs(active)
+        renderChips()
+
+        testButton.setOnClickListener {
+            val url = urlInput.text.toString().trim()
+            val model = modelInput.text.toString().trim()
+            val apiKey = keyInput.text.toString().trim()
+            if (url.isBlank() || model.isBlank() || apiKey.isBlank()) {
+                errorText.text = "请先填写 URL、模型名称和 API Key"
+                errorText.visibility = View.VISIBLE
+                return@setOnClickListener
+            }
+            errorText.visibility = View.GONE
+            testButton.isEnabled = false
+            testButton.text = "正在检测连通性与额度..."
+            testStatusCard.visibility = View.GONE
+
+            scope.launch {
+                try {
+                    val summary = ApiQuotaAndConnectivityService.testAndQuery(url, apiKey, model)
+                    testButton.isEnabled = true
+                    testButton.text = "⚡ 检测通信与平台额度"
+                    testStatusCard.visibility = View.VISIBLE
+
+                    if (summary.connectivity.success) {
+                        connectivityResultText.setTextColor(Ui.Success)
+                        connectivityResultText.text = "✓ ${summary.connectivity.message}"
+                    } else {
+                        connectivityResultText.setTextColor(Ui.Danger)
+                        connectivityResultText.text = "✕ ${summary.connectivity.message}"
+                    }
+
+                    val balance = summary.balance
+                    if (balance != null && balance.supported) {
+                        balanceResultText.visibility = View.VISIBLE
+                        if (!balance.balanceText.isNullOrBlank()) {
+                            balanceResultText.setTextColor(Ui.MintDark)
+                            balanceResultText.text = "💰 ${balance.provider.displayName} 额度: ${balance.balanceText}"
+                        } else if (!balance.error.isNullOrBlank()) {
+                            balanceResultText.setTextColor(Ui.TextSecondary)
+                            balanceResultText.text = "💰 额度查询: ${balance.error}"
+                        }
+                    } else if (balance != null && !balance.supported) {
+                        balanceResultText.visibility = View.VISIBLE
+                        balanceResultText.setTextColor(Ui.TextMuted)
+                        balanceResultText.text = "ℹ️ ${balance.error ?: "该平台未开放公开额度接口"}"
+                    } else {
+                        balanceResultText.visibility = View.GONE
+                    }
+                } catch (e: Exception) {
+                    testButton.isEnabled = true
+                    testButton.text = "⚡ 检测通信与平台额度"
+                    testStatusCard.visibility = View.VISIBLE
+                    connectivityResultText.setTextColor(Ui.Danger)
+                    connectivityResultText.text = "✕ 检测异常: ${e.message}"
+                    balanceResultText.visibility = View.GONE
+                }
+            }
         }
 
         val dialog = AlertDialog.Builder(activity, Ui.dialogTheme())
             .setTitle("设置与选项")
-            .setView(root)
-            .setPositiveButton("保存", null)
+            .setView(scrollRoot)
+            .setPositiveButton("保存并启用", null)
             .setNegativeButton("取消", null)
             .setNeutralButton("删除", null)
             .create()
@@ -405,6 +778,8 @@ class ApiSettingsDialog(
             val positiveButton = dialog.getButton(AlertDialog.BUTTON_POSITIVE)
             val negativeButton = dialog.getButton(AlertDialog.BUTTON_NEGATIVE)
             val neutralButton = dialog.getButton(AlertDialog.BUTTON_NEUTRAL)
+            neutralButtonRef = neutralButton
+            updateNeutralButtonVisibility()
 
             positiveButton?.setTextColor(Ui.Mint)
             negativeButton?.setTextColor(Ui.TextSecondary)
@@ -414,8 +789,9 @@ class ApiSettingsDialog(
                 val baseUrl = urlInput.text.toString().trim()
                 val model = modelInput.text.toString().trim()
                 val apiKey = keyInput.text.toString().trim()
+                val name = nameInput.text.toString().trim().ifBlank { null }
                 if (baseUrl.isBlank() || model.isBlank() || apiKey.isBlank()) {
-                    errorText.text = "请填写所有字段"
+                    errorText.text = "请填写所有必填字段（URL、模型名称和 API Key）"
                     errorText.visibility = View.VISIBLE
                     return@setOnClickListener
                 }
@@ -428,7 +804,10 @@ class ApiSettingsDialog(
                     id = selectedConfigId ?: UUID.randomUUID().toString(),
                     baseUrl = baseUrl,
                     apiKey = apiKey,
-                    model = model
+                    model = model,
+                    name = name,
+                    contextWindow = selectedContextWindow,
+                    maxOutputTokens = selectedMaxOutputTokens
                 )
                 store.upsertAndActivate(config)
                 authorizationStore?.setFullAuthorizationEnabled(

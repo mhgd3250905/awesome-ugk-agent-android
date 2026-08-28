@@ -32,6 +32,9 @@ object DemoActivityState {
 
     var accessibilityPromptShown: Boolean = false
     var overlayPromptShown: Boolean = false
+    var activeContextWindow: String? = null
+    var activeAutoCompaction: Boolean = true
+    var activeCompactionThreshold: Double = ContextCompactor.DEFAULT_THRESHOLD
 
     private var sharedFloatingWindow: AgentFloatingWindow? = null
     private var sharedConversationStore: DemoConversationStore? = null
@@ -72,7 +75,7 @@ object DemoActivityState {
         overlayHide = onHide
     }
 
-    fun clearOverlayCallbacks(owner: Any) {
+    fun unbindOverlayCallbacks(owner: Any) {
         if (overlayOwner !== owner) return
         overlayOwner = null
         overlaySend = null
@@ -81,15 +84,15 @@ object DemoActivityState {
         overlayHide = null
     }
 
-    fun rememberSession(conversationId: String, value: AgentSession) {
+    fun clearOverlayCallbacks(owner: Any) = unbindOverlayCallbacks(owner)
+
+    fun rememberSession(conversationId: String, session: AgentSession) {
         activeConversationId = conversationId
-        session = value
-        sessions[conversationId] = value
+        this.session = session
+        sessions[conversationId] = session
         if (sessions.size > MAX_SESSION_CACHE) {
-            sessions.keys
-                .filter { it != conversationId }
-                .take(sessions.size - MAX_SESSION_CACHE)
-                .forEach(sessions::remove)
+            val oldestKey = sessions.keys.firstOrNull { it != activeConversationId }
+            if (oldestKey != null) sessions.remove(oldestKey)
         }
     }
 
@@ -103,13 +106,41 @@ object DemoActivityState {
     }
 
     /** Keep runtime history bounded even before it is persisted to JSON. */
-    internal fun boundSession(value: AgentSession) {
-        val system = value.messages.filterIsInstance<AgentMessage.System>().take(1).map(::compactMessage)
+    internal fun boundSession(
+        value: AgentSession,
+        contextWindow: String? = activeContextWindow,
+        thresholdRatio: Double = activeCompactionThreshold,
+        autoCompaction: Boolean = activeAutoCompaction
+    ): CompactionSummary {
+        // 先检查并执行上下文智能阶梯压缩（达到阈值时）
+        val summary = ContextCompactor.compactIfNeeded(
+            session = value,
+            contextWindow = contextWindow ?: activeContextWindow,
+            thresholdRatio = thresholdRatio,
+            autoCompaction = autoCompaction
+        )
+
+        val (maxMessages, maxChars) = budgetForContextWindow(contextWindow ?: activeContextWindow)
+        val system = value.messages.filterIsInstance<AgentMessage.System>().take(1).map { compactMessage(it, maxChars) }
         val nonSystem = value.messages.filterNot { it is AgentMessage.System }
-        val budget = (MAX_SESSION_MESSAGES - system.size).coerceAtLeast(1)
+        val budget = (maxMessages - system.size).coerceAtLeast(1)
         val trimmed = if (nonSystem.size <= budget) nonSystem else trimAtSafeBoundaries(nonSystem, budget)
         value.messages.clear()
-        value.messages.addAll(system + trimmed.map(::compactMessage))
+        value.messages.addAll(system + trimmed.map { compactMessage(it, maxChars) })
+        return summary
+    }
+
+    fun budgetForContextWindow(contextWindow: String? = activeContextWindow): Pair<Int, Int> {
+        val cw = (contextWindow ?: activeContextWindow)?.trim()?.uppercase() ?: "128K"
+        return when {
+            cw.startsWith("2M") -> 800 to 80_000
+            cw.startsWith("1M") -> 400 to 50_000
+            cw.startsWith("200K") -> 220 to 30_000
+            cw.startsWith("128K") -> 160 to 20_000
+            cw.startsWith("64K") -> 100 to 12_000
+            cw.startsWith("32K") -> 60 to 8_000
+            else -> 160 to 20_000
+        }
     }
 
     /**
@@ -162,18 +193,18 @@ object DemoActivityState {
         return result
     }
 
-    private fun compactMessage(message: AgentMessage): AgentMessage = when (message) {
-        is AgentMessage.System -> message.copy(content = message.content.take(MAX_MESSAGE_CHARS))
+    private fun compactMessage(message: AgentMessage, maxChars: Int = MAX_MESSAGE_CHARS): AgentMessage = when (message) {
+        is AgentMessage.System -> message.copy(content = message.content.take(maxChars))
         is AgentMessage.User -> AgentMessage.User(
-            content = message.content.take(MAX_MESSAGE_CHARS),
+            content = message.content.take(maxChars),
             timeContext = message.timeContext
         )
         is AgentMessage.Assistant -> message.copy(
-            content = message.content.take(MAX_MESSAGE_CHARS),
-            reasoningContent = message.reasoningContent?.take(MAX_MESSAGE_CHARS)
+            content = message.content.take(maxChars),
+            reasoningContent = message.reasoningContent?.take(maxChars)
         )
         is AgentMessage.Tool -> AgentMessage.Tool(
-            message.result.copy(content = message.result.content.take(MAX_MESSAGE_CHARS))
+            message.result.copy(content = message.result.content.take(maxChars))
         )
     }
 

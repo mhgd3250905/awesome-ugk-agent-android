@@ -107,7 +107,12 @@ class MainActivity : Activity() {
     private lateinit var providerLabel: TextView
     private lateinit var runStatusLabel: TextView
     private lateinit var statusBanner: TextView
-    private lateinit var composerHint: TextView
+    private lateinit var contextUsageLayout: LinearLayout
+    private lateinit var contextProgressBarTrack: LinearLayout
+    private lateinit var contextProgressBarFill: View
+    private lateinit var contextProgressBarEmpty: View
+    private lateinit var contextUsageText: TextView
+    private lateinit var contextHintRightText: TextView
     private var processCard: DemoChatProcessCardView? = null
     private var assistantMessageView: DemoChatMessageView? = null
     private var streamingAssistantText: StringBuilder? = null
@@ -318,6 +323,8 @@ class MainActivity : Activity() {
     override fun onResume() {
         super.onResume()
         activityResumed = true
+        applyTheme()
+        rebuildRuntime()
         confirmationPresenter.onActivityResumed()
         refreshActiveConversationFromStore()
         updateCapabilityBanner()
@@ -399,13 +406,7 @@ class MainActivity : Activity() {
         }
         statusBanner.text = message
         statusBanner.visibility = if (message.isBlank()) View.GONE else View.VISIBLE
-        if (::composerHint.isInitialized) {
-            composerHint.text = if (authorizationStore.isFullAuthorizationEnabled()) {
-                "全授权模式已开启，高影响操作不会弹出确认"
-            } else {
-                "Agent 会按需调用工具，重要操作会先请求确认"
-            }
-        }
+        updateContextUsageIndicator()
         statusBanner.setTextColor(
             if (config == null || !isAccessibilityEnabled()) Ui.Warning else Ui.TextSecondary
         )
@@ -650,13 +651,52 @@ class MainActivity : Activity() {
                 imm?.showSoftInput(inputField, InputMethodManager.SHOW_IMPLICIT)
             }
         }
-        composerHint = TextView(this).apply {
-            text = "Agent 会按需调用工具，重要操作会先请求确认"
-            textSize = 11f
-            setTextColor(Ui.TextMuted)
-            gravity = Gravity.CENTER
-            setPadding(dp(4), dp(6), dp(4), 0)
+        contextUsageLayout = LinearLayout(this).apply {
+            orientation = LinearLayout.VERTICAL
+            setPadding(dp(4), dp(8), dp(4), dp(2))
+            background = Ui.clickableRounded(this@MainActivity, Color.TRANSPARENT, Ui.SurfaceSubtle, 10)
+            setOnClickListener { openSettings() }
         }
+
+        contextProgressBarTrack = LinearLayout(this).apply {
+            orientation = LinearLayout.HORIZONTAL
+            clipToOutline = true
+            background = Ui.rounded(this@MainActivity, Ui.SurfaceSoft, 2, Ui.Outline, 1)
+        }
+        contextProgressBarFill = View(this).apply {
+            background = Ui.rounded(this@MainActivity, Ui.Success, 2)
+        }
+        contextProgressBarEmpty = View(this).apply {
+            setBackgroundColor(Color.TRANSPARENT)
+        }
+        contextProgressBarTrack.addView(contextProgressBarFill, LinearLayout.LayoutParams(0, dp(4), 0.01f))
+        contextProgressBarTrack.addView(contextProgressBarEmpty, LinearLayout.LayoutParams(0, dp(4), 0.99f))
+
+        val statsRow = LinearLayout(this).apply {
+            orientation = LinearLayout.HORIZONTAL
+            gravity = Gravity.CENTER_VERTICAL
+            setPadding(0, dp(4), 0, 0)
+        }
+        contextUsageText = TextView(this).apply {
+            textSize = 11.5f
+            setTypeface(null, Typeface.BOLD)
+            setTextColor(Ui.Success)
+        }
+        contextHintRightText = TextView(this).apply {
+            text = "⚙️ 点击调参"
+            textSize = 10.5f
+            setTextColor(Ui.TextMuted)
+            gravity = Gravity.END
+        }
+        statsRow.addView(contextUsageText, LinearLayout.LayoutParams(0, LinearLayout.LayoutParams.WRAP_CONTENT, 1f))
+        statsRow.addView(contextHintRightText, LinearLayout.LayoutParams(LinearLayout.LayoutParams.WRAP_CONTENT, LinearLayout.LayoutParams.WRAP_CONTENT))
+
+        contextUsageLayout.addView(contextProgressBarTrack, LinearLayout.LayoutParams(
+            LinearLayout.LayoutParams.MATCH_PARENT, dp(4)
+        ))
+        contextUsageLayout.addView(statsRow, LinearLayout.LayoutParams(
+            LinearLayout.LayoutParams.MATCH_PARENT, LinearLayout.LayoutParams.WRAP_CONTENT
+        ))
 
         pendingImageView = ImageView(this).apply {
             scaleType = ImageView.ScaleType.CENTER_CROP
@@ -720,7 +760,7 @@ class MainActivity : Activity() {
                 LinearLayout.LayoutParams.MATCH_PARENT,
                 LinearLayout.LayoutParams.WRAP_CONTENT
             ))
-            addView(composerHint, LinearLayout.LayoutParams(
+            addView(contextUsageLayout, LinearLayout.LayoutParams(
                 LinearLayout.LayoutParams.MATCH_PARENT,
                 LinearLayout.LayoutParams.WRAP_CONTENT
             ))
@@ -807,9 +847,7 @@ class MainActivity : Activity() {
             importButton.invalidate()
         }
 
-        if (::composerHint.isInitialized) {
-            composerHint.setTextColor(Ui.TextMuted)
-        }
+        updateContextUsageIndicator()
 
         updateAppBar()
         updateCapabilityBanner()
@@ -889,18 +927,16 @@ class MainActivity : Activity() {
     )
 
     private fun openSettings() {
-        ApiSettingsDialog(
-            activity = this,
-            store = apiStore,
-            onChanged = { rebuildRuntime() },
-            authorizationStore = authorizationStore
-        ).show()
+        startActivity(Intent(this, SettingsActivity::class.java))
     }
 
     private fun rebuildRuntime() {
         stopAgent(clearQueuedMessages = true)
         runtime?.close()
         val config = apiStore.activeConfig()
+        DemoActivityState.activeContextWindow = config?.contextWindow
+        DemoActivityState.activeAutoCompaction = config?.autoCompaction ?: true
+        DemoActivityState.activeCompactionThreshold = config?.compactionThreshold ?: ContextCompactor.DEFAULT_THRESHOLD
         runtime = DemoAgentRuntimeFactory.create(
             context = applicationContext,
             scheduleStore = scheduledTaskStore,
@@ -914,7 +950,7 @@ class MainActivity : Activity() {
             // JobScheduler when RUN_AGENT_PROMPT reaches its trigger time.
             supportsBackgroundPromptExecution = true
         )
-        providerLabel.text = config?.displayName() ?: "未配置 API 源"
+        providerLabel.text = config?.let { "${it.displayName()} (${it.formatSpec()})" } ?: "未配置 API 源"
         updateCapabilityBanner()
         renderConversation()
     }
@@ -1275,6 +1311,7 @@ class MainActivity : Activity() {
         }
         runState = DemoActivityState.runCoordinator.snapshot().state
         renderRunState()
+        updateContextUsageIndicator()
     }
 
     private fun persistAssistantMessage(text: String) {
@@ -1449,13 +1486,14 @@ class MainActivity : Activity() {
             importButton.alpha = if (busy || importingFile) 0.45f else 1f
             importButton.hasAttachments = hasAttachments || hasImage
         }
-        if (::composerHint.isInitialized) {
+        if (::contextHintRightText.isInitialized) {
             when {
-                hasAttachments -> composerHint.text = "附件：" + pendingImportedFiles.joinToString("、") { it.displayName }
-                hasImage -> composerHint.text = "已选定图片，可直接发送或输入提问"
-                else -> composerHint.text = "Agent 会按需调用工具，重要操作会先请求确认"
+                hasAttachments -> contextHintRightText.text = "📎 附件: " + pendingImportedFiles.joinToString("、") { it.displayName }
+                hasImage -> contextHintRightText.text = "🖼️ 已选图片"
+                else -> contextHintRightText.text = "⚙️ 点击调参"
             }
         }
+        updateContextUsageIndicator()
         sendButton.contentDescription = getString(
             if (busy) R.string.content_description_stop else R.string.content_description_send
         )
@@ -1465,6 +1503,61 @@ class MainActivity : Activity() {
             else -> SendActionButton.State.DISABLED
         }
         sendButton.isEnabled = actionable
+    }
+
+    /**
+     * 实时更新底部上下文占用百分比指示条与动态色彩。
+     */
+    private fun updateContextUsageIndicator() {
+        if (!::contextUsageLayout.isInitialized) return
+        val currentSession = session ?: DemoActivityState.session
+        val usedTokens = if (currentSession != null && currentSession.messages.isNotEmpty()) {
+            ContextCompactor.estimateTokens(currentSession.messages)
+        } else if (::activeConversation.isInitialized && activeConversation.messages.isNotEmpty()) {
+            activeConversation.messages.sumOf { ContextCompactor.estimateContentTokens(it.content) }
+        } else {
+            0
+        }
+        val maxTokens = ContextCompactor.parseContextWindowTokens(DemoActivityState.activeContextWindow)
+        val ratio = (usedTokens.toDouble() / maxTokens.toDouble()).coerceIn(0.0, 1.0)
+        val percent = (ratio * 100).toInt()
+
+        // 动态色彩映射阶梯 (<50% 清新绿, 50%~70% 天空蓝, 70%~85% 琥珀黄, >=85% 警戒红)
+        val statusColor = when {
+            ratio < 0.50 -> Ui.Success
+            ratio < DemoActivityState.activeCompactionThreshold -> if (ThemeManager.isDark) Color.parseColor("#38BDF8") else Color.parseColor("#0284C7")
+            ratio < 0.85 -> if (ThemeManager.isDark) Color.parseColor("#FBBF24") else Color.parseColor("#D97706")
+            else -> Ui.Danger
+        }
+
+        val usedStr = ContextCompactor.formatTokenCount(usedTokens)
+        val maxStr = ContextCompactor.formatTokenCount(maxTokens)
+        val compactionStr = if (DemoActivityState.activeAutoCompaction) {
+            val threshInt = (DemoActivityState.activeCompactionThreshold * 100).toInt()
+            " · ${threshInt}%压缩"
+        } else {
+            ""
+        }
+
+        contextUsageText.text = "● 上下文 $percent% ($usedStr / $maxStr$compactionStr)"
+        contextUsageText.setTextColor(statusColor)
+
+        // 动态刷新进度条底色与填充宽度
+        contextProgressBarTrack.background = Ui.rounded(this, Ui.SurfaceSoft, 2, Ui.Outline, 1)
+        contextProgressBarFill.background = Ui.rounded(this, statusColor, 2)
+
+        val fillWeight = ratio.toFloat().coerceAtLeast(0.015f)
+        val emptyWeight = (1.0f - fillWeight).coerceAtLeast(0f)
+
+        val fillParams = contextProgressBarFill.layoutParams as? LinearLayout.LayoutParams
+        val emptyParams = contextProgressBarEmpty.layoutParams as? LinearLayout.LayoutParams
+        if (fillParams != null && emptyParams != null) {
+            fillParams.weight = fillWeight
+            emptyParams.weight = emptyWeight
+            contextProgressBarTrack.requestLayout()
+        }
+
+        contextHintRightText.setTextColor(Ui.TextMuted)
     }
 
     private fun setScreenAutomationActive(active: Boolean) {
@@ -1511,6 +1604,7 @@ class MainActivity : Activity() {
             addProcessCard()
         }
         renderRunState()
+        updateContextUsageIndicator()
         scrollToEnd()
     }
 

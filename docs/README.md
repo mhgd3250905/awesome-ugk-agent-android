@@ -1,8 +1,8 @@
 # 项目文档入口
 
-更新时间：2026-08-27
+更新时间：2026-08-28
 适用项目：`awesome-ugk-agent-android`
-源码目录：`E:\AII\ugk-android-new`
+源码目录：`D:\AII\ugk-android`
 
 独立持续开发台账：[awesome-ugk-agent-android-ledger](https://github.com/mhgd3250905/awesome-ugk-agent-android-ledger)
 
@@ -41,6 +41,7 @@
 | [android-accessibility-screen-automation.md](android-accessibility-screen-automation.md) | Android Accessibility 屏幕自动化 Skill、Tool 协议、宿主接入和验证边界 |
 | [android-clipboard.md](android-clipboard.md) | Android 文本剪贴板 Tool/Skill、确认策略、隐私和 API 限制 |
 | [android-scheduled-tasks.md](android-scheduled-tasks.md) | Android Agent 定时任务控制面、持久化调度运行时、能力开关和验收边界 |
+| [android-agent-skills.md](android-agent-skills.md) | 文件型 SKILL.md 运行时、动态加载策略、命名根嵌入和 agent-memory |
 | [sdk-optimization-ledger.md](sdk-optimization-ledger.md) | SDK 架构优化步骤、验证结果和版本影响台账 |
 | [sdk-core-consumer-contract.md](sdk-core-consumer-contract.md) | Core AAR 外部消费边界、版本策略和 API/ABI gate 触发条件 |
 | [sdk-stabilization-baseline.md](sdk-stabilization-baseline.md) | SDK 稳定化测试期、版本封存点、验证快照和退出条件 |

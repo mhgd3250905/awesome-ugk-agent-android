@@ -47,7 +47,8 @@ internal object DemoAgentRuntimeFactory {
             AnthropicMessagesProvider(
                 apiKey = config.apiKey,
                 model = config.model,
-                baseUrl = config.baseUrl
+                baseUrl = config.baseUrl,
+                maxTokens = config.maxOutputTokens ?: 8192
             )
         } else {
             MissingApiProvider
