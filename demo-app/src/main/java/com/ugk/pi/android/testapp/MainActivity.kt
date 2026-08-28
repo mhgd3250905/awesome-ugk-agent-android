@@ -66,6 +66,7 @@ class MainActivity : Activity() {
     private val scheduledTaskStore by lazy { AndroidAgentTaskStore(applicationContext) }
     private val scheduledTaskScheduler by lazy { AlarmManagerAgentTaskScheduler(applicationContext) }
     private var runtime: AgentRuntime? = null
+    private var appliedRuntimeConfig: DemoRuntimeConfig? = null
     private lateinit var activeConversation: DemoConversation
     private lateinit var session: AgentSession
     private var runState: DemoRunState = DemoRunState.initial()
@@ -180,7 +181,7 @@ class MainActivity : Activity() {
             onHide = { runOnUiThread { hideFloatingWindow() } }
         )
         restoreDraft(savedInstanceState)
-        rebuildRuntime()
+        refreshRuntime()
         attachRunCoordinator()
         requestNotificationPermissionIfNeeded()
     }
@@ -324,7 +325,7 @@ class MainActivity : Activity() {
         super.onResume()
         activityResumed = true
         applyTheme()
-        rebuildRuntime()
+        refreshRuntime()
         confirmationPresenter.onActivityResumed()
         refreshActiveConversationFromStore()
         updateCapabilityBanner()
@@ -930,13 +931,24 @@ class MainActivity : Activity() {
         startActivity(Intent(this, SettingsActivity::class.java))
     }
 
-    private fun rebuildRuntime() {
+    private fun refreshRuntime() {
+        val config = apiStore.activeConfig()
+        when (
+            DemoRuntimeLifecyclePolicy.decide(
+                runtimeExists = runtime != null,
+                installedConfig = appliedRuntimeConfig,
+                requestedConfig = DemoRuntimeConfig.from(config)
+            )
+        ) {
+            DemoRuntimeRefreshAction.CREATE,
+            DemoRuntimeRefreshAction.REBUILD -> rebuildRuntime(config)
+            DemoRuntimeRefreshAction.REUSE -> refreshRuntimeState(config)
+        }
+    }
+
+    private fun rebuildRuntime(config: ApiProviderConfig?) {
         stopAgent(clearQueuedMessages = true)
         runtime?.close()
-        val config = apiStore.activeConfig()
-        DemoActivityState.activeContextWindow = config?.contextWindow
-        DemoActivityState.activeAutoCompaction = config?.autoCompaction ?: true
-        DemoActivityState.activeCompactionThreshold = config?.compactionThreshold ?: ContextCompactor.DEFAULT_THRESHOLD
         runtime = DemoAgentRuntimeFactory.create(
             context = applicationContext,
             scheduleStore = scheduledTaskStore,
@@ -950,6 +962,14 @@ class MainActivity : Activity() {
             // JobScheduler when RUN_AGENT_PROMPT reaches its trigger time.
             supportsBackgroundPromptExecution = true
         )
+        appliedRuntimeConfig = DemoRuntimeConfig.from(config)
+        refreshRuntimeState(config)
+    }
+
+    private fun refreshRuntimeState(config: ApiProviderConfig?) {
+        DemoActivityState.activeContextWindow = config?.contextWindow
+        DemoActivityState.activeAutoCompaction = config?.autoCompaction ?: true
+        DemoActivityState.activeCompactionThreshold = config?.compactionThreshold ?: ContextCompactor.DEFAULT_THRESHOLD
         providerLabel.text = config?.let { "${it.displayName()} (${it.formatSpec()})" } ?: "未配置 API 源"
         updateCapabilityBanner()
         renderConversation()
@@ -1177,7 +1197,7 @@ class MainActivity : Activity() {
                     else -> Unit
                 }
             }
-        // rebuildRuntime() renders once before the coordinator is attached.
+        // refreshRuntime() renders once before the coordinator is attached.
         // Render again from the restored snapshot so terminal runs also place
         // their process card between the latest user message and its answer.
         renderConversation()
