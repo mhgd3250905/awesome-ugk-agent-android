@@ -35,6 +35,7 @@ class SettingsActivity : Activity() {
     private val scope = CoroutineScope(Dispatchers.Main)
 
     private var selectedConfigId: String? = null
+    private var selectedProtocol: ProviderProtocol = ProviderProtocol.AUTO
     private var selectedContextWindow: String = ContextProfile.DEFAULT_CONFIG
     private var selectedMaxOutputTokens: Int = 8192
 
@@ -83,6 +84,8 @@ class SettingsActivity : Activity() {
     private lateinit var configCardTitle: TextView
     private lateinit var nameInput: EditText
     private lateinit var urlInput: EditText
+    private lateinit var protocolTitle: TextView
+    private lateinit var protocolRow: LinearLayout
     private lateinit var modelInput: EditText
     private lateinit var keyInput: EditText
 
@@ -284,6 +287,19 @@ class SettingsActivity : Activity() {
         configCardTitle = sectionTitle("API 接口配置")
         nameInput = settingsInput("配置备注名称 (可选，例: DeepSeek 官方)")
         urlInput = settingsInput("URL 端点 (例: https://api.deepseek.com/anthropic)")
+        protocolTitle = sectionTitle("API 协议").apply {
+            textSize = 12.5f
+            setPadding(0, dp(10), 0, 0)
+        }
+        val protocolScroll = HorizontalScrollView(this).apply {
+            isHorizontalScrollBarEnabled = false
+            setPadding(0, dp(6), 0, 0)
+        }
+        protocolRow = LinearLayout(this).apply {
+            orientation = LinearLayout.HORIZONTAL
+            gravity = Gravity.CENTER_VERTICAL
+        }
+        protocolScroll.addView(protocolRow)
         modelInput = settingsInput("模型名称 (例: deepseek-chat)")
         keyInput = settingsInput("API Key").apply {
             inputType = InputType.TYPE_CLASS_TEXT or InputType.TYPE_TEXT_VARIATION_PASSWORD
@@ -291,6 +307,8 @@ class SettingsActivity : Activity() {
         configCard.addView(configCardTitle)
         configCard.addView(nameInput, fieldLayoutParams())
         configCard.addView(urlInput, fieldLayoutParams())
+        configCard.addView(protocolTitle)
+        configCard.addView(protocolScroll)
         configCard.addView(modelInput, fieldLayoutParams())
         configCard.addView(keyInput, fieldLayoutParams())
         contentLayout.addView(configCard, cardLayoutParams())
@@ -447,6 +465,7 @@ class SettingsActivity : Activity() {
             selectedConfigId = config.id
             nameInput.setText(config.name.orEmpty())
             urlInput.setText(config.baseUrl)
+            selectedProtocol = config.protocol
             modelInput.setText(config.model)
             keyInput.setText(config.apiKey)
             selectedContextWindow = ContextProfile.configValueOrDefault(config.contextWindow)
@@ -458,6 +477,7 @@ class SettingsActivity : Activity() {
             selectedConfigId = null
             nameInput.setText("")
             urlInput.setText("")
+            selectedProtocol = ProviderProtocol.AUTO
             modelInput.setText("")
             keyInput.setText("")
             selectedContextWindow = ContextProfile.DEFAULT_CONFIG
@@ -474,6 +494,7 @@ class SettingsActivity : Activity() {
         renderContextWindowChips()
         renderMaxOutputChips()
         renderThresholdChips()
+        renderProtocolChips()
     }
 
     private fun renderChips() {
@@ -547,6 +568,35 @@ class SettingsActivity : Activity() {
                 }
             }
             contextRow.addView(chip, LinearLayout.LayoutParams(
+                LinearLayout.LayoutParams.WRAP_CONTENT,
+                LinearLayout.LayoutParams.WRAP_CONTENT
+            ).apply { marginEnd = dp(8) })
+        }
+    }
+
+    private fun renderProtocolChips() {
+        if (!::protocolRow.isInitialized) return
+        protocolRow.removeAllViews()
+        ProviderProtocol.entries.forEach { protocol ->
+            val isSelected = protocol == selectedProtocol
+            val chip = TextView(this).apply {
+                text = protocol.displayLabel
+                textSize = 12.5f
+                setTypeface(null, if (isSelected) Typeface.BOLD else Typeface.NORMAL)
+                setPadding(dp(14), dp(7), dp(14), dp(7))
+                if (isSelected) {
+                    setTextColor(Ui.SurfaceElevated)
+                    background = Ui.rounded(this@SettingsActivity, Ui.Mint, 14)
+                } else {
+                    setTextColor(Ui.TextSecondary)
+                    background = Ui.rounded(this@SettingsActivity, Ui.SurfaceSoft, 14, Ui.Outline)
+                }
+                setOnClickListener {
+                    selectedProtocol = protocol
+                    renderProtocolChips()
+                }
+            }
+            protocolRow.addView(chip, LinearLayout.LayoutParams(
                 LinearLayout.LayoutParams.WRAP_CONTENT,
                 LinearLayout.LayoutParams.WRAP_CONTENT
             ).apply { marginEnd = dp(8) })
@@ -630,7 +680,15 @@ class SettingsActivity : Activity() {
 
         scope.launch {
             try {
-                val summary = ApiQuotaAndConnectivityService.testAndQuery(url, apiKey, model)
+                val summary = ApiQuotaAndConnectivityService.testAndQuery(
+                    ApiProviderConfig(
+                        id = selectedConfigId ?: "connectivity-test",
+                        baseUrl = url,
+                        apiKey = apiKey,
+                        model = model,
+                        protocol = selectedProtocol
+                    )
+                )
                 testButton.isEnabled = true
                 testButton.text = "⚡ 检测通信与平台额度"
                 testStatusCard.visibility = View.VISIBLE
@@ -697,7 +755,8 @@ class SettingsActivity : Activity() {
             contextWindow = selectedContextWindow,
             maxOutputTokens = selectedMaxOutputTokens,
             autoCompaction = selectedAutoCompaction,
-            compactionThreshold = selectedCompactionThreshold
+            compactionThreshold = selectedCompactionThreshold,
+            protocol = selectedProtocol
         )
         apiStore.upsertAndActivate(config)
         Toast.makeText(this, "配置已保存并启用", Toast.LENGTH_SHORT).show()
@@ -741,6 +800,8 @@ class SettingsActivity : Activity() {
 
         configCard.background = Ui.rounded(this, Ui.SurfaceSubtle, 14, Ui.Outline)
         configCardTitle.setTextColor(Ui.TextPrimary)
+        protocolTitle.setTextColor(Ui.TextPrimary)
+        renderProtocolChips()
         listOf(nameInput, urlInput, modelInput, keyInput).forEach { input ->
             input.setTextColor(Ui.TextPrimary)
             input.setHintTextColor(Ui.TextMuted)

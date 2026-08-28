@@ -21,7 +21,8 @@ data class ApiProviderConfig(
     val contextWindow: String? = ContextProfile.DEFAULT_CONFIG,
     val maxOutputTokens: Int? = 8192,
     val autoCompaction: Boolean? = true,
-    val compactionThreshold: Double? = 0.70
+    val compactionThreshold: Double? = 0.70,
+    val protocol: ProviderProtocol = ProviderProtocol.AUTO
 ) {
     fun displayName(): String {
         if (!name.isNullOrBlank()) return name
@@ -64,6 +65,7 @@ object ApiProviderSettingsJson {
                     config.maxOutputTokens?.let { put("maxOutputTokens", it.toString()) }
                     config.autoCompaction?.let { put("autoCompaction", it.toString()) }
                     config.compactionThreshold?.let { put("compactionThreshold", it.toString()) }
+                    put("protocol", config.protocol.stableId)
                 })
             }
         })
@@ -84,6 +86,7 @@ object ApiProviderSettingsJson {
                 val maxOutputTokens = obj.stringValue("maxOutputTokens").toIntOrNull() ?: 8192
                 val autoCompaction = obj["autoCompaction"]?.jsonPrimitive?.contentOrNull?.toBooleanStrictOrNull() ?: true
                 val compactionThreshold = obj["compactionThreshold"]?.jsonPrimitive?.contentOrNull?.toDoubleOrNull() ?: 0.70
+                val protocol = ProviderProtocol.fromPersistence(obj.stringValue("protocol"))
                 if (id.isBlank() || baseUrl.isBlank() || apiKey.isBlank() || model.isBlank()) null
                 else ApiProviderConfig(
                     id = id,
@@ -94,7 +97,8 @@ object ApiProviderSettingsJson {
                     contextWindow = contextWindow,
                     maxOutputTokens = maxOutputTokens,
                     autoCompaction = autoCompaction,
-                    compactionThreshold = compactionThreshold
+                    compactionThreshold = compactionThreshold,
+                    protocol = protocol
                 )
             } ?: emptyList()
             val activeId = root["activeId"]?.jsonPrimitive?.contentOrNull

@@ -10,6 +10,7 @@ internal data class DemoRuntimeConfig(
     val apiKey: String,
     val model: String,
     val maxOutputTokens: Int,
+    val protocol: ProviderProtocol,
 ) {
     companion object {
         fun from(config: ApiProviderConfig?): DemoRuntimeConfig? = config?.let {
@@ -18,6 +19,7 @@ internal data class DemoRuntimeConfig(
                 apiKey = it.apiKey,
                 model = it.model,
                 maxOutputTokens = it.maxOutputTokens ?: 8192,
+                protocol = it.protocol,
             )
         }
     }

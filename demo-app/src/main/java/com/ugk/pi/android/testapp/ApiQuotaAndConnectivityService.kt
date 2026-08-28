@@ -1,27 +1,15 @@
 package com.ugk.pi.android.testapp
 
+import kotlinx.coroutines.CancellationException
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.withContext
 import kotlinx.serialization.json.Json
+import kotlinx.serialization.json.buildJsonObject
 import kotlinx.serialization.json.contentOrNull
 import kotlinx.serialization.json.jsonArray
 import kotlinx.serialization.json.jsonObject
 import kotlinx.serialization.json.jsonPrimitive
-import java.io.BufferedReader
-import java.io.InputStreamReader
-import java.net.HttpURLConnection
-import java.net.URL
-
-/**
- * API 供应商枚举（借鉴 cc-switch services/balance.rs 架构设计）。
- */
-enum class QuotaProviderType(val displayName: String) {
-    DEEPSEEK("DeepSeek"),
-    SILICONFLOW("硅基流动"),
-    MOONSHOT("Moonshot/Kimi"),
-    OPENROUTER("OpenRouter"),
-    UNKNOWN("通用/未知平台")
-}
+import kotlinx.serialization.json.put
 
 /**
  * 连通性测试结果。
@@ -58,101 +46,46 @@ object ApiQuotaAndConnectivityService {
 
     private val jsonParser = Json { ignoreUnknownKeys = true }
 
-    /**
-     * 根据 Base URL 自动嗅探识别供应商（参照 cc-switch detect_provider 逻辑）。
-     */
-    fun detectProvider(baseUrl: String): QuotaProviderType {
-        val lower = baseUrl.lowercase()
-        return when {
-            lower.contains("api.deepseek.com") -> QuotaProviderType.DEEPSEEK
-            lower.contains("siliconflow.cn") || lower.contains("siliconflow.com") -> QuotaProviderType.SILICONFLOW
-            lower.contains("moonshot.cn") || lower.contains("moonshot.ai") -> QuotaProviderType.MOONSHOT
-            lower.contains("openrouter.ai") -> QuotaProviderType.OPENROUTER
-            else -> QuotaProviderType.UNKNOWN
-        }
-    }
+    /** Compatibility entry point; provider mapping lives in ProviderProfile. */
+    fun detectProvider(baseUrl: String): QuotaProviderType =
+        ProviderProfile.from(legacyConfig(baseUrl)).vendor
 
     /**
      * 执行连通性与延迟测试。
      */
     suspend fun testConnectivity(
+        config: ApiProviderConfig,
+        transport: DemoHttpTransport = JavaNetDemoHttpTransport(
+            connectTimeoutMillis = 8_000,
+            readTimeoutMillis = 10_000
+        )
+    ): ApiConnectivityResult = withContext(Dispatchers.IO) {
+        val profile = ProviderProfile.from(config)
+        val start = System.currentTimeMillis()
+        sendProbeRequest(buildProbeRequest(profile), transport, start)
+    }
+
+    /** Compatibility overload for callers that have not migrated to a profile. */
+    suspend fun testConnectivity(
         baseUrl: String,
         apiKey: String,
-        model: String
-    ): ApiConnectivityResult = withContext(Dispatchers.IO) {
-        val cleanBaseUrl = baseUrl.trimEnd('/')
-        val start = System.currentTimeMillis()
-
-        // 判断是否优先使用 Anthropic 协议端点
-        val isAnthropic = cleanBaseUrl.contains("anthropic") ||
-                cleanBaseUrl.endsWith("/messages") ||
-                cleanBaseUrl.contains("api.anthropic.com")
-
-        if (isAnthropic) {
-            val testUrl = if (cleanBaseUrl.endsWith("/messages")) cleanBaseUrl else "$cleanBaseUrl/v1/messages"
-            val body = """{"model":"$model","max_tokens":1,"messages":[{"role":"user","content":"hi"}]}"""
-            val headers = mapOf(
-                "x-api-key" to apiKey,
-                "anthropic-version" to "2023-06-01",
-                "content-type" to "application/json"
-            )
-            return@withContext sendProbeRequest("POST", testUrl, headers, body, start)
-        }
-
-        // OpenAI 兼容协议探测：先尝试轻量 GET /models 或直接 POST /chat/completions
-        val modelsUrl = if (cleanBaseUrl.endsWith("/v1")) "$cleanBaseUrl/models" else "$cleanBaseUrl/v1/models"
-        val getHeaders = mapOf(
-            "Authorization" to "Bearer $apiKey",
-            "Accept" to "application/json"
+        model: String,
+        transport: DemoHttpTransport = JavaNetDemoHttpTransport(
+            connectTimeoutMillis = 8_000,
+            readTimeoutMillis = 10_000
         )
-        val getResult = sendProbeRequest("GET", modelsUrl, getHeaders, null, start)
-        if (getResult.success) {
-            return@withContext getResult
-        }
-
-        // 若 /models 返回 404 或不支持 GET，回退尝试 1 token chat completion
-        val chatUrl = if (cleanBaseUrl.endsWith("/v1")) {
-            "$cleanBaseUrl/chat/completions"
-        } else if (cleanBaseUrl.endsWith("/chat/completions")) {
-            cleanBaseUrl
-        } else {
-            "$cleanBaseUrl/v1/chat/completions"
-        }
-
-        val chatBody = """{"model":"$model","max_tokens":1,"messages":[{"role":"user","content":"hi"}]}"""
-        val chatHeaders = mapOf(
-            "Authorization" to "Bearer $apiKey",
-            "Content-Type" to "application/json"
-        )
-        return@withContext sendProbeRequest("POST", chatUrl, chatHeaders, chatBody, start)
-    }
+    ): ApiConnectivityResult = testConnectivity(legacyConfig(baseUrl, apiKey, model), transport)
 
     /**
      * 发起底层 HTTP 探测并解析状态码与耗时。
      */
-    private fun sendProbeRequest(
-        method: String,
-        urlString: String,
-        headers: Map<String, String>,
-        body: String?,
+    private suspend fun sendProbeRequest(
+        request: DemoHttpRequest,
+        transport: DemoHttpTransport,
         startTime: Long
     ): ApiConnectivityResult {
-        var connection: HttpURLConnection? = null
         try {
-            val url = URL(urlString)
-            connection = (url.openConnection() as HttpURLConnection).apply {
-                requestMethod = method
-                connectTimeout = 8_000
-                readTimeout = 10_000
-                instanceFollowRedirects = true
-                headers.forEach { (k, v) -> setRequestProperty(k, v) }
-                if (body != null) {
-                    doOutput = true
-                    outputStream.use { it.write(body.toByteArray(Charsets.UTF_8)) }
-                }
-            }
-
-            val code = connection.responseCode
+            val code = transport.request(request).statusCode
             val latency = System.currentTimeMillis() - startTime
 
             return when (code) {
@@ -199,6 +132,8 @@ object ApiQuotaAndConnectivityService {
                     httpCode = code
                 )
             }
+        } catch (e: CancellationException) {
+            throw e
         } catch (e: Exception) {
             val latency = System.currentTimeMillis() - startTime
             val detail = when {
@@ -212,8 +147,44 @@ object ApiQuotaAndConnectivityService {
                 latencyMs = latency,
                 message = "连接失败: $detail"
             )
-        } finally {
-            connection?.disconnect()
+        }
+    }
+
+    private fun buildProbeRequest(profile: ProviderProfile): DemoHttpRequest {
+        val body = buildJsonObject {
+            put("model", profile.config.model)
+            put("max_tokens", 1)
+            put("messages", kotlinx.serialization.json.buildJsonArray {
+                add(buildJsonObject {
+                    put("role", "user")
+                    put("content", "hi")
+                })
+            })
+        }.toString()
+
+        return when (profile.resolvedProtocol) {
+            ProviderProtocol.ANTHROPIC_MESSAGES -> DemoHttpRequest(
+                method = "POST",
+                url = profile.probeEndpoint,
+                headers = mapOf(
+                    "x-api-key" to profile.config.apiKey,
+                    "anthropic-version" to "2023-06-01",
+                    "content-type" to "application/json"
+                ),
+                body = body
+            )
+
+            ProviderProtocol.OPENAI_CHAT_COMPLETIONS -> DemoHttpRequest(
+                method = "POST",
+                url = profile.probeEndpoint,
+                headers = mapOf(
+                    "Authorization" to "Bearer ${profile.config.apiKey}",
+                    "Content-Type" to "application/json"
+                ),
+                body = body
+            )
+
+            ProviderProtocol.AUTO -> error("ProviderProfile must contain a resolved protocol")
         }
     }
 
@@ -221,40 +192,77 @@ object ApiQuotaAndConnectivityService {
      * 自动识别平台并查询剩余额度或用量。
      */
     suspend fun queryBalance(
-        baseUrl: String,
-        apiKey: String
+        config: ApiProviderConfig,
+        transport: DemoHttpTransport = JavaNetDemoHttpTransport(
+            connectTimeoutMillis = 8_000,
+            readTimeoutMillis = 10_000
+        )
     ): ApiBalanceResult = withContext(Dispatchers.IO) {
-        val provider = detectProvider(baseUrl)
-        when (provider) {
-            QuotaProviderType.DEEPSEEK -> queryDeepSeekBalance(apiKey)
-            QuotaProviderType.SILICONFLOW -> querySiliconFlowBalance(baseUrl, apiKey)
-            QuotaProviderType.MOONSHOT -> queryMoonshotBalance(baseUrl, apiKey)
-            QuotaProviderType.OPENROUTER -> queryOpenRouterBalance(apiKey)
+        val profile = ProviderProfile.from(config)
+        when (profile.vendor) {
+            QuotaProviderType.DEEPSEEK -> queryDeepSeekBalance(profile, transport)
+            QuotaProviderType.SILICONFLOW -> querySiliconFlowBalance(profile, transport)
+            QuotaProviderType.MOONSHOT -> queryMoonshotBalance(profile, transport)
+            QuotaProviderType.OPENROUTER -> queryOpenRouterBalance(profile, transport)
             QuotaProviderType.UNKNOWN -> ApiBalanceResult(
                 supported = false,
-                provider = provider,
+                provider = profile.vendor,
                 balanceText = null,
                 error = "该平台未开放公开余额查询接口"
             )
         }
     }
 
+    /** Compatibility overload for callers that have not migrated to a profile. */
+    suspend fun queryBalance(
+        baseUrl: String,
+        apiKey: String,
+        transport: DemoHttpTransport = JavaNetDemoHttpTransport(
+            connectTimeoutMillis = 8_000,
+            readTimeoutMillis = 10_000
+        )
+    ): ApiBalanceResult = queryBalance(legacyConfig(baseUrl, apiKey), transport)
+
     /**
      * 综合执行连通性与额度检测。
      */
     suspend fun testAndQuery(
-        baseUrl: String,
-        apiKey: String,
-        model: String
+        config: ApiProviderConfig,
+        transport: DemoHttpTransport = JavaNetDemoHttpTransport(
+            connectTimeoutMillis = 8_000,
+            readTimeoutMillis = 10_000
+        )
     ): ApiTestSummary = withContext(Dispatchers.IO) {
-        val connectivity = testConnectivity(baseUrl, apiKey, model)
+        val connectivity = testConnectivity(config, transport)
         val balance = if (connectivity.success) {
-            queryBalance(baseUrl, apiKey)
+            queryBalance(config, transport)
         } else {
             null
         }
         ApiTestSummary(connectivity, balance)
     }
+
+    /** Compatibility overload for callers that have not migrated to a profile. */
+    suspend fun testAndQuery(
+        baseUrl: String,
+        apiKey: String,
+        model: String,
+        transport: DemoHttpTransport = JavaNetDemoHttpTransport(
+            connectTimeoutMillis = 8_000,
+            readTimeoutMillis = 10_000
+        )
+    ): ApiTestSummary = testAndQuery(legacyConfig(baseUrl, apiKey, model), transport)
+
+    private fun legacyConfig(
+        baseUrl: String,
+        apiKey: String = "",
+        model: String = ""
+    ): ApiProviderConfig = ApiProviderConfig(
+        id = "legacy-provider",
+        baseUrl = baseUrl,
+        apiKey = apiKey,
+        model = model
+    )
 
     // ── DeepSeek 余额查询 ────────────────────────────────────────────────────────
     // GET https://api.deepseek.com/user/balance
@@ -305,35 +313,10 @@ object ApiQuotaAndConnectivityService {
         }
     }
 
-    private fun queryDeepSeekBalance(apiKey: String): ApiBalanceResult {
-        return runCatching {
-            val url = URL("https://api.deepseek.com/user/balance")
-            val connection = (url.openConnection() as HttpURLConnection).apply {
-                requestMethod = "GET"
-                connectTimeout = 8_000
-                readTimeout = 10_000
-                setRequestProperty("Authorization", "Bearer $apiKey")
-                setRequestProperty("Accept", "application/json")
-            }
-            if (connection.responseCode !in 200..299) {
-                return ApiBalanceResult(
-                    supported = true,
-                    provider = QuotaProviderType.DEEPSEEK,
-                    balanceText = null,
-                    error = "查询失败 (HTTP ${connection.responseCode})"
-                )
-            }
-            val body = connection.inputStream.bufferedReader().use(BufferedReader::readText)
-            parseDeepSeekBalanceResponse(body)
-        }.getOrElse {
-            ApiBalanceResult(
-                supported = true,
-                provider = QuotaProviderType.DEEPSEEK,
-                balanceText = null,
-                error = it.message ?: "网络请求失败"
-            )
-        }
-    }
+    private suspend fun queryDeepSeekBalance(
+        profile: ProviderProfile,
+        transport: DemoHttpTransport
+    ): ApiBalanceResult = queryKnownBalance(profile, transport, ::parseDeepSeekBalanceResponse)
 
     // ── 硅基流动 (SiliconFlow) 余额查询 ─────────────────────────────────────────
     // GET https://api.siliconflow.cn/v1/user/info
@@ -378,40 +361,11 @@ object ApiQuotaAndConnectivityService {
         }
     }
 
-    private fun querySiliconFlowBalance(baseUrl: String, apiKey: String): ApiBalanceResult {
-        return runCatching {
-            val isUsd = baseUrl.lowercase().contains("siliconflow.com")
-            val endpoint = if (isUsd) {
-                "https://api.siliconflow.com/v1/user/info"
-            } else {
-                "https://api.siliconflow.cn/v1/user/info"
-            }
-            val url = URL(endpoint)
-            val connection = (url.openConnection() as HttpURLConnection).apply {
-                requestMethod = "GET"
-                connectTimeout = 8_000
-                readTimeout = 10_000
-                setRequestProperty("Authorization", "Bearer $apiKey")
-                setRequestProperty("Accept", "application/json")
-            }
-            if (connection.responseCode !in 200..299) {
-                return ApiBalanceResult(
-                    supported = true,
-                    provider = QuotaProviderType.SILICONFLOW,
-                    balanceText = null,
-                    error = "查询失败 (HTTP ${connection.responseCode})"
-                )
-            }
-            val body = connection.inputStream.bufferedReader().use(BufferedReader::readText)
-            parseSiliconFlowBalanceResponse(body, isUsd)
-        }.getOrElse {
-            ApiBalanceResult(
-                supported = true,
-                provider = QuotaProviderType.SILICONFLOW,
-                balanceText = null,
-                error = it.message ?: "网络请求失败"
-            )
-        }
+    private suspend fun querySiliconFlowBalance(
+        profile: ProviderProfile,
+        transport: DemoHttpTransport
+    ): ApiBalanceResult = queryKnownBalance(profile, transport) { body ->
+        parseSiliconFlowBalanceResponse(body, profile.quotaIsUsd)
     }
 
     // ── Moonshot AI (Kimi) 余额查询 ────────────────────────────────────────────
@@ -461,40 +415,11 @@ object ApiQuotaAndConnectivityService {
         }
     }
 
-    private fun queryMoonshotBalance(baseUrl: String, apiKey: String): ApiBalanceResult {
-        return runCatching {
-            val isUsd = baseUrl.lowercase().contains("moonshot.ai")
-            val endpoint = if (isUsd) {
-                "https://api.moonshot.ai/v1/users/me/balance"
-            } else {
-                "https://api.moonshot.cn/v1/users/me/balance"
-            }
-            val url = URL(endpoint)
-            val connection = (url.openConnection() as HttpURLConnection).apply {
-                requestMethod = "GET"
-                connectTimeout = 8_000
-                readTimeout = 10_000
-                setRequestProperty("Authorization", "Bearer $apiKey")
-                setRequestProperty("Accept", "application/json")
-            }
-            if (connection.responseCode !in 200..299) {
-                return ApiBalanceResult(
-                    supported = true,
-                    provider = QuotaProviderType.MOONSHOT,
-                    balanceText = null,
-                    error = "查询失败 (HTTP ${connection.responseCode})"
-                )
-            }
-            val body = connection.inputStream.bufferedReader().use(BufferedReader::readText)
-            parseMoonshotBalanceResponse(body, isUsd)
-        }.getOrElse {
-            ApiBalanceResult(
-                supported = true,
-                provider = QuotaProviderType.MOONSHOT,
-                balanceText = null,
-                error = it.message ?: "网络请求失败"
-            )
-        }
+    private suspend fun queryMoonshotBalance(
+        profile: ProviderProfile,
+        transport: DemoHttpTransport
+    ): ApiBalanceResult = queryKnownBalance(profile, transport) { body ->
+        parseMoonshotBalanceResponse(body, profile.quotaIsUsd)
     }
 
     // ── OpenRouter 用量与余额查询 ───────────────────────────────────────────────
@@ -541,32 +466,51 @@ object ApiQuotaAndConnectivityService {
         }
     }
 
-    private fun queryOpenRouterBalance(apiKey: String): ApiBalanceResult {
-        return runCatching {
-            val url = URL("https://openrouter.ai/api/v1/auth/key")
-            val connection = (url.openConnection() as HttpURLConnection).apply {
-                requestMethod = "GET"
-                connectTimeout = 8_000
-                readTimeout = 10_000
-                setRequestProperty("Authorization", "Bearer $apiKey")
-                setRequestProperty("Accept", "application/json")
-            }
-            if (connection.responseCode !in 200..299) {
-                return ApiBalanceResult(
-                    supported = true,
-                    provider = QuotaProviderType.OPENROUTER,
-                    balanceText = null,
-                    error = "查询失败 (HTTP ${connection.responseCode})"
+    private suspend fun queryOpenRouterBalance(
+        profile: ProviderProfile,
+        transport: DemoHttpTransport
+    ): ApiBalanceResult = queryKnownBalance(profile, transport, ::parseOpenRouterBalanceResponse)
+
+    private suspend fun queryKnownBalance(
+        profile: ProviderProfile,
+        transport: DemoHttpTransport,
+        parse: (String) -> ApiBalanceResult
+    ): ApiBalanceResult {
+        val endpoint = profile.quotaEndpoint ?: return ApiBalanceResult(
+            supported = false,
+            provider = profile.vendor,
+            balanceText = null,
+            error = "该平台未开放公开余额查询接口"
+        )
+        return try {
+            val response = transport.request(
+                DemoHttpRequest(
+                    method = "GET",
+                    url = endpoint,
+                    headers = mapOf(
+                        "Authorization" to "Bearer ${profile.config.apiKey}",
+                        "Accept" to "application/json"
+                    )
                 )
+            )
+            if (response.statusCode !in 200..299) {
+                ApiBalanceResult(
+                    supported = true,
+                    provider = profile.vendor,
+                    balanceText = null,
+                    error = "查询失败 (HTTP ${response.statusCode})"
+                )
+            } else {
+                parse(response.body)
             }
-            val body = connection.inputStream.bufferedReader().use(BufferedReader::readText)
-            parseOpenRouterBalanceResponse(body)
-        }.getOrElse {
+        } catch (e: CancellationException) {
+            throw e
+        } catch (e: Exception) {
             ApiBalanceResult(
                 supported = true,
-                provider = QuotaProviderType.OPENROUTER,
+                provider = profile.vendor,
                 balanceText = null,
-                error = it.message ?: "网络请求失败"
+                error = e.message ?: "网络请求失败"
             )
         }
     }

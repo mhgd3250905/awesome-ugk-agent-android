@@ -10,7 +10,6 @@ import com.ugk.pi.android.AgentTaskStore
 import com.ugk.pi.android.AgentSkillRuntimePlugin
 import com.ugk.pi.android.AgentSkillSeeder
 import com.ugk.pi.android.AndroidAutomationAgentPlugin
-import com.ugk.pi.android.AnthropicMessagesProvider
 import com.ugk.pi.android.FileBackedSkillProvider
 import com.ugk.pi.android.LLMProvider
 import com.ugk.pi.android.LoadPolicySkillResolver
@@ -39,20 +38,15 @@ internal object DemoAgentRuntimeFactory {
         shouldBlockForScreenAutomation: () -> Boolean = { false },
         supportsBackgroundPromptExecution: Boolean = true,
         maxIterations: Int = DEFAULT_DEMO_MAX_ITERATIONS,
-        isBackgroundRun: Boolean = false
+        isBackgroundRun: Boolean = false,
+        httpTransport: DemoHttpTransport = JavaNetDemoHttpTransport()
     ): AgentRuntime {
         val appContext = context.applicationContext
         val config = ApiProviderSettingsStore(appContext).activeConfig()
-        val provider: LLMProvider = if (config != null) {
-            AnthropicMessagesProvider(
-                apiKey = config.apiKey,
-                model = config.model,
-                baseUrl = config.baseUrl,
-                maxTokens = config.maxOutputTokens ?: 8192
-            )
-        } else {
-            MissingApiProvider
-        }
+        val provider: LLMProvider = config
+            ?.let(ProviderProfile::from)
+            ?.createRuntimeProvider(httpTransport)
+            ?: MissingApiProvider
 
         // File-backed skills live in the app-private agent-skills directory;
         // packaged skills are seeded once and never overwrite user changes.

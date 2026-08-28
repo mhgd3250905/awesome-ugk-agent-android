@@ -57,6 +57,17 @@ class DemoRuntimeLifecyclePolicyTest {
         assertEquals(listOf("create", "reuse", "stop", "close", "create"), tracer.events)
     }
 
+    @Test
+    fun protocolChangeRebuildsRuntimeEvenWhenOtherResolvedSettingsStayTheSame() {
+        val initial = config(protocol = ProviderProtocol.AUTO)
+        val tracer = RuntimeRefreshTracer()
+
+        tracer.resume(initial)
+        tracer.resume(initial.copy(protocol = ProviderProtocol.OPENAI_CHAT_COMPLETIONS))
+
+        assertEquals(listOf("create", "stop", "close", "create"), tracer.events)
+    }
+
     private fun config(
         baseUrl: String = "https://provider.example",
         apiKey: String = "test-credential",
@@ -65,7 +76,8 @@ class DemoRuntimeLifecyclePolicyTest {
         contextWindow: String? = "200K",
         maxOutputTokens: Int? = 8192,
         autoCompaction: Boolean? = true,
-        compactionThreshold: Double? = 0.70
+        compactionThreshold: Double? = 0.70,
+        protocol: ProviderProtocol = ProviderProtocol.AUTO
     ) = ApiProviderConfig(
         id = "provider-1",
         baseUrl = baseUrl,
@@ -75,7 +87,8 @@ class DemoRuntimeLifecyclePolicyTest {
         contextWindow = contextWindow,
         maxOutputTokens = maxOutputTokens,
         autoCompaction = autoCompaction,
-        compactionThreshold = compactionThreshold
+        compactionThreshold = compactionThreshold,
+        protocol = protocol
     )
 
     private class RuntimeRefreshTracer {
