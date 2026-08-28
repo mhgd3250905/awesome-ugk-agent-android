@@ -33,9 +33,13 @@ class AgentRuntimeBuilderLiveSkillProviderTest {
     }
 
     @Test
-    fun `builder supplied provider replaces plugin registered skills`() = runBlocking {
+    fun `builder supplied provider merges with plugin registered skills`() = runBlocking {
         val llm = RecordingLLMProvider()
-        val pluginSkill = skill("plugin-skill", "plugin only skill", "PLUGIN_SKILL_MARKER")
+        val pluginSkill = skill(
+            "plugin-skill",
+            "android settings plugin only skill",
+            "PLUGIN_SKILL_MARKER"
+        )
         val runtime = AgentRuntime.Builder()
             .llmProvider(llm)
             .register(
@@ -56,7 +60,7 @@ class AgentRuntimeBuilderLiveSkillProviderTest {
 
         val injection = systemSkillMessage(llm.requests.single())
         assertTrue(injection.contains("LIVE_SKILL_MARKER"))
-        assertFalse(injection.contains("PLUGIN_SKILL_MARKER"))
+        assertTrue(injection.contains("PLUGIN_SKILL_MARKER"))
     }
 
     private fun systemSkillMessage(request: ModelRequest): String =

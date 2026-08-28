@@ -10,7 +10,6 @@ import com.ugk.pi.android.AgentTaskStore
 import com.ugk.pi.android.AgentSkillRuntimePlugin
 import com.ugk.pi.android.AgentSkillSeeder
 import com.ugk.pi.android.AndroidAutomationAgentPlugin
-import com.ugk.pi.android.FileBackedSkillProvider
 import com.ugk.pi.android.LLMProvider
 import com.ugk.pi.android.LoadPolicySkillResolver
 import com.ugk.pi.android.ModelRequest
@@ -59,44 +58,6 @@ internal object DemoAgentRuntimeFactory {
         val embedRoots = mapOf("memory" to memoryRoot)
         AgentSkillSeeder.seed(appContext)
 
-        val capabilityPlugins = listOf(
-            DemoImportedFilePlugin(
-                DemoFileImportStore(appContext).workspaceRoot
-            ),
-            ScheduleTaskAgentPlugin(
-                store = scheduleStore,
-                scheduler = scheduleScheduler,
-                supportsBackgroundPromptExecution = supportsBackgroundPromptExecution
-            ),
-            AndroidAutomationAgentPlugin(
-                context = appContext,
-                confirmationPresenter = confirmationPresenter,
-                accessibilityServiceComponent = ComponentName(
-                    appContext,
-                    AgentAccessibilityService::class.java
-                ),
-                accessibilityStateProvider = AgentAccessibilityService.runtimeStateProvider,
-                shouldBypassConfirmation = shouldBypassConfirmation,
-                screenAutomationBackend = AccessibilityScreenAutomationBackend(
-                    serviceProvider = AccessibilityServiceProvider {
-                        AgentAccessibilityService.instance
-                    },
-                    ownPackageName = appContext.packageName
-                )
-            ),
-            TerminalAgentPlugin(
-                context = appContext,
-                shouldBypassConfirmation = shouldBypassConfirmation,
-                shouldBlockForScreenAutomation = shouldBlockForScreenAutomation
-            ),
-            AgentSkillRuntimePlugin(
-                repository = skillRepository,
-                memoryRoot = memoryRoot,
-                shouldBypassConfirmation = shouldBypassConfirmation,
-                embedRoots = embedRoots
-            )
-        )
-
         val builder = AgentRuntime.Builder()
             .llmProvider(provider)
             .maxIterations(maxIterations)
@@ -107,17 +68,57 @@ internal object DemoAgentRuntimeFactory {
                     autoCompaction = config?.autoCompaction ?: true
                 )
             )
-        capabilityPlugins.forEach { plugin -> builder.register(plugin) }
+            .register(
+                DemoImportedFilePlugin(
+                    DemoFileImportStore(appContext).workspaceRoot
+                )
+            )
+            .register(
+                ScheduleTaskAgentPlugin(
+                    store = scheduleStore,
+                    scheduler = scheduleScheduler,
+                    supportsBackgroundPromptExecution = supportsBackgroundPromptExecution
+                )
+            )
+            .register(
+                AndroidAutomationAgentPlugin(
+                    context = appContext,
+                    confirmationPresenter = confirmationPresenter,
+                    accessibilityServiceComponent = ComponentName(
+                        appContext,
+                        AgentAccessibilityService::class.java
+                    ),
+                    accessibilityStateProvider = AgentAccessibilityService.runtimeStateProvider,
+                    shouldBypassConfirmation = shouldBypassConfirmation,
+                    screenAutomationBackend = AccessibilityScreenAutomationBackend(
+                        serviceProvider = AccessibilityServiceProvider {
+                            AgentAccessibilityService.instance
+                        },
+                        ownPackageName = appContext.packageName
+                    )
+                )
+            )
+            .register(
+                TerminalAgentPlugin(
+                    context = appContext,
+                    shouldBypassConfirmation = shouldBypassConfirmation,
+                    shouldBlockForScreenAutomation = shouldBlockForScreenAutomation
+                )
+            )
+            .register(
+                AgentSkillRuntimePlugin(
+                    repository = skillRepository,
+                    memoryRoot = memoryRoot,
+                    shouldBypassConfirmation = shouldBypassConfirmation,
+                    embedRoots = embedRoots
+                )
+            )
 
         if (isBackgroundRun) {
             builder.agentInstructions(BACKGROUND_AGENT_INSTRUCTIONS)
         }
-        // Builder.skillProvider replaces the statically registered plugin
-        // skills, so the merged provider must carry them along explicitly and
-        // must be attached after every register() call.
         return builder
             .skillResolver(LoadPolicySkillResolver(skillRepository))
-            .skillProvider(FileBackedSkillProvider(capabilityPlugins, skillRepository, embedRoots = embedRoots))
             .build()
     }
 

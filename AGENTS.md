@@ -85,9 +85,9 @@ v1 Terminal Core Profile：Bash、curl、OpenSSL、SQLite、CPython 3.14.6；Nod
 ## SDK 架构
 
 - `AgentRuntime` 运行循环：用户消息 -> LLM -> ToolCall -> AgentTool -> ToolResult -> LLM -> 最终回答
-- `AgentCapabilityPlugin` 是工具+技能+运行时全局指令的注册入口（`tools()` + `skills()` + `agentInstructions()`）
+- `AgentCapabilityPlugin` 是工具+技能+运行时全局指令的注册入口（`tools()` + `skills()` + `skillProviders()` + `agentInstructions()`）
 - `AndroidSkill` 是只读上下文包，不创建工具、不授权；skill method 仅在同名 tool 已注册时才注入
-- 文件型 skill：`pi-agent-skill-runtime-android` 把 SKILL.md 文件（frontmatter + 三级加载策略 always/indexed/triggered）经 `FileBackedSkillProvider` 动态注入上下文；`AgentRuntime.Builder.skillProvider()` 持 Provider 引用、每 run 拉取。规范见 `docs/android-agent-skills.md`
+- 文件型 skill：`pi-agent-skill-runtime-android` 把 SKILL.md 文件（frontmatter + 三级加载策略 always/indexed/triggered）经 `AgentSkillRuntimePlugin` 贡献的 `FileBackedSkillProvider` 动态注入上下文；`AgentRuntime.Builder` 每 run 合并 plugin dynamic/custom/plugin-declared skills。规范见 `docs/android-agent-skills.md`
 - `AnthropicMessagesProvider` / `OpenAiChatCompletionsProvider` 支持 baseUrl 自定义
 - 高影响工具默认通过 `UserConfirmationRequiredTool` 包装并先调用 `show_user_confirmation_dialog`；宿主显式开启 full authorization 时不注册确认 Tool，但仍保留工具自身校验
 

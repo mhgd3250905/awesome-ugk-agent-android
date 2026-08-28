@@ -15,9 +15,41 @@ data class AndroidSkillMethod(
     val resultSemantics: String
 )
 
+/**
+ * Supplies the skills visible to one Runtime run. Implementations must return
+ * a non-null list of skills whose ids are non-blank. An exception or a JVM
+ * null-contract violation from [skills] is surfaced as a failed skill
+ * assembly before resolver/model execution. The [source] declaration is
+ * explicit provenance metadata used by source-aware resolvers; it is never
+ * inferred from a skill id or its instructions.
+ */
 interface AndroidSkillProvider {
     fun skills(): List<AndroidSkill>
+
+    /**
+     * Declares whether this provider's returned skills are file-backed.
+     *
+     * Providers are generic by default. A provider that reads the
+     * file load-policy repository must explicitly return
+     * [AndroidSkillProviderSource.FILE_BACKED].
+     */
+    val source: AndroidSkillProviderSource
+        get() = AndroidSkillProviderSource.GENERIC
 }
+
+enum class AndroidSkillProviderSource {
+    GENERIC,
+    FILE_BACKED
+}
+
+/**
+ * Per-run provenance passed from Runtime assembly to resolvers that honor
+ * file-backed load policy. An id is file-backed only when the corresponding
+ * provider explicitly declared [AndroidSkillProviderSource.FILE_BACKED].
+ */
+data class AndroidSkillResolutionContext(
+    val fileBackedSkillIds: Set<String> = emptySet()
+)
 
 class StaticAndroidSkillProvider(
     private val skills: List<AndroidSkill>
@@ -35,6 +67,18 @@ interface AndroidSkillResolver {
         skills: List<AndroidSkill>,
         availableToolNames: Set<String>
     ): List<AndroidSkill>
+
+    /**
+     * Resolves skills with explicit per-run source metadata. Existing
+     * resolvers inherit the legacy three-argument behavior; resolvers that
+     * apply source-specific policy may override this overload.
+     */
+    fun resolve(
+        userMessage: String,
+        skills: List<AndroidSkill>,
+        availableToolNames: Set<String>,
+        resolutionContext: AndroidSkillResolutionContext
+    ): List<AndroidSkill> = resolve(userMessage, skills, availableToolNames)
 }
 
 class KeywordAndroidSkillResolver : AndroidSkillResolver {

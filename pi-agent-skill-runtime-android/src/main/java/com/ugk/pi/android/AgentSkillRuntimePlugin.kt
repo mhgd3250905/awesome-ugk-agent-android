@@ -5,14 +5,14 @@ import java.io.File
 /**
  * Capability plugin for the file-backed skill runtime.
  *
- * Tools expose skill discovery/reading and the agent-memory store. File skills
- * themselves are supplied by [FileBackedSkillProvider], so [skills] stays
- * empty here to avoid double injection. `memory_delete` is wrapped with
- * [UserConfirmationRequiredTool] by default because it destroys user data;
- * set [requireDeleteConfirmation] to false for the raw tool set. [embedRoots]
- * are the named roots that `x-ugk-embed-files` `alias:file.md` entries
- * resolve against; pass the same map given to [FileBackedSkillProvider] so
- * `skill_read` reports embed availability against the right directories.
+ * This is the complete entry point for the file-backed skill runtime: it
+ * contributes skill tools, global instructions, and the dynamic
+ * [FileBackedSkillProvider]. File skills therefore remain in [skillProviders]
+ * while [skills] stays empty to avoid double injection. `memory_delete` is
+ * wrapped with [UserConfirmationRequiredTool] by default because it destroys
+ * user data; set [requireDeleteConfirmation] to false for the raw tool set.
+ * [embedRoots] are the named roots that `x-ugk-embed-files` `alias:file.md`
+ * entries resolve against; the same map is used by the tool and provider.
  */
 class AgentSkillRuntimePlugin(
     private val repository: SkillRepository,
@@ -22,6 +22,8 @@ class AgentSkillRuntimePlugin(
     private val embedRoots: Map<String, File> = emptyMap()
 ) : AgentCapabilityPlugin {
     override val id: String = "agent-skill-runtime"
+
+    private val fileBackedSkillProvider = FileBackedSkillProvider(repository, embedRoots)
 
     override fun tools(): List<AgentTool> {
         return agentSkillRuntimeTools(repository, memoryRoot, embedRoots).map { tool ->
@@ -37,6 +39,8 @@ class AgentSkillRuntimePlugin(
     }
 
     override fun skills(): List<AndroidSkill> = emptyList()
+
+    override fun skillProviders(): List<AndroidSkillProvider> = listOf(fileBackedSkillProvider)
 
     override fun agentInstructions(): List<String> = listOf(
         """

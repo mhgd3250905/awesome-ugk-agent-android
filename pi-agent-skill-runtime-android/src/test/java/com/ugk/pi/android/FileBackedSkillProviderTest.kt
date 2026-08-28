@@ -86,7 +86,6 @@ class FileBackedSkillProviderTest {
         File(memoryRoot, "preferences.md").writeText("- live preference")
 
         val provider = FileBackedSkillProvider(
-            plugins = emptyList(),
             repository = SkillRepository(root),
             embedRoots = mapOf("memory" to memoryRoot)
         )
@@ -134,7 +133,6 @@ class FileBackedSkillProviderTest {
         )
 
         val provider = FileBackedSkillProvider(
-            plugins = emptyList(),
             repository = SkillRepository(root),
             embedRoots = mapOf("memory" to memoryRoot)
         )
@@ -156,7 +154,6 @@ class FileBackedSkillProviderTest {
             body = "Memory body."
         )
         val provider = FileBackedSkillProvider(
-            plugins = emptyList(),
             repository = SkillRepository(root),
             embedRoots = mapOf("memory" to memoryRoot)
         )
@@ -207,27 +204,21 @@ class FileBackedSkillProviderTest {
     }
 
     @Test
-    fun excludesInvalidSkillsAndAppendsStaticPluginSkills() {
+    fun excludesInvalidSkills() {
         val root = skillRoot()
         writeSkill(root, "valid-skill", frontmatter = "description: Valid.\n", body = "Valid body.")
         writeSkill(root, "invalid-skill", frontmatter = "", body = "Body.")
-        val staticSkill = AndroidSkill(
-            id = "static-plugin-skill",
-            description = "Static plugin skill.",
-            instructions = "Static instructions."
-        )
         val provider = FileBackedSkillProvider(
-            plugins = listOf(FakePlugin(staticSkill)),
             repository = SkillRepository(root)
         )
 
         val skills = provider.skills()
 
-        assertEquals(listOf("valid-skill", "static-plugin-skill"), skills.map { it.id })
+        assertEquals(listOf("valid-skill"), skills.map { it.id })
     }
 
     private fun provider(root: File): FileBackedSkillProvider {
-        return FileBackedSkillProvider(plugins = emptyList(), repository = SkillRepository(root))
+        return FileBackedSkillProvider(repository = SkillRepository(root))
     }
 
     private fun skillRoot(): File = tempFolder.newFolder("agent-skills")
@@ -246,9 +237,4 @@ class FileBackedSkillProviderTest {
         File(File(root, skillName), fileName).writeText(content)
     }
 
-    private class FakePlugin(private val skill: AndroidSkill) : AgentCapabilityPlugin {
-        override val id: String = "fake-plugin"
-        override fun tools(): List<AgentTool> = emptyList()
-        override fun skills(): List<AndroidSkill> = listOf(skill)
-    }
 }

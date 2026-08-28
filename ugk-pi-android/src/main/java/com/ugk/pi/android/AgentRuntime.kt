@@ -34,7 +34,6 @@ class AgentRuntime(
         private var timeContextProvider: AgentTimeContextProvider = SystemAgentTimeContextProvider
         private var transcriptPreparationPolicy: TranscriptPreparationPolicy =
             NoOpTranscriptPreparationPolicy
-        private val skills = mutableListOf<AndroidSkill>()
         private var customSkillProvider: AndroidSkillProvider? = null
         private val agentInstructions = mutableListOf<String>()
         private val plugins = mutableListOf<AgentCapabilityPlugin>()
@@ -59,13 +58,12 @@ class AgentRuntime(
          *
          * The provider is held by reference: its [AndroidSkillProvider.skills]
          * is invoked per run, so a dynamic implementation can return updated
-         * skills without rebuilding the runtime. As before, this replaces any
-         * plugin-registered skills; a custom provider takes full ownership of
-         * the skill list and must merge static plugin skills itself if needed.
+         * skills without rebuilding the runtime. It replaces only the previous
+         * custom provider; plugin dynamic providers and plugin-declared skills
+         * are still assembled by the Runtime and queried for each run.
          * Implementations must be safe to call from concurrent runs.
          */
         fun skillProvider(skillProvider: AndroidSkillProvider): Builder {
-            this.skills.clear()
             this.customSkillProvider = skillProvider
             return this
         }
@@ -102,8 +100,10 @@ class AgentRuntime(
 
         fun register(plugin: AgentCapabilityPlugin): Builder {
             require(plugin.id.isNotBlank()) { "Plugin id must not be blank" }
+            require(plugins.none { it.id == plugin.id }) {
+                "Plugin id already registered: '${plugin.id}'"
+            }
             plugin.tools().forEach { toolRegistry.register(it) }
-            skills += plugin.skills()
             agentInstructions += plugin.agentInstructions()
             plugins += plugin
             return this
@@ -114,7 +114,10 @@ class AgentRuntime(
                 llmProvider = requireNotNull(llmProvider) { "LLMProvider is required" },
                 toolRegistry = toolRegistry,
                 maxIterations = maxIterations,
-                skillProvider = customSkillProvider ?: StaticAndroidSkillProvider(skills.toList()),
+                skillProvider = CompositeAndroidSkillProvider(
+                    customProvider = customSkillProvider,
+                    plugins = plugins.toList()
+                ),
                 skillResolver = skillResolver,
                 skillPromptBuilder = skillPromptBuilder,
                 timeContextProvider = timeContextProvider,
@@ -211,7 +214,14 @@ class AgentRuntime(
             )
         )
 
-        val activeSkillMessage = buildActiveSkillMessage(input.content)
+        val activeSkillMessage = try {
+            buildActiveSkillMessage(input.content)
+        } catch (error: CancellationException) {
+            throw error
+        } catch (error: Throwable) {
+            emit(AgentEvent.Failed(skillAssemblyFailureMessage(error)))
+            return@flow
+        }
 
         var completedIterations = 0
         var modelRequestIteration = 0
@@ -435,15 +445,38 @@ class AgentRuntime(
 
     private fun buildActiveSkillMessage(userMessage: String): AgentMessage.System? {
         val availableToolNames = toolRegistry.all().map { it.name }.toSet()
+        val assembly = assembleSkills()
         val activeSkills = skillResolver.resolve(
             userMessage = userMessage,
-            skills = skillProvider.skills(),
-            availableToolNames = availableToolNames
+            skills = assembly.skills,
+            availableToolNames = availableToolNames,
+            resolutionContext = assembly.resolutionContext
         )
         val prompt = skillPromptBuilder.build(activeSkills, availableToolNames)
         if (prompt.isBlank()) return null
 
         return AgentMessage.System(prompt)
+    }
+
+    /**
+     * Builds the per-run skill snapshot and its private provenance context.
+     * The Builder-owned composite and the public direct-provider path both use
+     * [RuntimeSkillAccumulator]; the composite is file-private and is not a
+     * public/provider marker that consumers can implement or forge.
+     */
+    private fun assembleSkills(): RuntimeSkillAssembly {
+        val accumulator = RuntimeSkillAccumulator()
+        val provider = skillProvider
+        if (provider is CompositeAndroidSkillProvider) {
+            provider.contributeTo(accumulator)
+        } else {
+            accumulator.addSkills(
+                contributedSkills = provider.skills(),
+                source = "direct skillProvider()",
+                providerSource = provider.source
+            )
+        }
+        return accumulator.build()
     }
 
     private fun ModelResponse.isIncompleteFinalResponse(): Boolean {
@@ -579,6 +612,98 @@ class AgentRuntime(
 
 }
 
+private data class RuntimeSkillAssembly(
+    val skills: List<AndroidSkill>,
+    val resolutionContext: AndroidSkillResolutionContext
+)
+
+private class RuntimeSkillAccumulator {
+    private val seenIds = mutableMapOf<String, String>()
+    private val assembledSkills = mutableListOf<AndroidSkill>()
+    private val fileBackedSkillIds = linkedSetOf<String>()
+
+    fun addSkills(
+        contributedSkills: List<AndroidSkill?>?,
+        source: String,
+        providerSource: AndroidSkillProviderSource? = AndroidSkillProviderSource.GENERIC
+    ) {
+        val nonNullProviderSource = requireNotNull(providerSource) {
+            "Skill provider returned a null source: $source"
+        }
+        requireNotNull(contributedSkills) {
+            "Skill provider returned a null skills list: $source"
+        }.forEachIndexed { index, skill ->
+            val nonNullSkill = requireNotNull(skill) {
+                "Skill provider returned a null skill: $source[$index]"
+            }
+            require(nonNullSkill.id.isNotBlank()) {
+                "Skill id must not be blank: $source[$index]"
+            }
+            val contribution = "$source[$index]"
+            val previous = seenIds.put(nonNullSkill.id, contribution)
+            require(previous == null) {
+                "Duplicate skill id '${nonNullSkill.id}': $contribution conflicts with $previous"
+            }
+            if (nonNullProviderSource == AndroidSkillProviderSource.FILE_BACKED) {
+                fileBackedSkillIds += nonNullSkill.id
+            }
+            assembledSkills += nonNullSkill
+        }
+    }
+
+    fun build(): RuntimeSkillAssembly = RuntimeSkillAssembly(
+        skills = assembledSkills.toList(),
+        resolutionContext = AndroidSkillResolutionContext(fileBackedSkillIds.toSet())
+    )
+}
+
+/**
+ * Runtime-owned skill assembly. Every source is queried for each run.
+ * Contributions are ordered as plugin dynamic providers, the optional custom
+ * provider, then plugin-declared skills. Skill ids are exact and
+ * case-sensitive; every non-blank id must be unique across all sources.
+ */
+private class CompositeAndroidSkillProvider(
+    private val customProvider: AndroidSkillProvider?,
+    private val plugins: List<AgentCapabilityPlugin>
+) : AndroidSkillProvider {
+    override fun skills(): List<AndroidSkill> {
+        val accumulator = RuntimeSkillAccumulator()
+        contributeTo(accumulator)
+        return accumulator.build().skills
+    }
+
+    fun contributeTo(accumulator: RuntimeSkillAccumulator) {
+        plugins.forEach { plugin ->
+            requireNotNull(plugin.skillProviders()) {
+                "Plugin '${plugin.id}' returned a null skillProviders list"
+            }.forEachIndexed { providerIndex, provider ->
+                val nonNullProvider = requireNotNull(provider) {
+                    "Plugin '${plugin.id}' returned a null skill provider at index $providerIndex"
+                }
+                accumulator.addSkills(
+                    contributedSkills = nonNullProvider.skills(),
+                    source = "plugin '${plugin.id}'.skillProviders()[$providerIndex]",
+                    providerSource = nonNullProvider.source
+                )
+            }
+        }
+        customProvider?.let { provider ->
+            accumulator.addSkills(
+                contributedSkills = provider.skills(),
+                source = "custom skillProvider()",
+                providerSource = provider.source
+            )
+        }
+        plugins.forEach { plugin ->
+            accumulator.addSkills(
+                contributedSkills = plugin.skills(),
+                source = "plugin '${plugin.id}'.skills()"
+            )
+        }
+    }
+}
+
 /**
  * Default number of model/tool iterations allowed for one run.
  *
@@ -611,3 +736,6 @@ private fun incompleteResponseRetryPrompt(partialContent: String): String {
 
 private fun transcriptPreparationFailureMessage(error: Throwable): String =
     "Transcript preparation failed: ${error.message ?: error::class.java.name}"
+
+private fun skillAssemblyFailureMessage(error: Throwable): String =
+    "Skill assembly failed: ${error.message ?: error::class.java.name}"

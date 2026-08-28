@@ -2,8 +2,8 @@
 
 `pi-agent-skill-runtime-android` 让宿主把"skill"做成 App 私有目录里的 SKILL.md 文件：运行时扫描、
 解析、按加载策略注入模型上下文，Agent 通过 `skill_list` / `skill_read` 工具自助发现与加载。
-第一个预制 skill 是 `agent-memory`（用户记忆捕获与回放）。核心模块 `ugk-pi-android` 公共 API 签名
-零变化（仅 `AgentRuntime.Builder` 内部改为持有 Provider 引用而非静态快照，见 D-022 勘误二）。
+第一个预制 skill 是 `agent-memory`（用户记忆捕获与回放）。`AgentRuntime.Builder` 统一组合 plugin
+dynamic providers、可选 custom provider 和 plugin-declared skills；本阶段的公共 seam/语义变化见 D-024。
 
 ## SKILL.md 规范
 
@@ -36,7 +36,7 @@ frontmatter 为手写解析，只支持扁平键值，不支持嵌套 YAML。
 
 1. `preferences.md` —— 相对 skill 目录的 `.md` 文件，适合随 skill 打包的静态资产。
 2. `memory:preferences.md` —— `别名:相对路径.md`，别名仅允许 `[a-z][a-z0-9-]*`，解析到宿主在
-   `FileBackedSkillProvider(plugins, repository, embedRoots)` 注册的命名根目录（`Map<String, File>`）。
+   `FileBackedSkillProvider(repository, embedRoots)` 注册的命名根目录（`Map<String, File>`）。
 
 命名根是通用机制，不限于记忆：任意 skill 都可引用宿主注册的任意别名根，把 skill 目录之外的**活数据**
 嵌入每轮注入。规则：
@@ -64,19 +64,29 @@ memory:rules.md`，宿主注册 `memory → <filesDir>/agent-memory`（demo 的 
 ## 运行时组成
 
 - `SkillRepository(File rootDir)`：每次 `load()` 实时扫盘（不缓存），返回 `ScannedSkill(manifest, body, status, error?)`。
-- `FileBackedSkillProvider(plugins, repository, embedRoots = emptyMap())`：合并式 `AndroidSkillProvider`。因为
-  `AgentRuntime.Builder.skillProvider(x)` 会清空 `register(plugin)` 收集的静态 skills，宿主必须把已注册
-  plugin 列表一并传入，保持原有 plugin skill 行为零变化。`embedRoots` 是命名根注册表（见"命名根嵌入"），
-  建议与 `AgentSkillRuntimePlugin(embedRoots = ...)` 传同一份 map，让 `skill_read` 的 embed 清单按正确的
-  根标注存在性。`AgentRuntime.Builder.skillProvider(x)` 持有 Provider 引用并在**每次 run 重新查询
-  `skills()`**（2026-08-27 起的语义；此前 Builder 会拍平成静态快照），因此运行期新增的文件 skill、
-  新写入的 embed 内容从下一次 run 起自动生效，无需重建 Runtime。Provider 实现须保证并发调用安全
-  （多个 session 的 run 可能并发调用 `skills()`）。
-- `LoadPolicySkillResolver(repository)`：always/indexed 无条件通过；triggered 与静态 plugin skills 走
-  `KeywordAndroidSkillResolver` 兼容语义（含 method toolName 匹配）。假设文件 skill 与静态 plugin skill
-  的 id 不碰撞；若某静态 skill 与 always/indexed 文件 skill 同 id，两者都会被无条件注入（当前无此情形）。
-- `AgentSkillRuntimePlugin`（id=`agent-skill-runtime`）：注册工具与全局 instructions；`skills()` 返回空，
-  文件 skills 由 Provider 统一供给，避免双重注入。构造参数 `embedRoots` 透传给 `skill_read`。
+- `FileBackedSkillProvider(repository, embedRoots = emptyMap())`：只负责从 `SkillRepository` 动态发现有效
+  文件 skills，并在每次 `skills()` 调用时读取命名根 embed；不收集 plugin skills。`embedRoots` 是命名根
+  注册表（见"命名根嵌入"），由 `AgentSkillRuntimePlugin(embedRoots = ...)` 同时交给 provider 与
+  `skill_read`。Provider 实现须保证并发调用安全（多个 session 的 run 可能并发调用 `skills()`）。
+- `AgentRuntime.Builder`：唯一的 skill assembly owner。`register(plugin)` 保留 plugin-declared
+  `skills()` 来源、dynamic `skillProviders()`、tools、instructions 和 lifecycle；`skillProvider(x)` 只
+  set/replace 一个 custom provider，不清空 plugin-declared skills。Runtime 每次 run 按稳定顺序组合
+  plugin dynamic providers（plugin/provider 注册顺序）、custom provider（若有）、plugin-declared
+  skills（plugin 注册顺序），其中 `plugin.skills()` 也每 run 重新查询。所有来源的 skill id 必须非空且
+  精确、区分大小写；同一 id 在同 provider、跨 provider、custom、plugin 或 file-backed 来源重复时，
+  assembly 立即以包含来源的描述失败，不进入 resolver，也不调用模型。`Foo` 与 `foo` 是两个合法 id。
+- `LoadPolicySkillResolver(repository)`：always/indexed 只对本轮 assembly 明确标记为
+  `AndroidSkillProviderSource.FILE_BACKED` 的 skill id 无条件通过；所有非 `FILE_BACKED` skills（含
+  generic dynamic、custom、plugin-declared）以及 `FILE_BACKED` 的 triggered skills 走
+  `KeywordAndroidSkillResolver` 兼容语义（含 method toolName 匹配）。Resolver 只负责选择，
+  不负责 assembly；Runtime 通过 `AndroidSkillResolutionContext.fileBackedSkillIds` 把显式文件来源传给
+  source-aware overload。Provider 默认是 `GENERIC`，文件 provider 必须显式声明 `FILE_BACKED`，resolver
+  绝不按 skill id、description 或 instructions 猜来源。因此 custom provider 即使复用 repository 中
+  always manifest 的 id，也不会被当作 file skill；直接调用三参数 overload 没有文件来源，全部按 keyword
+  语义处理。文件 repository id 与其它来源冲突时，先由 assembly 报错，resolver 不会被调用。
+- `AgentSkillRuntimePlugin`（id=`agent-skill-runtime`）：文件型 skill runtime 的完整单入口，注册工具、
+  全局 instructions 和动态 `FileBackedSkillProvider`；`skills()` 返回空以避免双重注入。构造参数
+  `embedRoots` 同时交给 provider 和 `skill_read`。
 
 工具一览：
 
@@ -96,8 +106,8 @@ memory:rules.md`，宿主注册 `memory → <filesDir>/agent-memory`（demo 的 
 <filesDir>/agent-memory/{user-profile,preferences,facts,rules}.md   # 记忆沙箱，即 "memory" 命名根
 ```
 
-demo 通过 `DemoAgentRuntimeFactory` 把 `memory → <filesDir>/agent-memory` 注册进
-`FileBackedSkillProvider` 与 `AgentSkillRuntimePlugin` 的 `embedRoots`。
+demo 通过 `DemoAgentRuntimeFactory` 把 `memory → <filesDir>/agent-memory` 传给
+`AgentSkillRuntimePlugin`；该 plugin 内部让动态 provider 与 `skill_read` 共用这份 `embedRoots`。
 
 ## 记忆分类
 

@@ -49,6 +49,23 @@ class AgentCapabilityPluginTest {
     }
 
     @Test
+    fun builderRejectsDuplicatePluginIds() {
+        val builder = AgentRuntime.Builder()
+            .llmProvider(RecordingProvider())
+            .register(LifecyclePlugin(id = "duplicate", cancellationCount = 0, closeOrder = mutableListOf()))
+
+        val error = try {
+            builder.register(LifecyclePlugin(id = "duplicate", cancellationCount = 0, closeOrder = mutableListOf()))
+            fail("Expected duplicate plugin id registration to fail")
+            error("unreachable")
+        } catch (error: IllegalArgumentException) {
+            error
+        }
+
+        assertEquals("Plugin id already registered: 'duplicate'", error.message)
+    }
+
+    @Test
     fun runtimeForwardsCancellationAndClosesEachPluginOnlyOnce() {
         val closeOrder = mutableListOf<String>()
         val first = LifecyclePlugin(id = "first", cancellationCount = 2, closeOrder = closeOrder)

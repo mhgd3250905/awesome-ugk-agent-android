@@ -4,12 +4,10 @@ import java.io.File
 import java.io.IOException
 
 /**
- * Merged [AndroidSkillProvider] that keeps plugin-provided static skills while
- * adding valid file-backed skills discovered by [SkillRepository].
- *
- * `AgentRuntime.Builder.skillProvider` replaces the static skills collected
- * from `register(plugin)`, so the host must pass the registered plugins here
- * to preserve the original plugin skill behavior unchanged.
+ * Dynamic [AndroidSkillProvider] for valid file-backed skills discovered by
+ * [SkillRepository]. Runtime capability assembly owns the merge with
+ * plugin-declared skills and other providers; this class only owns repository
+ * scanning and named-root embed reads.
  *
  * [embedRoots] registers named root directories that `x-ugk-embed-files`
  * entries may reference as `alias:file.md` (alias matching `[a-z][a-z0-9-]*`).
@@ -17,12 +15,17 @@ import java.io.IOException
  * host-registered root, which is what lets the agent-memory skill replay the
  * real memory store instead of static seed templates. Aliased entries whose
  * alias is not registered are skipped with an "unknown embed root" note.
+ *
+ * The public constructor intentionally accepts only [repository] and
+ * [embedRoots] after D-024; the former plugin-list constructor has no
+ * compatibility overload. Register [AgentSkillRuntimePlugin] when the tools,
+ * instructions, and this file-backed source must be assembled together.
  */
 class FileBackedSkillProvider(
-    private val plugins: List<AgentCapabilityPlugin>,
     private val repository: SkillRepository,
     private val embedRoots: Map<String, File> = emptyMap()
 ) : AndroidSkillProvider {
+    override val source: AndroidSkillProviderSource = AndroidSkillProviderSource.FILE_BACKED
 
     override fun skills(): List<AndroidSkill> {
         val fileSkills = repository.load()
@@ -36,7 +39,7 @@ class FileBackedSkillProvider(
                     triggers = manifest.triggers
                 )
             }
-        return fileSkills + plugins.flatMap { it.skills() }
+        return fileSkills
     }
 
     private fun buildInstructions(

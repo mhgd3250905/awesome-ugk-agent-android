@@ -5,7 +5,21 @@ interface AgentCapabilityPlugin {
 
     fun tools(): List<AgentTool>
 
+    /**
+     * Skills declared by this plugin. The Runtime queries this on every run
+     * so stateful confirmation policy can be reflected without rebuilding it.
+     */
     fun skills(): List<AndroidSkill>
+
+    /**
+     * Dynamic skill providers owned by this plugin.
+     *
+     * The plugin is retained by [AgentRuntime.Builder]; its provider list and
+     * each provider are queried on every run. The JVM default lets existing
+     * plugin implementations omit this method; it is not a claim that the
+     * complete AAR consumer ABI is unchanged.
+     */
+    fun skillProviders(): List<AndroidSkillProvider> = emptyList()
 
     /**
      * Global instructions for the runtime Agent.
