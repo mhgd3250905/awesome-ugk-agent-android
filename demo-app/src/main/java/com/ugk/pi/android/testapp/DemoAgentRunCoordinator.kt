@@ -53,6 +53,7 @@ class DemoAgentRunCoordinator(
     private var session: AgentSession? = null
     private var state = DemoRunState.initial()
     private var pendingOutcome: DemoAgentRunOutcome? = null
+    private var activeRunLifecycle: DemoAgentRunLifecycle? = null
     private var listenerOwner: Any? = null
     private var eventListener: ((AgentEvent) -> Unit)? = null
     private var finishListener: (() -> Unit)? = null
@@ -75,17 +76,20 @@ class DemoAgentRunCoordinator(
         finishListener = null
     }
 
-    fun start(
+    internal fun start(
         runtime: AgentRuntime,
         session: AgentSession,
         conversationId: String,
         message: String,
-        images: List<AgentImageContent> = emptyList()
+        images: List<AgentImageContent> = emptyList(),
+        runLifecycle: DemoAgentRunLifecycle? = null
     ): Long {
         check(job == null) { "An Agent run is already active" }
         val runId = ++generation
         this.conversationId = conversationId
         this.session = session
+        activeRunLifecycle = runLifecycle
+        runLifecycle?.onRunStarted()
         // Publish a busy snapshot synchronously. The runtime's first Started
         // event arrives asynchronously, so the composer must not briefly look
         // idle and accept a competing run.
@@ -99,6 +103,7 @@ class DemoAgentRunCoordinator(
                     val input = AgentRunInput(content = message, images = images)
                     runtime.run(runSession, input).collect { event ->
                         withContext(mainDispatcher) {
+                            runLifecycle?.onEvent(event)
                             dispatch(runId, event)
                         }
                     }
@@ -112,9 +117,11 @@ class DemoAgentRunCoordinator(
                 }
             } finally {
                 withContext(NonCancellable + mainDispatcher) {
+                    runCatching { runLifecycle?.onRunFinished() }
                     runCatching { sessionFinalizer(runSession) }
                     if (job !== launchedJob) return@withContext
                     job = null
+                    if (activeRunLifecycle === runLifecycle) activeRunLifecycle = null
                     finishListener?.invoke()
                 }
             }
@@ -128,6 +135,7 @@ class DemoAgentRunCoordinator(
     fun stop(): DemoAgentRunSnapshot {
         if (job?.isActive != true && !state.isBusy) return snapshot()
         generation++
+        runCatching { activeRunLifecycle?.onRunCancelled() }
         job?.cancel()
         state = state.cancel()
         pendingOutcome = null

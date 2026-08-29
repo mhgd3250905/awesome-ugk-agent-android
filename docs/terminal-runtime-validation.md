@@ -226,3 +226,55 @@ $env:ANDROID_SERIAL = '设备序列号'
 - Demo A/B 都通过才算双 `applicationId` 重定位；
 - Debug instrumentation 通过不等于 Release APK/AAB 通过；
 - 网络 HTTP 200 只证明该测试环境的 DNS/TLS/CA 路径正常，不代表所有网络环境。
+
+## 18. 阶段 7 Terminal/Screen capability interlock JVM 验证
+
+验证日期：2026-08-29；源码状态：`main` 分支 `9956116a96d8cebc7fd8aba778989397ee8a3a7e` 基线之上的未提交阶段 7 工作树。
+
+TDD 证据：
+
+- RED：新增 `AgentToolInterlockTest` 后，首次编译因 `AgentToolInterlock`、`AgentToolInterlockPolicy` 和 `AgentToolInterlockDecision` 尚未实现而失败；随后以最小通用 decorator/interlock 实现进入 GREEN。
+- GREEN：核心 interlock focused test、Demo capability/policy focused tests、Demo coordinator end-to-end lifecycle focused test 均通过。
+
+受影响验证命令：
+
+```powershell
+.\gradlew.bat `
+  :ugk-pi-android:testDebugUnitTest `
+  :pi-terminal-skill-android:testDebugUnitTest `
+  :pi-system-skill-android:testDebugUnitTest `
+  :demo-app:testDebugUnitTest `
+  :demo-app:compileDebugKotlin `
+  --console=plain
+```
+
+结果：`BUILD SUCCESSFUL`；测试报告为 `ugk-pi-android 122/122`、`pi-terminal-skill-android 16/16`、`pi-system-skill-android 42/42`、`demo-app 99/99`，均无 failures/errors/skipped。同时通过 `git diff --check`；目标静态门禁确认 `pi-terminal-skill-android` 不含 screen symbol，旧 screen 专用 guard、错误码和 callback 不存在，且仓库中没有 `startsWith` screen workflow 匹配。前台 `MainActivity` 与后台 `DemoScheduledTaskPromptExecutor` 均引用 `DemoScreenAutomationPolicy.isScreenWorkflowTool` 的同一精确、trim、`Locale.ROOT` 大小写不敏感 matcher。
+
+本轮未运行 assemble、设备/instrumentation、network/API 或真实 Agent 请求；因此不新增 APK、设备、Provider 和外部服务证据。
+
+## 19. 阶段 7 证据返修验证
+
+验证日期：2026-08-29；范围：仅补强 Run-scoped interlock、前后台 executor 事件流、Terminal plugin 组合顺序和 exact matcher 的 JVM 证据。
+
+TDD 证据：
+
+- `DemoScheduledTaskPromptExecutorTest` 首次 focused 编译为 RED：测试所需的 runtime/conversation/provider 注入 seam 尚不存在；接入最小 seam 后，持久化路径又暴露 Android JVM `JSONObject.put` stub，改为测试 outcome writer 后 GREEN。
+- `TerminalAgentPluginCompositionTest` 首次 focused 编译为 RED：既有 public Context 构造没有可注入的真实 `BashCommandTool` 组合 fixture；改用测试侧反射 private `Components`/primary constructor 后 GREEN，未增加新的 public/internal production constructor。
+- coordinator 生命周期和 exact matcher 属于对已有实现的独立证据复核，首次 focused 运行即 GREEN；没有为制造 RED 而回退已满足契约的生产语义。
+
+最终命令：
+
+```powershell
+.\gradlew.bat `
+  :ugk-pi-android:testDebugUnitTest `
+  :pi-terminal-skill-android:testDebugUnitTest `
+  :pi-system-skill-android:testDebugUnitTest `
+  :demo-app:testDebugUnitTest `
+  --console=plain
+
+.\gradlew.bat :demo-app:compileDebugKotlin --console=plain
+```
+
+结果：`BUILD SUCCESSFUL`；测试报告为 `ugk-pi-android 122/122`、`pi-terminal-skill-android 19/19`、`pi-system-skill-android 42/42`、`demo-app 104/104`，均无 failures/errors/skipped。`git diff --check` 通过；Terminal 模块及 runtime `AGENTS.md` 无 screen 专用符号，未发现 `startsWith("screen_")`，foreground/background 使用同一 Demo exact matcher/interlock seam。
+
+本轮未运行 assemble、设备/instrumentation、network/API、真实 Provider 或真实 Native Bash；不创建 commit、push、tag、PR。

@@ -1,8 +1,10 @@
 package com.ugk.pi.android.testapp
 
+import com.ugk.pi.android.AgentToolInterlockErrorCodes
 import com.ugk.pi.android.ToolCall
 import kotlinx.serialization.json.buildJsonObject
 import kotlinx.serialization.json.put
+import java.util.Locale
 import org.junit.Assert.assertEquals
 import org.junit.Assert.assertFalse
 import org.junit.Assert.assertTrue
@@ -10,12 +12,49 @@ import org.junit.Test
 
 class DemoScreenAutomationPolicyTest {
     @Test
-    fun screenWorkflowToolsActivatePassiveOverlayMode() {
-        assertTrue(DemoScreenAutomationPolicy.isScreenWorkflowTool("launch_android_app"))
-        assertTrue(DemoScreenAutomationPolicy.isScreenWorkflowTool("screen_perform_action"))
-        assertTrue(DemoScreenAutomationPolicy.isScreenWorkflowTool("SCREEN_READ_UI_TREE"))
-        assertFalse(DemoScreenAutomationPolicy.isScreenWorkflowTool("terminal_bash_execute"))
-        assertFalse(DemoScreenAutomationPolicy.isScreenWorkflowTool("get_android_accessibility_status"))
+    fun exactScreenWorkflowToolsAcceptCaseVariantsAndRejectAdjacentNames() {
+        val exactWorkflowTools = listOf(
+            "launch_android_app",
+            "launch_android_app_intent",
+            "screen_read_ui_tree",
+            "screen_find_ui_element",
+            "screen_perform_action",
+            "screen_capture_visual",
+            "screen_visual_gesture",
+            "screen_gesture",
+            "screen_press_key",
+            "screen_global_action"
+        )
+        assertEquals(10, exactWorkflowTools.size)
+        assertEquals(10, exactWorkflowTools.toSet().size)
+
+        exactWorkflowTools.forEach { toolName ->
+            assertTrue(DemoScreenAutomationPolicy.isScreenWorkflowTool(toolName))
+            assertTrue(
+                "uppercase variant should match: $toolName",
+                DemoScreenAutomationPolicy.isScreenWorkflowTool(toolName.uppercase(Locale.ROOT))
+            )
+        }
+
+        listOf(
+            "launch_android_app_status",
+            "launch_android_app_settings",
+            "launch_android_app_intent_status",
+            "screen_read_ui_tree_status",
+            "screen_find_ui_element_settings",
+            "screen_perform_action_status",
+            "screen_capture_visual_settings",
+            "screen_launch",
+            "screen_status",
+            "screen_settings",
+            "terminal_bash_execute",
+            "get_android_accessibility_status"
+        ).forEach { adjacentName ->
+            assertFalse(
+                "adjacent name should not match: $adjacentName",
+                DemoScreenAutomationPolicy.isScreenWorkflowTool(adjacentName)
+            )
+        }
     }
 
     @Test
@@ -47,12 +86,26 @@ class DemoScreenAutomationPolicyTest {
             )
         )
         assertEquals(
-            "已拦截终端命令：屏幕自动化期间只能使用 screen_* 工具。",
+            "当前 Run 由 capability 'android-screen-automation' 持有；请继续当前工作流，暂不切换到被阻断的 Tool。",
             DemoScreenAutomationPolicy.screenToolFailureHint(
                 toolName = "terminal_bash_execute",
-                code = "SCREEN_AUTOMATION_TERMINAL_BLOCKED",
-                recovery = null
+                code = AgentToolInterlockErrorCodes.BLOCKED,
+                recovery = null,
+                blockingCapability = "android-screen-automation"
             )
         )
+    }
+
+    @Test
+    fun genericInterlockFailureUsesTheBlockingCapabilityContract() {
+        val hint = DemoScreenAutomationPolicy.screenToolFailureHint(
+            toolName = "terminal_bash_execute",
+            code = AgentToolInterlockErrorCodes.BLOCKED,
+            recovery = null,
+            blockingCapability = "android-screen-automation"
+        )
+
+        assertTrue(hint?.contains("android-screen-automation") == true)
+        assertFalse(hint?.contains("screen_*") == true)
     }
 }

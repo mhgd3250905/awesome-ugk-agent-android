@@ -38,11 +38,17 @@ flowchart TD
 - `skills()` 注入使用约束和当前能力；
 - `agentInstructions()` 读取打包在 `assets/ugk/AGENTS.md` 的 SDK runtime `AGENTS.md`，并由 `AgentRuntime` 放在每次 `ModelRequest` 的全局 system messages 最前面；
 - 默认用 `UserConfirmationRequiredTool` 包装；
+- 可接收 Core 提供的通用 `AgentToolDecorator`；宿主 decorator 位于 confirmation wrapper 外侧，互斥时以通用 `CAPABILITY_INTERLOCKED` 结果短路，不进入确认或底层执行；
 - `cancel(callId)`/`cancelAll()` 作用于该 Plugin 持有的同一个 Tool 实例。
 - `AgentRuntime.cancelAllPlugins()` 会统一转发已注册 Plugin 的 `cancelAll()`；宿主释放 Runtime
   时先取消工作，再调用 `AgentRuntime.close()`，由 Runtime 幂等地转发 Plugin `close()`。
 - `TerminalAgentPlugin` 仍保留 `cancel(callId)` 和 `stopAllLocalHttpServers()` 作为精细控制 API，
   但宿主的通用生命周期不应再按 Terminal 类型做特殊识别。
+
+Terminal 与其它高影响 capability 的互斥由宿主组合层持有。Demo 的单一 workflow matcher
+在 foreground `MainActivity` 与 background `DemoScheduledTaskPromptExecutor` 之间复用；每个
+Run 首次进入 workflow 后保持 ownership，直到 Completed、Failed、cancel 或统一 `finally` 边界
+释放。Terminal Runtime 自身只保留 Headless Terminal 环境契约，不复制 Android automation instructions。
 
 ### 开发规范与运行时规范的边界
 

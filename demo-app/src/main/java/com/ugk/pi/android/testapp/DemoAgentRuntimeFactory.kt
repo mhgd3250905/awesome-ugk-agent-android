@@ -10,6 +10,7 @@ import com.ugk.pi.android.AgentTaskStore
 import com.ugk.pi.android.AgentSkillRuntimePlugin
 import com.ugk.pi.android.AgentSkillSeeder
 import com.ugk.pi.android.AndroidAutomationAgentPlugin
+import com.ugk.pi.android.AgentToolDecorator
 import com.ugk.pi.android.LLMProvider
 import com.ugk.pi.android.LoadPolicySkillResolver
 import com.ugk.pi.android.ModelRequest
@@ -34,7 +35,7 @@ internal object DemoAgentRuntimeFactory {
         scheduleScheduler: AgentTaskScheduler,
         confirmationPresenter: UserConfirmationDialogPresenter,
         shouldBypassConfirmation: () -> Boolean,
-        shouldBlockForScreenAutomation: () -> Boolean = { false },
+        toolDecorator: AgentToolDecorator = AgentToolDecorator.Identity,
         supportsBackgroundPromptExecution: Boolean = true,
         maxIterations: Int = DEFAULT_DEMO_MAX_ITERATIONS,
         isBackgroundRun: Boolean = false,
@@ -102,7 +103,7 @@ internal object DemoAgentRuntimeFactory {
                 TerminalAgentPlugin(
                     context = appContext,
                     shouldBypassConfirmation = shouldBypassConfirmation,
-                    shouldBlockForScreenAutomation = shouldBlockForScreenAutomation
+                    toolDecorator = toolDecorator
                 )
             )
             .register(

@@ -4,57 +4,73 @@ import android.content.Context
 import com.ugk.pi.android.AgentEvent
 import com.ugk.pi.android.AgentRunInput
 import com.ugk.pi.android.AgentRunSource
+import com.ugk.pi.android.AgentRuntime
 import com.ugk.pi.android.AgentTask
 import com.ugk.pi.android.AgentTaskAction
+import com.ugk.pi.android.AgentToolDecorator
 import com.ugk.pi.task.runtime.AgentTaskActionExecutionResult
 import com.ugk.pi.task.runtime.AgentTaskPromptExecutor
 import com.ugk.pi.task.runtime.AlarmManagerAgentTaskScheduler
 import com.ugk.pi.task.runtime.AndroidAgentTaskStore
 import kotlinx.coroutines.CancellationException
 import kotlinx.coroutines.flow.collect
-import java.util.concurrent.atomic.AtomicBoolean
 
 /** Connects the generic task runtime to this Demo's real AgentRuntime graph. */
 internal class DemoScheduledTaskPromptExecutor(
     context: Context,
-    private val processScope: DemoProcessScope = DemoProcessScope.get(context)
+    private val processScope: DemoProcessScope? = null,
+    private val conversationStoreOverride: DemoConversationStore? = null,
+    private val conversationOverride: DemoConversation? = null,
+    private val persistOutcomeOverride: ((DemoConversation, String, String) -> Unit)? = null,
+    private val isProviderConfigured: (() -> Boolean)? = null,
+    private val runtimeFactory: ((AgentToolDecorator) -> AgentRuntime)? = null
 ) : AgentTaskPromptExecutor {
     private val appContext = context.applicationContext
 
     override suspend fun execute(task: AgentTask): AgentTaskActionExecutionResult {
         val action = task.action as? AgentTaskAction.RunAgentPrompt
             ?: return failure("任务动作不是 RUN_AGENT_PROMPT。")
-        val conversationRuntime = processScope.conversationRuntime
-        val conversationStore = conversationRuntime.conversationStore
-        val conversation = conversationStore.get(task.sessionId)
+        val conversationStore = conversationStoreOverride
+            ?: if (conversationOverride == null || persistOutcomeOverride == null) {
+                (processScope ?: DemoProcessScope.get(appContext)).conversationRuntime.conversationStore
+            } else {
+                null
+            }
+        val conversation = conversationOverride ?: conversationStore?.get(task.sessionId)
             ?: return failure("找不到任务关联的会话：${task.sessionId}")
 
         val prompt = buildScheduledPrompt(task, action)
-        val configuredProvider = ApiProviderSettingsStore(appContext).activeConfig()
-        if (configuredProvider == null) {
+        val configured = isProviderConfigured?.invoke()
+            ?: (ApiProviderSettingsStore(appContext).activeConfig() != null)
+        if (!configured) {
             val message = "定时任务未执行：请先在设置中配置 API 源。"
             persistOutcome(conversationStore, conversation, prompt, message)
             return failure(message)
         }
 
-        val screenAutomationActive = AtomicBoolean(false)
-        val runtime = DemoAgentRuntimeFactory.create(
-            context = appContext,
-            scheduleStore = AndroidAgentTaskStore(appContext),
-            scheduleScheduler = AlarmManagerAgentTaskScheduler(appContext),
-            confirmationPresenter = HeadlessConfirmationDialogPresenter,
-            shouldBypassConfirmation = {
-                AgentAuthorizationSettingsStore(appContext).isFullAuthorizationEnabled()
-            },
-            shouldBlockForScreenAutomation = { screenAutomationActive.get() },
-            supportsBackgroundPromptExecution = true,
-            maxIterations = BACKGROUND_MAX_ITERATIONS,
-            isBackgroundRun = true
+        val capabilityInterlock = DemoCapabilityInterlock(
+            DemoScreenAutomationPolicy::isScreenWorkflowTool
         )
+        val toolDecorator = capabilityInterlock.toolDecorator()
+        val runtime = runtimeFactory?.invoke(toolDecorator)
+            ?: DemoAgentRuntimeFactory.create(
+                context = appContext,
+                scheduleStore = AndroidAgentTaskStore(appContext),
+                scheduleScheduler = AlarmManagerAgentTaskScheduler(appContext),
+                confirmationPresenter = HeadlessConfirmationDialogPresenter,
+                shouldBypassConfirmation = {
+                    AgentAuthorizationSettingsStore(appContext).isFullAuthorizationEnabled()
+                },
+                toolDecorator = toolDecorator,
+                supportsBackgroundPromptExecution = true,
+                maxIterations = BACKGROUND_MAX_ITERATIONS,
+                isBackgroundRun = true
+            )
 
         var completedContent: String? = null
         var failureMessage: String? = null
         try {
+            capabilityInterlock.onRunStarted()
             val session = createDemoAgentSession(conversation)
             runtime.run(
                 session = session,
@@ -65,27 +81,20 @@ internal class DemoScheduledTaskPromptExecutor(
                     visibleInConversation = true
                 )
             ).collect { event ->
+                capabilityInterlock.onEvent(event)
                 when (event) {
                     is AgentEvent.Completed -> completedContent = event.content
                     is AgentEvent.Failed -> failureMessage = event.message
-                    is AgentEvent.ToolStarted -> {
-                        if (event.call.name.startsWith("screen_")) {
-                            screenAutomationActive.set(true)
-                        }
-                    }
-                    is AgentEvent.ToolFinished -> {
-                        if (event.result.name.startsWith("screen_")) {
-                            screenAutomationActive.set(false)
-                        }
-                    }
                     else -> Unit
                 }
             }
         } catch (error: CancellationException) {
+            capabilityInterlock.onRunCancelled()
             throw error
         } catch (error: Throwable) {
             failureMessage = error.message ?: error::class.java.simpleName
         } finally {
+            capabilityInterlock.onRunFinished()
             runtime.close()
         }
 
@@ -101,18 +110,23 @@ internal class DemoScheduledTaskPromptExecutor(
     }
 
     private fun persistOutcome(
-        store: DemoConversationStore,
+        store: DemoConversationStore?,
         original: DemoConversation,
         prompt: String,
         result: String
     ) {
+        persistOutcomeOverride?.invoke(original, prompt, result)
+        if (persistOutcomeOverride != null) return
+        val resolvedStore = requireNotNull(store) {
+            "DemoScheduledTaskPromptExecutor requires a conversation store when no outcome writer is supplied"
+        }
         // Reload before writing so an Activity-side message added while the
         // background run was in flight is not overwritten by an old snapshot.
-        val conversation = store.get(original.id) ?: original
+        val conversation = resolvedStore.get(original.id) ?: original
         conversation.messages += DemoStoredMessage("user", prompt)
         conversation.messages += DemoStoredMessage("assistant", result)
         conversation.updatedAt = System.currentTimeMillis()
-        store.saveAndFlush(conversation)
+        resolvedStore.saveAndFlush(conversation)
     }
 
     private fun buildScheduledPrompt(

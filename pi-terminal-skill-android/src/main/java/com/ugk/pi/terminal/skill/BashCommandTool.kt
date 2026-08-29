@@ -4,6 +4,7 @@ import android.content.Context
 import com.ugk.pi.android.AgentCapabilityPlugin
 import com.ugk.pi.android.AgentConfirmationPolicy
 import com.ugk.pi.android.AgentTool
+import com.ugk.pi.android.AgentToolDecorator
 import com.ugk.pi.android.AndroidSkill
 import com.ugk.pi.android.AndroidSkillMethod
 import com.ugk.pi.android.ToolCall
@@ -14,6 +15,7 @@ import com.ugk.pi.terminal.runtime.BashCommandExecutor
 import com.ugk.pi.terminal.runtime.BashCommandRequest
 import com.ugk.pi.terminal.runtime.BashCommandResult
 import com.ugk.pi.terminal.runtime.BashRuntime
+import com.ugk.pi.terminal.runtime.LocalHttpServerController
 import com.ugk.pi.terminal.runtime.LocalHttpServerManager
 import java.io.File
 import java.io.IOException
@@ -68,52 +70,28 @@ data class TerminalToolPolicy(
     }
 }
 
-/**
- * Prevents a terminal call from taking over an active Android screen
- * automation workflow. The guard is deliberately outside the confirmation
- * wrapper so a blocked call returns immediately without showing a dialog or
- * starting a Bash process.
- */
-internal class ScreenAutomationTerminalGuard(
-    private val delegate: AgentTool,
-    private val shouldBlock: () -> Boolean
-) : AgentTool {
-    override val name: String = delegate.name
-    override val description: String =
-        "${delegate.description} Do not use this tool during Android screen automation; use the screen_* tools instead."
-    override val inputSchema = delegate.inputSchema
-
-    override suspend fun execute(call: ToolCall, context: ToolExecutionContext): ToolResult {
-        if (!shouldBlock()) return delegate.execute(call, context)
-
-        val message =
-            "Terminal execution is blocked while Android screen automation is active. " +
-                "Read the screen again with screen_read_ui_tree or screen_find_ui_element " +
-                "and use screen_perform_action; do not use terminal_bash_execute to operate Android."
-        return ToolResult(
-            toolCallId = call.id,
-            name = name,
-            content = message,
-            isError = true,
-            metadata = buildJsonObject {
-                put("code", "SCREEN_AUTOMATION_TERMINAL_BLOCKED")
-                put("message", message)
-            }
-        )
-    }
-}
-
 /** Registers Bash with the Agent SDK without adding a terminal UI. */
-class TerminalAgentPlugin(
-    context: Context,
+class TerminalAgentPlugin private constructor(
     private val policy: TerminalToolPolicy = TerminalToolPolicy(),
     private val shouldBypassConfirmation: () -> Boolean = { false },
-    private val shouldBlockForScreenAutomation: () -> Boolean = { false }
+    private val toolDecorator: AgentToolDecorator = AgentToolDecorator.Identity,
+    private val components: Components
 ) : AgentCapabilityPlugin {
-    private val runtimeAgentInstructions = TerminalAgentInstructions.load(context)
-    private val runtime = BashRuntime(context)
-    private val localHttpServerManager = LocalHttpServerManager(runtime)
-    private val terminalTool = BashCommandTool(runtime, runtime.defaultWorkspace(), policy)
+    constructor(
+        context: Context,
+        policy: TerminalToolPolicy = TerminalToolPolicy(),
+        shouldBypassConfirmation: () -> Boolean = { false },
+        toolDecorator: AgentToolDecorator = AgentToolDecorator.Identity
+    ) : this(
+        policy = policy,
+        shouldBypassConfirmation = shouldBypassConfirmation,
+        toolDecorator = toolDecorator,
+        components = createComponents(context, policy)
+    )
+
+    private val runtimeAgentInstructions = components.runtimeAgentInstructions
+    private val localHttpServerController = components.localHttpServerController
+    private val terminalTool = components.terminalTool
     private val confirmationWrappedTerminalTool: AgentTool = if (policy.requireUserConfirmation) {
         UserConfirmationRequiredTool(
             terminalTool,
@@ -122,19 +100,22 @@ class TerminalAgentPlugin(
     } else {
         terminalTool
     }
-    private val exposedTool: AgentTool = ScreenAutomationTerminalGuard(
-        delegate = confirmationWrappedTerminalTool,
-        shouldBlock = shouldBlockForScreenAutomation
+    private val exposedTool: AgentTool = toolDecorator.decorate(confirmationWrappedTerminalTool)
+    private val localHttpServerStartTool: AgentTool = toolDecorator.decorate(
+        UserConfirmationRequiredTool(
+            LocalHttpServerStartTool(localHttpServerController),
+            shouldBypassConfirmation = shouldBypassConfirmation
+        )
     )
-    private val localHttpServerStartTool: AgentTool = UserConfirmationRequiredTool(
-        LocalHttpServerStartTool(localHttpServerManager),
-        shouldBypassConfirmation = shouldBypassConfirmation
+    private val localHttpServerStopTool: AgentTool = toolDecorator.decorate(
+        UserConfirmationRequiredTool(
+            LocalHttpServerStopTool(localHttpServerController),
+            shouldBypassConfirmation = shouldBypassConfirmation
+        )
     )
-    private val localHttpServerStopTool: AgentTool = UserConfirmationRequiredTool(
-        LocalHttpServerStopTool(localHttpServerManager),
-        shouldBypassConfirmation = shouldBypassConfirmation
+    private val localHttpServerStatusTool: AgentTool = toolDecorator.decorate(
+        LocalHttpServerStatusTool(localHttpServerController)
     )
-    private val localHttpServerStatusTool: AgentTool = LocalHttpServerStatusTool(localHttpServerManager)
 
     override val id: String = "terminal-bash"
 
@@ -156,10 +137,6 @@ class TerminalAgentPlugin(
 
     override fun agentInstructions(): List<String> = buildList {
         add(runtimeAgentInstructions)
-        add(
-            "During Android screen automation, terminal_bash_execute is blocked. " +
-                "After a screen tool failure, read the screen again before taking another Android action."
-        )
         if (shouldBypassConfirmation()) {
             add(AgentConfirmationPolicy.FULL_AUTHORIZATION_AGENT_INSTRUCTION)
         }
@@ -172,11 +149,29 @@ class TerminalAgentPlugin(
     override fun cancelAll(): Int = terminalTool.cancelAll()
 
     /** Stops services owned by this plugin instance when the host is shutting down. */
-    fun stopAllLocalHttpServers(): Int = localHttpServerManager.stopAll()
+    fun stopAllLocalHttpServers(): Int = localHttpServerController.stopAll()
 
     /** Releases Runtime-managed local services owned by this plugin instance. */
     override fun close() {
-        localHttpServerManager.close()
+        localHttpServerController.stopAll()
+    }
+
+    private data class Components(
+        val runtimeAgentInstructions: String,
+        val terminalTool: BashCommandTool,
+        val localHttpServerController: LocalHttpServerController
+    )
+
+    private companion object {
+        fun createComponents(context: Context, policy: TerminalToolPolicy): Components {
+            val runtimeAgentInstructions = TerminalAgentInstructions.load(context)
+            val runtime = BashRuntime(context)
+            return Components(
+                runtimeAgentInstructions = runtimeAgentInstructions,
+                terminalTool = BashCommandTool(runtime, runtime.defaultWorkspace(), policy),
+                localHttpServerController = LocalHttpServerManager(runtime)
+            )
+        }
     }
 }
 

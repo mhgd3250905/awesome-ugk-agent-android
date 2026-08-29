@@ -31,6 +31,7 @@ import android.widget.TextView
 import com.ugk.pi.android.AgentEvent
 import com.ugk.pi.android.AgentRuntime
 import com.ugk.pi.android.AgentSession
+import com.ugk.pi.android.AgentToolInterlockErrorCodes
 import android.Manifest
 import android.content.pm.PackageManager
 import android.graphics.BitmapFactory
@@ -54,7 +55,6 @@ import kotlinx.coroutines.launch
 import kotlinx.coroutines.withContext
 import java.text.DateFormat
 import java.util.Date
-import java.util.concurrent.atomic.AtomicBoolean
 
 class MainActivity : Activity() {
 
@@ -80,7 +80,8 @@ class MainActivity : Activity() {
         }
     private var runState: DemoRunState = DemoRunState.initial()
     private var activityResumed = false
-    private val screenAutomationActive = AtomicBoolean(false)
+    private val capabilityInterlock: DemoCapabilityInterlock
+        get() = conversationRuntime.capabilityInterlock
     private val activityToken = Any()
     private var overlayPermissionDialog: AlertDialog? = null
     private val confirmationPresenter by lazy {
@@ -962,7 +963,7 @@ class MainActivity : Activity() {
             shouldBypassConfirmation = {
                 authorizationStore.isFullAuthorizationEnabled()
             },
-            shouldBlockForScreenAutomation = { screenAutomationActive.get() },
+            toolDecorator = capabilityInterlock.toolDecorator(),
             // The Demo now owns a real Application-level executor used by
             // JobScheduler when RUN_AGENT_PROMPT reaches its trigger time.
             supportsBackgroundPromptExecution = true
@@ -1174,7 +1175,8 @@ class MainActivity : Activity() {
             session = session,
             conversationId = activeConversation.id,
             message = message,
-            images = imageContents
+            images = imageContents,
+            runLifecycle = capabilityInterlock
         )
         runState = runCoordinator.snapshot().state
         renderRunState()
@@ -1192,6 +1194,7 @@ class MainActivity : Activity() {
             }
         )
         runState = snapshot.state
+        setScreenAutomationActive(capabilityInterlock.isCapabilityOwned())
         runCoordinator
             .consumePendingOutcome(activeConversation.id)
             ?.event
@@ -1270,12 +1273,18 @@ class MainActivity : Activity() {
             }
             is AgentEvent.ToolFinished -> {
                 val resultCode = event.result.metadata["code"]
-                // 屏幕工具错误恢复与日志
                     ?.toString()
                     ?.trim('"')
                     ?.takeIf { it.isNotBlank() }
                 if (event.result.isError && resultCode != null) {
-                    floatingWindow.addLog("屏幕工具错误码：$resultCode")
+                    val label = if (resultCode == AgentToolInterlockErrorCodes.BLOCKED) {
+                        "能力互斥错误码"
+                    } else if (DemoScreenAutomationPolicy.isScreenWorkflowTool(event.result.name)) {
+                        "屏幕工具错误码"
+                    } else {
+                        "工具错误码"
+                    }
+                    floatingWindow.addLog("$label：$resultCode")
                 }
                 if (event.result.isError) {
                     val recovery = event.result.metadata["recovery"]
@@ -1285,7 +1294,11 @@ class MainActivity : Activity() {
                     DemoScreenAutomationPolicy.screenToolFailureHint(
                         toolName = event.result.name,
                         code = resultCode,
-                        recovery = recovery
+                        recovery = recovery,
+                        blockingCapability = event.result.metadata["blockingCapability"]
+                            ?.toString()
+                            ?.trim('"')
+                            ?.takeIf { it.isNotBlank() }
                     )?.let(floatingWindow::addLog)
                 }
                 val resultLabel = if (event.result.isError) "失败" else "成功"
@@ -1586,7 +1599,6 @@ class MainActivity : Activity() {
     }
 
     private fun setScreenAutomationActive(active: Boolean) {
-        screenAutomationActive.set(active)
         floatingWindow.setExternalAutomationMode(active)
     }
 

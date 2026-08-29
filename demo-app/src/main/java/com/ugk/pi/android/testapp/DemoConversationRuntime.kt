@@ -39,6 +39,9 @@ class DemoConversationRuntime private constructor(
     val runCoordinator: DemoAgentRunCoordinator = DemoAgentRunCoordinator(
         mainDispatcher = mainDispatcher
     )
+    internal val capabilityInterlock: DemoCapabilityInterlock = DemoCapabilityInterlock(
+        DemoScreenAutomationPolicy::isScreenWorkflowTool
+    )
 
     var session: AgentSession? = null
     var activeConversationId: String? = null

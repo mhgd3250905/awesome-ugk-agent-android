@@ -1,8 +1,10 @@
 package com.ugk.pi.android.testapp
 
+import com.ugk.pi.android.AgentToolInterlockErrorCodes
 import com.ugk.pi.android.ToolCall
 import kotlinx.serialization.json.contentOrNull
 import kotlinx.serialization.json.jsonPrimitive
+import java.util.Locale
 
 /**
  * Tool names that indicate the Agent has entered an Android screen workflow.
@@ -24,10 +26,10 @@ internal object DemoScreenAutomationPolicy {
     )
 
     fun isScreenWorkflowTool(name: String): Boolean =
-        name.trim().lowercase() in screenWorkflowTools
+        name.trim().lowercase(Locale.ROOT) in screenWorkflowTools
 
     /** Safe compact diagnostics; user-entered text is intentionally omitted. */
-    fun screenToolCallDetail(call: ToolCall): String = when (call.name.trim().lowercase()) {
+    fun screenToolCallDetail(call: ToolCall): String = when (call.name.trim().lowercase(Locale.ROOT)) {
         "screen_read_ui_tree" -> " [snapshot=read]"
         "screen_find_ui_element" -> " [snapshot=find]"
         "screen_capture_visual" -> " [visual=observe]"
@@ -49,14 +51,15 @@ internal object DemoScreenAutomationPolicy {
         else -> ""
     }
 
-    /** Keeps snapshot failures distinct from the separate terminal guard. */
+    /** Keeps snapshot failures distinct from the generic capability interlock. */
     fun screenToolFailureHint(
         toolName: String,
         code: String?,
-        recovery: String?
+        recovery: String?,
+        blockingCapability: String? = null
     ): String? {
-        val isTerminalBlock = code == "SCREEN_AUTOMATION_TERMINAL_BLOCKED"
-        if (!isScreenWorkflowTool(toolName) && !isTerminalBlock) return null
+        val isInterlock = code == AgentToolInterlockErrorCodes.BLOCKED
+        if (!isScreenWorkflowTool(toolName) && !isInterlock) return null
         return when (code) {
             "SNAPSHOT_REQUIRED" ->
                 "屏幕操作未执行：缺少最新 UI 快照。下一步必须先读取屏幕，再使用返回的 snapshotId 和 nodeId。"
@@ -75,8 +78,8 @@ internal object DemoScreenAutomationPolicy {
             "VISUAL_SCREENSHOT_TIMEOUT",
             "VISUAL_SCREENSHOT_UNSUPPORTED" ->
                 "视觉屏幕操作未执行：请重新获取屏幕视觉观察，不要复用旧截图或猜测坐标。"
-            "SCREEN_AUTOMATION_TERMINAL_BLOCKED" ->
-                "已拦截终端命令：屏幕自动化期间只能使用 screen_* 工具。"
+            AgentToolInterlockErrorCodes.BLOCKED ->
+                "当前 Run 由 capability '${blockingCapability ?: "another capability"}' 持有；请继续当前工作流，暂不切换到被阻断的 Tool。"
             else -> recovery?.takeIf { it.isNotBlank() }
                 ?: "屏幕工具执行失败：请重新读取屏幕并根据最新快照继续。"
         }

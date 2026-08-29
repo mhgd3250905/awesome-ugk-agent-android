@@ -1,7 +1,6 @@
 package com.ugk.pi.terminal.skill
 
 import com.ugk.pi.android.ToolCall
-import com.ugk.pi.android.AgentTool
 import com.ugk.pi.android.ToolExecutionContext
 import com.ugk.pi.terminal.runtime.BashCommandExecutor
 import com.ugk.pi.terminal.runtime.BashCommandRequest
@@ -27,45 +26,6 @@ import org.junit.Test
 import kotlinx.coroutines.runBlocking
 
 class BashCommandToolTest {
-    @Test
-    fun screenAutomationGuardBlocksBeforeConfirmationOrExecution() = runBlocking {
-        var blocked = true
-        var delegateCalled = false
-        val delegate = object : AgentTool {
-            override val name: String = "terminal_bash_execute"
-            override val description: String = "delegate"
-            override val inputSchema = kotlinx.serialization.json.JsonObject(emptyMap())
-
-            override suspend fun execute(
-                call: ToolCall,
-                context: ToolExecutionContext
-            ): com.ugk.pi.android.ToolResult {
-                delegateCalled = true
-                return com.ugk.pi.android.ToolResult(call.id, name, "delegate")
-            }
-        }
-        val guard = ScreenAutomationTerminalGuard(delegate) { blocked }
-        val call = ToolCall(
-            id = "guarded-call",
-            name = guard.name,
-            input = buildJsonObject { put("script", "printf blocked") }
-        )
-
-        val blockedResult = guard.execute(call, ToolExecutionContext(sessionId = "session"))
-
-        assertTrue(blockedResult.isError)
-        assertEquals(
-            "SCREEN_AUTOMATION_TERMINAL_BLOCKED",
-            blockedResult.metadata["code"]?.toString()?.trim('"')
-        )
-        assertFalse(delegateCalled)
-
-        blocked = false
-        val allowedResult = guard.execute(call.copy(id = "allowed-call"), ToolExecutionContext(sessionId = "session"))
-        assertFalse(allowedResult.isError)
-        assertTrue(delegateCalled)
-    }
-
     @Test
     fun terminalSkillRequiresAnExactBoundConfirmationTarget() {
         val instructions = terminalBashSkill().instructions
