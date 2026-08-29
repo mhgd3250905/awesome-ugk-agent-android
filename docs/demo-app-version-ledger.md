@@ -39,7 +39,7 @@
 
 - 实现 checkpoint：`af5b0b7075dd8a201dbfd857987521f7b0d3470a`（`feat(demo-app): refine conversation visual hierarchy`）。
 - 用户消息统一为右侧主题绿气泡；AI 回复统一为左侧 Light 白色/Dark 深灰中性气泡；顶栏、composer、设置页、过程/工具证据和悬浮窗共享同一套 Light/Dark 语义 Token。
-- 使用透明猫头鹰资产统一 launcher、助手头像、空状态和悬浮窗入口；组件状态区分进行中、等待确认、成功、失败、危险、禁用和按压态，绿色预算不扩展到 AI 或证据层。
+- 品牌资产保持同一猫头鹰语汇：launcher 沿用原品牌图，透明变体用于 App 内助手头像、空状态和悬浮窗入口；组件状态区分进行中、等待确认、成功、失败、危险、禁用和按压态，绿色预算不扩展到 AI 或证据层。
 - 不涉及 SDK/Terminal、依赖、权限、API key 内容、版本号、远程 push/PR/release、tag 或外部台账。
 
 #### 验收证据与边界
