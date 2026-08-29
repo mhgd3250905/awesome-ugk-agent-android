@@ -8,7 +8,7 @@
 
 ## 当前文档治理规则
 
-本目录只保留一套当前事实源。过程性记录、已过期计划和历史测试明细进入 `archive/`，保留证据但不得被当作当前状态引用。
+本目录只保留一套当前事实源。过程性记录、已过期计划和历史测试明细进入 `archive/`；必须保留在原路径的历史快照，须在文首或相关章节明确标注为历史/已 superseded，并不得被当作当前状态引用。
 
 ### 事实优先级
 
@@ -16,6 +16,7 @@
 2. **本目录下的规范文档**：对源码事实进行解释、归纳和规划。
 3. **模块 README 和 `AGENTS.md`**：面向接入者/新会话的入口，不能与规范文档冲突。
 4. **`docs/archive/`**：历史证据，仅用于追溯。
+5. **当前目录内明确标注的历史/已 superseded 章节或快照**：仅用于追溯，不得覆盖当前事实源。
 
 如果文档与源码/测试结果冲突，先修正文档；如果源码与目标决策冲突，先暂停扩展并新增决策记录，不用文字掩盖实现偏差。
 
@@ -44,7 +45,12 @@
 | [android-agent-skills.md](android-agent-skills.md) | 文件型 SKILL.md 运行时、动态加载策略、命名根嵌入和 agent-memory |
 | [sdk-optimization-ledger.md](sdk-optimization-ledger.md) | SDK 架构优化步骤、验证结果和版本影响台账 |
 | [sdk-core-consumer-contract.md](sdk-core-consumer-contract.md) | Core AAR 外部消费边界、版本策略和 API/ABI gate 触发条件 |
-| [sdk-stabilization-baseline.md](sdk-stabilization-baseline.md) | SDK 稳定化测试期、版本封存点、验证快照和退出条件 |
+
+## 历史快照（保留原文件，不作为当前事实源）
+
+| 文件 | 角色 |
+|---|---|
+| [sdk-stabilization-baseline.md](sdk-stabilization-baseline.md) | 截至 2026-08-14 的 SDK 稳定化测试期快照；已被当前 `0.7.1` 保存点 superseded |
 
 ## 快速阅读顺序
 
@@ -67,13 +73,14 @@
 - **部分验证**：部分 ABI/API/page size/构建形态通过，不能泛化到未覆盖范围。
 - **待验证**：已设计测试但没有可接受证据。
 - **明确不支持**：当前 scope 明确排除，不得通过“系统恰好有命令”推断可用。
-- **历史**：只存在于 `archive/`，不能用于更新当前状态。
+- **历史**：只存在于 `archive/`，或在当前目录内明确标注为历史/已 superseded；不能用于更新当前状态。
 
 ## 维护规范
 
 - 每次修改 v1 scope、打包方式、权限/安全边界或 Gate 退出条件，必须更新 `terminal-runtime-decisions.md`。
 - 每次测试记录日期、源码 commit/工作树状态、API、ABI、page size、命令、结果和限制。
 - 测试数量必须来自最新 XML/Gradle 输出，不手工沿用旧记录中的 `4 tests`、`7/7` 等数字。
+- 如果历史文件必须保留原路径，必须明确标注历史/已 superseded，并从“当前规范文档”列表中移除。
 - 新增大型 Runtime 前先记录体积、许可证、CVE、原生扩展和兼容矩阵，不直接加入 Core。
 - `runtime-lock.json` 中的构建容器只能作为构建工具记录；不得把构建镜像中的 Node 误写成 v1 Runtime 能力。
 - 旧文档不直接删除；如果不再是当前事实源，移动到 `archive/YYYY-MM-DD/` 并加归档声明。

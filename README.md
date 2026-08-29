@@ -57,13 +57,16 @@ Windows PowerShell：
 - [`docs/terminal-runtime-decisions.md`](docs/terminal-runtime-decisions.md)：正式决策；
 - [`docs/terminal-runtime-release-checklist.md`](docs/terminal-runtime-release-checklist.md)：发布清单；
 - [`docs/demo-app-ui-redesign.md`](docs/demo-app-ui-redesign.md)：demo-app 聊天、过程、输入和悬浮窗的当前交互基线与验收记录；
-- [`docs/demo-app-version-ledger.md`](docs/demo-app-version-ledger.md)：demo-app 版本、变更和验收台账。
+- [`docs/demo-app-version-ledger.md`](docs/demo-app-version-ledger.md)：demo-app 版本、变更和验收台账；
+- [`docs/android-accessibility-screen-automation.md`](docs/android-accessibility-screen-automation.md)：Android Accessibility 屏幕自动化 Tool/Skill、宿主接入和验证边界；
+- [`docs/android-clipboard.md`](docs/android-clipboard.md)：Android 文本剪贴板 Tool/Skill、确认策略、隐私和 API 限制。
 - [`docs/android-scheduled-tasks.md`](docs/android-scheduled-tasks.md)：定时任务控制面、Android 运行时适配、能力边界和验收方法。
 - [`docs/android-agent-skills.md`](docs/android-agent-skills.md)：文件型 Skill、命名根嵌入、动态加载和 agent-memory 事实源。
 - [`docs/sdk-optimization-ledger.md`](docs/sdk-optimization-ledger.md)：SDK 架构整改阶段、checkpoint、验证与遗留边界。
 - [`docs/sdk-core-consumer-contract.md`](docs/sdk-core-consumer-contract.md)：当前 Core AAR 外部消费和 API/ABI 证据边界。
 
-历史过程记录保存在 [`docs/archive/`](docs/archive/) 中，不作为当前状态依据。
+历史过程记录保存在 [`docs/archive/`](docs/archive/) 中；仍需保留原路径但已降级为历史快照的文件，以
+[`docs/README.md`](docs/README.md) 的“历史快照”清单为准，不作为当前状态依据。
 
 持续开发台账：[awesome-ugk-agent-android-ledger](https://github.com/mhgd3250905/awesome-ugk-agent-android-ledger)。
 

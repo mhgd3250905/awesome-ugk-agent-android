@@ -1,11 +1,13 @@
 # awesome-ugk-agent-android 项目交接文档 (Handover Document)
 
-> **最新保存版本**：`0.7.1` (`versionCode 9`，架构稳定化 patch)
-> **最近已保存标签**：`demo-app-v0.7.1`（本地；本轮未 push）
-> **当前接手基线**：架构整改实现 checkpoint `9268bc2`，阶段 8 closeout `885c1e9`；`0.7.1` 保存点见当前 `main`
+> **Demo 0.7.1 版本**：`versionCode 9`（架构稳定化 patch）
+> **0.7.1 版本保存点**：commit `b2c14fdc091207c5aab2f00e365c6e2b0f5d7e01`（`demo-app-v0.7.1`）
+> **架构整改实现 checkpoint**：`9268bc2`
+> **阶段 8 文档/验证 closeout**：`885c1e9`
 > **分支**：`main`  
 > **交接时间**：2026-08-29
 > **工作区**：`E:\AII\ugk-android-new`
+> **0.7.1 版本标签**：`demo-app-v0.7.1`（本地）
 > **目标真机**：小米设备 `QSG6Q8IFDMDELVGQ`、第二台小米 `e0b93f2f`（型号 `2304FPN6DC`）
 > **注意**：设备列表中若有三星手机（`R5CRB11B2AW`），**严禁对其执行任何操作**，唯一下发与调试设备为小米手机。
 >
@@ -16,14 +18,14 @@
 ## 0. 2026-08-29 架构整改收束（当前事实）
 
 - 快速迭代后的模块化审查已完成计划中的 7 个实现阶段，并形成 9 个本地 checkpoint：Runtime 生命周期、设置领域/UI、上下文档位、Provider profile、进程/悬浮窗 ownership、conversation runtime、Session transcript、capability assembly、Terminal/Screen host interlock 均已形成明确单一 owner。
-- 架构整改实现 checkpoint 顺序为 `1409610`、`ccc76c9`、`20b2b60`、`f20bee7`、`1003cc1`、`74dd2ff`、`47964b5`、`9956116`、`9268bc2`，阶段 8 文档/验证收束为 `885c1e9`；随后按 patch 规则保存 `0.7.1 / versionCode 9`，本轮不 push、不创建 PR。
+- 架构整改实现 checkpoint 顺序为 `1409610`、`ccc76c9`、`20b2b60`、`f20bee7`、`1003cc1`、`74dd2ff`、`47964b5`、`9956116`、`9268bc2`，阶段 8 文档/验证收束为 `885c1e9`；随后按 patch 规则保存 `0.7.1 / versionCode 9`，该保存点不代表远程 PR 或 Release。
 - 2026-08-29 本机收束：八模块 JVM `271/271`、Demo JVM `104/104`；Demo Debug、五个关键 Release AAR、两个 Probe Release APK、Terminal Runtime 静态/哈希/AAR/APK/zipalign 验收均通过。
 - `verify-runtime.ps1` 修复了 `zh-CN` 下文化相关文件名排序造成的 CPython extension tree 哈希误报；改为 `StringComparer.Ordinal`，没有改动二进制或锁文件。
 - 当前 Core AAR inventory 为 122 class、82 个审查口径 source-facing public type、800 个 `javap` public member。D-023/D-024 包含明确的 `0.x` source/semantic change；没有可信旧发布 AAR和升级 consumer，不能宣称完整 API/ABI 兼容。
-- 本轮没有执行 ADB、instrumentation、真实网络或 Provider/API。arm64 16KB、完整设备矩阵、Release AAB/split、升级、低资源、性能和许可证仍是发布 Gate。
-- 2026-08-29 已将 `885c1e9` 对应代码构建为 `0.7.0 / versionCode 8`，安装到 `QSG6Q8IFDMDELVGQ`（`2602BRT18C`）并启动；用户随后反馈当前测试无明显问题。因旧设备上的 `0.6.0` 使用不同签名，本次按用户明确授权先卸载再安装，旧 App 本地数据已清除。`0.7.1` 只改变版本元数据和文档，本轮不重复设备验证。
-- `0.7.1 / versionCode 9` 更新后全工程 JVM XML `375/375`、`:demo-app:assembleDebug` 与 APK metadata 检查通过；本地 commit/tag 构成保存边界，不 push、不发布远程 Release。
-- 以 `docs/README.md`、`docs/sdk-optimization-ledger.md`、`docs/terminal-runtime-validation.md`、`docs/terminal-runtime-decisions.md` 为当前事实源。下文 0.2—0.7 的功能记录是历史累计说明；遇到提交、测试数或路径冲突时，以本节和上述 canonical 文档为准。
+- 阶段 8 的本机静态收束没有执行 ADB、instrumentation、真实网络或 Provider/API；其后的人工真机体验见下一条。arm64 16KB、完整设备矩阵、Release AAB/split、升级、低资源、性能和许可证仍是发布 Gate。
+- 2026-08-29 已将 `885c1e9` 对应代码构建为 `0.7.0 / versionCode 8`，安装到 `QSG6Q8IFDMDELVGQ`（`2602BRT18C`）并启动；用户反馈该轮测试无明显问题。因旧设备上的 `0.6.0` 使用不同签名，本次按用户明确授权先卸载再安装，旧 App 本地数据已清除。`0.7.1` 只改变版本元数据和文档，本轮不重复设备验证。
+- `0.7.1 / versionCode 9` 更新后全工程 JVM XML `375/375`、`:demo-app:assembleDebug` 与 APK metadata 检查通过；版本保存点和标签构成版本边界，不代表远程 Release。
+- 当前文档入口与规范清单以 `docs/README.md` 为准；版本以 `docs/demo-app-version-ledger.md`，架构整改以 `docs/sdk-optimization-ledger.md`，Terminal Gate 以 `docs/terminal-runtime-baseline.md`、`docs/terminal-runtime-validation.md` 和 `docs/terminal-runtime-decisions.md` 为准。`sdk-stabilization-baseline.md` 是已 superseded 的历史快照。下文的功能和验证记录均为历史累计说明；遇到提交、测试数或路径冲突时，以本节和上述当前事实源为准。
 
 ---
 
@@ -50,7 +52,7 @@
 
 ---
 
-## 2. 最近完成的核心优化与交付成果 (0.6.0)
+## 2. 历史累计交付记录（截至 0.6.0）
 
 ### ① 多模态视觉识图交互体系
 1. **双输入源接入**：
@@ -116,7 +118,7 @@
 - Demo 已注册定时任务插件。`NOTIFY_USER` 仍用于纯提醒；`RUN_AGENT_PROMPT` 到点后由 `AgentTaskJobService` 创建无 UI 的宿主 Runtime，恢复 `sessionId` 对应会话，调用 `AgentRuntime` 完成一轮模型/Tool 执行，并把任务和结果追加回该会话。
 - 前后台共用 `DemoAgentRuntimeFactory` 的 Provider、无障碍屏幕、视觉、剪贴板和终端能力图；后台使用无 UI 的确认 Presenter。无交互确认时，受保护动作只有显式开启全授权才会执行，默认安全失败。
 - 使用普通非精确 `AlarmManager` 和系统 `JobScheduler`，不申请精确闹钟权限、不启动 Bash 常驻循环；Prompt 任务需要系统提供网络条件；Android 13+ 需要 `POST_NOTIFICATIONS`。
-- 当前保存版本为 `versionCode 6 / versionName 0.5.0`；后台 Prompt 代码已完成 JVM/编译验证，并在第二台小米 `e0b93f2f`（`2304FPN6DC`）完成安装启动和一次性 `RUN_AGENT_PROMPT` 后台唤醒/读屏体验验收，用户反馈可用。
+- 当时保存版本为 `versionCode 6 / versionName 0.5.0`；后台 Prompt 代码已完成 JVM/编译验证，并在第二台小米 `e0b93f2f`（`2304FPN6DC`）完成安装启动和一次性 `RUN_AGENT_PROMPT` 后台唤醒/读屏体验验收，用户反馈可用。
 - 版本标签为 `demo-app-v0.5.0`，与 `main` 提交一并同步到 `origin`；主目标小米 `QSG6Q8IFDMDELVGQ` 本轮离线，三星设备 `R5CRB11B2AW` 未操作。
 
 ### ⑩ 0.6.0 已保存：文件型 Skill Runtime 与 agent-memory
@@ -125,7 +127,7 @@
 - 新增 `skill_list`、`skill_read` 和 `memory_list/read/write/delete`；Skill 支持 `x-ugk-embed-files` 命名根实时嵌入，记忆限定 `user-profile`、`preferences`、`facts`、`rules` 四类，单文件上限 16KB。
 - 预制 `agent-memory` 使用 `always` 策略；`preferences`/`rules` 每次 Skill 注入时从 `memory:` 命名根实时读取，写入和删除遵循明确同意及现有确认策略。
 - `AgentRuntime.Builder.skillProvider()` 改为持有 Provider 并在每次 run 拉取，允许同一 Runtime 在下一轮读取新 Skill/新记忆；Demo 前后台共用 `DemoAgentRuntimeFactory` 接线。
-- `demo-app` 当前为 `versionCode 7 / versionName 0.6.0`，标签 `demo-app-v0.6.0` 已同步到 `origin`。最新远端没有新增未接手提交。
+- 当时 `demo-app` 为 `versionCode 7 / versionName 0.6.0`，标签 `demo-app-v0.6.0` 已同步到 `origin`。该条记录中的远端状态仅适用于当时。
 
 ---
 
@@ -139,7 +141,8 @@
 | `:demo-app` | `DemoChatViews.kt` | 消息气泡复合渲染（Text / Code / Table / Image 卡片挂载与大图查看器） |
 | `:demo-app` | `DemoMarkdownFormatter.kt` | Markwon 构建配置、流式文本预处理与行内富文本解析 |
 | `:demo-app` | `MainActivity.kt` | 聊天主界面、流式节流调度器（64ms）、附件菜单、主题切换与生命周期管理 |
-| `:demo-app` | `ThemeManager.kt` / `ApiSettings.kt` | 双主题管理（米白暖灰 / 纯净深碳灰）与多 API 源配置 |
+| `:demo-app` | `ThemeManager.kt` / `Ui.kt` | 双主题管理（米白暖灰 / 纯净深碳灰）、动态主题色彩 Token 与 UI 样式辅助 |
+| `:demo-app` | `ApiSettings.kt` | 多 API 源配置与 SharedPreferences 持久化 |
 | `:ugk-pi-android` | `AgentImageContent.kt` | 多模态图片核心数据结构（Base64 + MimeType） |
 | `:ugk-pi-android` | `AnthropicMessagesProvider.kt` | Anthropic 标准协议提供者（支持多模态 image 块与 baseUrl 自定义） |
 | `:ugk-pi-android` | `OpenAiChatCompletionsProvider.kt` | OpenAI 兼容协议提供者（支持 image_url 与 baseUrl 自定义） |
@@ -155,7 +158,9 @@
 
 ---
 
-## 4. 验证与质量基线
+## 4. 历史验证记录索引（非当前状态）
+
+> 本节保留 0.3.0—0.7.0 的累计验证记录；当前版本、测试数和 Gate 结论不从本节读取，以第 0 节和当前事实源为准。
 
 1. **自动化测试**：
    - 全工程 186 个单元测试全部通过：
@@ -168,61 +173,61 @@
    - 真机多模态实测：拍照识图、相册选图、大图查看器、智谱 GLM-5.3-Flash 视觉结构化分析全链路畅通。
    - 真机表格实测：包含 8 行 3 列的水果营养表格流式输出全过程平稳顺滑，无跳动与闪烁，横向滑动正常，深浅色模式切换完美适配。
 
-2. **本次视觉兜底实现验证（未发布）**：
+3. **本次视觉兜底实现验证（未发布）**：
    - 全量 JVM 单元测试通过；`demo-app` Debug APK 构建通过；`demo-app` 仪器测试 Kotlin 源码编译通过。
    - Debug APK 已安装到两台授权小米设备 `QSG6Q8IFDMDELVGQ` 和 `e0b93f2f`；视觉兜底尚未完成真实跨应用截图、模型识别和坐标点击验收。后续 ADB 仍只能显式指定这两台小米设备，不能触碰三星设备。
 
-3. **剪贴板 Tool/Skill 验证（0.4.0）**：
+4. **剪贴板 Tool/Skill 验证（0.4.0）**：
    - 全工程 JVM 单元测试通过，共 186 个测试、0 个失败；`demo-app` Debug APK 构建和仪器测试 Kotlin 源码编译通过。
    - 包含剪贴板能力的 Debug APK 已安装并启动于在线小米 `e0b93f2f`（`2304FPN6DC`），用户完成体验验证并反馈正常；主目标小米 `QSG6Q8IFDMDELVGQ` 当时不在线。`0.4.0` 标签已同步远端。
 
 ---
 
-4. **定时任务已保存版本（0.5.0）**：
+5. **定时任务已保存版本（0.5.0）**：
    - 后台 Prompt 执行链路已接入：`JobScheduler -> AgentTaskJobService -> DemoScheduledTaskPromptExecutor -> AgentRuntime`；前后台共用 Demo Runtime 工厂，会话结果持久化回同一会话。
    - 全工程 JVM 单元测试共 198 个、0 个失败；`:demo-app:assembleDebug` 已通过；APK 元数据为 `versionCode 6 / versionName 0.5.0`，合并 Manifest 已确认 `AgentTaskJobService`。
    - APK 已安装并启动到 `e0b93f2f`（`2304FPN6DC`），用户已完成 `RUN_AGENT_PROMPT` 后台唤醒/读屏体验测试并反馈可用；任务运行仍受网络、Doze、小米省电策略、无障碍连接和前台目标页面影响。
    - 后续 ADB 只允许显式指定两台小米设备 `QSG6Q8IFDMDELVGQ` 或 `e0b93f2f`，严禁操作三星 `R5CRB11B2AW`。
 
-5. **文件型 Skill Runtime 已保存版本（0.6.0）**：
+6. **文件型 Skill Runtime 已保存版本（0.6.0）**：
    - 远端 `6ce0d72` 完成实现，`3c61582` 完成阶段文档收尾；本地已 fast-forward 到 `3c61582`，`main` 与 `origin/main` 一致。
    - 当时接手复核：全工程 JVM 测试 XML 共 258 个，0 failures、0 errors；`:demo-app:assembleDebug` 成功；APK 元数据为 `versionCode 7 / versionName 0.6.0`。
-   - `:ugk-pi-android:bundleReleaseAar` 成功；`scripts/sdk/inspect-core-api-surface.ps1` 当时输出 `707` 个 javap public member signatures。远端 v0.6 台账记录的 `575` 与该次实际输出不一致；当前 inventory 见本文第 0 节。
-    - 远端 v0.6 台账已有 `QSG6Q8IFDMDELVGQ` 安装启动、Skill 种子和记忆捕获/回放初步验收记录；本次接手未对任何真机执行 ADB 操作。后续仍只允许显式指定两台小米序列号，严禁操作三星。
+   - `:ugk-pi-android:bundleReleaseAar` 成功；`scripts/sdk/inspect-core-api-surface.ps1` 当时输出 `707` 个 javap public member signatures。远端 v0.6 台账记录的 `575` 与该次实际输出不一致；最新 inventory 见本文第 0 节。
+   - 远端 v0.6 台账已有 `QSG6Q8IFDMDELVGQ` 安装启动、Skill 种子和记忆捕获/回放初步验收记录；本次接手未对任何真机执行 ADB 操作。后续仍只允许显式指定两台小米序列号，严禁操作三星。
 
-6. **悬浮窗收起极简优化、API 通信检测、多预设管理与平台额度查询（已在小米真机验证）**：
+7. **悬浮窗收起极简优化、API 通信检测、多预设管理与平台额度查询（已在小米真机验证）**：
    - 悬浮窗收起状态精简为单行圆润胶囊（92dp × 38dp），移除非必要的双行长标题堆叠，左侧图标与文案联动（运行中橙红 `●`、待确认黄 `⚠`、完成绿 `✓`、失败红 `✕`、就绪灰 `✦`）。
    - 新增 `ApiQuotaAndConnectivityService`：支持 Anthropic 与 OpenAI 协议轻量探活与往返延迟测算；汲取开源 `cc-switch` 经验，自动根据 Base URL 嗅探匹配 DeepSeek、硅基流动、Moonshot/Kimi、OpenRouter 等平台，自动查询解析账户剩余额度与用量。
    - `ApiSettingsDialog` UI 升级：外层包裹 `ScrollView` 防止软键盘溢出；顶部增加横向滚动预设 Chip 条，支持多 API 方案切换、新建、别名重命名与删除；增加“⚡ 检测通信与平台额度”按钮与动态卡片。
    - 全工程 JVM 测试通过；Debug APK 成功安装并在小米真机 `QSG6Q8IFDMDELVGQ` 验证。
 
-7. **API 上下文窗口与最大输出长度手动配置及全链路生效（已在小米真机验证）**：
+8. **API 上下文窗口与最大输出长度手动配置及全链路生效（已在小米真机验证）**：
    - `ApiProviderConfig` 新增 `contextWindow`（64K / 128K / 200K / 1M / 32K）与 `maxOutputTokens`（4K / 8K / 16K / 32K）字段与 `formatSpec()` 标签生成。
    - 设置弹窗新增两大项横向 Chip 选择区，支持点击秒切高亮与按配置持久化。
    - **生效链路**：`DemoAgentRuntimeFactory` 将 `maxOutputTokens` 下发至 `AnthropicMessagesProvider` 请求体，解决部分模型单次生成超限报 400 问题；`DemoActivityState` 联动 `budgetForContextWindow` 动态缩放历史消息与字符预算；`MainActivity` 顶部状态栏直观呈现 `(200K · 8K输出)`。
    - 全量 268 个 JVM 测试全部通过，APK 已部署并完成真机实测。
 
-8. **独立专用设置页面（`SettingsActivity`）升级与真机验证（已在小米真机验证）**：
+9. **独立专用设置页面（`SettingsActivity`）升级与真机验证（已在小米真机验证）**：
    - 全面由传统弹窗转变为独立全屏页面 `SettingsActivity`，包含 Edge-to-Edge 沉浸式导航栏、返回按钮、界面主题卡片、全授权模式卡片、API 预设栏、接口配置表单、上下文窗口 Chips、最大输出生成 Chips、通信检测与额度查询动态卡片，以及底部快捷操作栏。
    - 点击右上角设置按钮通过 `Intent` 切换至独立设置页，进入时自动收起悬浮窗避免遮挡；返回时 `MainActivity.onResume()` 自动同步更新主题与运行时配置。
    - 全工程 268 个 JVM 测试通过；Debug APK 成功安装并在小米真机 `QSG6Q8IFDMDELVGQ` 验证。
 
-9. **适配 GLM-5.3 与 DeepSeek-V4 旗舰标准（新增 128K 超大输出与 2M 上下文）**：
+10. **适配 GLM-5.3 与 DeepSeek-V4 旗舰标准（新增 128K 超大输出与 2M 上下文）**：
    - 单次最大输出选项扩展：`4K`、`8K (通用)`、`16K`、`32K`、`64K`、`128K (超大)`。
    - 上下文总窗口选项扩展：`64K`、`128K`、`200K`、`1M`、`2M`、`32K`。
    - 底层 `DemoActivityState.budgetForContextWindow` 动态预算深度扩容：2M 匹配 800 轮/8万字符，1M 匹配 400 轮/5万字符，128K 匹配 160 轮/2万字符。
    - `ApiContextSettingsTest` 验证 `2M · 128K输出` 完整往返序列化与多档位预算测试全部通过。
 
-10. **70% 阈值上下文自动压缩（Context Compaction）机制落地与真机部署**：
-    - 新增核心压缩引擎 [`ContextCompactor.kt`](file:///d:/AII/ugk-android/demo-app/src/main/java/com/ugk/pi/android/testapp/ContextCompactor.kt)：
+11. **70% 阈值上下文自动压缩（Context Compaction）机制落地与真机部署**：
+    - 新增核心压缩引擎 [`ContextCompactor.kt`](demo-app/src/main/java/com/ugk/pi/android/testapp/ContextCompactor.kt)：
       - **Token 估算**：中英及代码加权估算会话实时消耗；
       - **Level 1（工具输出剪枝）**：折叠历史大工具输出（首尾摘录），零 API 成本释放 40%~60% 空间；
       - **Level 2（结构化摘要提炼）**：将早期轮次转为《阶段压缩摘要》，保留最近 3~5 轮活跃对话；
       - **Level 3（原子边界校验）**：首消息保障为 `User`，杜绝孤儿 `Tool` 结果，符合各大模型协议规范。
-    - [`SettingsActivity.kt`](file:///d:/AII/ugk-android/demo-app/src/main/java/com/ugk/pi/android/testapp/SettingsActivity.kt) 新增“上下文自动压缩”卡片与 `60% / 65% / 70% (推荐) / 75% / 80%` 阈值 Chips。
+    - [`SettingsActivity.kt`](demo-app/src/main/java/com/ugk/pi/android/testapp/SettingsActivity.kt) 新增“上下文自动压缩”卡片与 `60% / 65% / 70% (推荐) / 75% / 80%` 阈值 Chips。
     - 全套单元测试（含 `ContextCompactorTest` 6 个用例与 `ApiContextSettingsTest`）全量通过，Debug APK 成功编译并部署至小米真机 `QSG6Q8IFDMDELVGQ`。
 
-11. **底部上下文占用率动态进度条与四阶色彩指示器（已在真机实测）**：
+12. **底部上下文占用率动态进度条与四阶色彩指示器（已在真机实测）**：
     - 移除底部传统文本提示（`Agent 会按需调用工具...`），换装为现代优雅的上下文监控胶囊条。
     - **细粒度四阶动态变色**：
       - `< 50%`：健康（Mint 翡翠绿）；
@@ -260,7 +265,7 @@ adb -s e0b93f2f shell am start -n com.ugk.pi.android.testapp/.MainActivity
 
 # 5. 截取真机屏幕并拉取查看；执行前必须确认目标是授权小米
 adb -s QSG6Q8IFDMDELVGQ shell screencap -p /sdcard/screen_debug.png
-adb -s QSG6Q8IFDMDELVGQ pull /sdcard/screen_debug.png C:\Users\shengk\.gemini\antigravity\brain\1a385ecb-7d18-468a-a8ee-3fd6a11f5328\screen_debug.png
+adb -s QSG6Q8IFDMDELVGQ pull /sdcard/screen_debug.png $env:TEMP\screen_debug.png
 ```
 
 ---

@@ -5,6 +5,9 @@
 版本范围：仅 `:demo-app`；SDK/AAR 模块版本继续独立维护。
 当前阶段：快速迭代后的模块化架构收敛已保存为稳定性 patch `0.7.1 / versionCode 9`。架构整改代码先以 `0.7.0` 安装到小米 `QSG6Q8IFDMDELVGQ` 并由用户完成体验测试；`0.7.1` 只改变版本元数据和收束文档，本轮不重复安装或设备测试。本地标签 `demo-app-v0.7.1` 不推送远端。
 
+> 文首元数据、版本规则和 `0.7.1` 记录描述当前保存点；其后的版本条目是不可改写的历史记录。
+> 历史条目中的“当前”仅指该条目记录时点，不是今天的版本或验证状态。
+
 ## 版本规则
 
 - `versionCode` 只递增，不因重新打包或覆盖安装回退。
@@ -24,7 +27,7 @@
 
 ### 当前证据与边界
 
-- `885c1e9` 对应代码已构建为 `0.7.0`，安装到 `QSG6Q8IFDMDELVGQ`（`2602BRT18C`）并启动；用户随后反馈当前测试无明显问题。旧设备 App 为不同签名的 `0.6.0`，按用户明确授权卸载后重新安装，因此旧 App 本地数据已清除。
+- `885c1e9` 对应代码已构建为 `0.7.0`，安装到 `QSG6Q8IFDMDELVGQ`（`2602BRT18C`）并启动；用户随后反馈该轮测试无明显问题。旧设备 App 为不同签名的 `0.6.0`，按用户明确授权卸载后重新安装，因此旧 App 本地数据已清除。
 - `0.7.1` 元数据更新后，全工程 JVM XML 合计 `375/375` 通过、0 failure/error/skipped；其中八个 SDK/Runtime 模块为 `271`，Demo 为 `104`，`ugk-terminal-runtime-android` 当前为 `NO-SOURCE`。
 - `:demo-app:assembleDebug` 成功；APK 元数据确认为 `versionCode 9 / versionName 0.7.1`。
 - `0.7.1` 本轮未重复安装、未运行 instrumentation、真实网络或 Provider/API；除版本元数据与文档外，生产行为与用户已测试的架构整改代码一致。
@@ -51,7 +54,7 @@
   - **四阶动态变色**：`< 50%` 清新翡翠绿（`Ui.Success`）、`50%~70%` 天空蓝、`70%~85%` 琥珀橙、`≥ 85%` 警戒红；
   - **实时呈现与点击直达**：展示如 `● 上下文 18% (23.5K / 128K · 70%压缩)`，点击可秒级跳转至设置页调参。
 
-### 当前证据与边界
+### 当时证据与边界
 
 - 全工程 JVM 单元测试共 274 个全部 GREEN 通过（包含 `ContextCompactorTest` 6 个用例、`ApiContextSettingsTest` 序列化与预算测试、`ApiQuotaAndConnectivityServiceTest`）；
 - `:demo-app:assembleDebug` 编译通过，APK 元数据为 `versionCode 8 / versionName 0.7.0`；
@@ -64,13 +67,13 @@
 - 新增独立模块 `pi-agent-skill-runtime-android`：SKILL.md 文件型 skill 规范（手写扁平 frontmatter 解析，标准字段 name/description + `x-ugk-load`/`x-ugk-embed-files`/`triggers` 扩展字段）、`SkillRepository` 实时扫盘、三级加载策略（always 全文常驻 / indexed 元数据桩 + `skill_read` 按需 / triggered 关键词）、`FileBackedSkillProvider` 合并式 Provider（含命名根实时嵌入，embed 内容每次 `skills()` 调用现读活数据）、`LoadPolicySkillResolver`（静态 plugin skills 行为零劣化）。
 - 新增工具：`skill_list`、`skill_read`、`memory_list/read/write/delete`；记忆沙箱限定 `filesDir/agent-memory` 四分类白名单（user-profile/preferences/facts/rules），单文件 16KB 上限；`memory_delete` 默认 `UserConfirmationRequiredTool` 包装（全授权旁路沿用既有机制）。
 - 第一个预制 skill `agent-memory`（always 策略）：捕获协议为"先在对话中征询同意 → memory_read → 合并不得丢条目 → overwrite 覆写 → 简短确认"，preferences/rules 经 `memory:` 命名根每轮实时嵌入常驻上下文，跨会话自动回放；幂等种子机制绝不覆盖已有目标。
-- 核心最小改动：`AgentRuntime.Builder.skillProvider()` 从"立即拍平静态快照"改为持有 Provider 引用、每 run 拉取（源码级公共 API 设计无新增；当前接手环境的 inventory 脚本输出与历史台账口径仍需复核，见下方证据）。demo 前后台共用工厂一处接线。
+- 核心最小改动：`AgentRuntime.Builder.skillProvider()` 从"立即拍平静态快照"改为持有 Provider 引用、每 run 拉取（源码级公共 API 设计无新增；当时接手环境的 inventory 脚本输出与历史台账口径仍需复核，见下方证据）。demo 前后台共用工厂一处接线。
 - 文档：新增 `docs/android-agent-skills.md`（事实源）、`D-022` 及两条勘误、根 `AGENTS.md` 模块表更新。
 
-### 当前证据与边界
+### 当时证据与边界
 
 - 全工程 JVM 单元测试共 258 个（基线 198 零回归 + 新模块 58 + 核心 2）、0 失败；`:demo-app:assembleDebug` 通过；APK 元数据 `versionCode 7 / versionName 0.6.0`。
-- 核心公共 API surface：本次接手在生成的 Release AAR 上运行 `scripts/sdk/inspect-core-api-surface.ps1`，输出 `707` 个 javap public member signatures；远端 v0.6 台账记录的 `575` 与实际输出不一致，需下一阶段确认 Kotlin 生成成员/基线和脚本统计口径，暂不把“零变化”作为当前已验证结论。
+- 核心公共 API surface：本次接手在生成的 Release AAR 上运行 `scripts/sdk/inspect-core-api-surface.ps1`，输出 `707` 个 javap public member signatures；远端 v0.6 台账记录的 `575` 与实际输出不一致，需下一阶段确认 Kotlin 生成成员/基线和脚本统计口径，暂不把“零变化”作为该次已验证结论。
 - 真机 `QSG6Q8IFDMDELVGQ`（REDMI Turbo 5 Max，Android 16）安装启动正常、种子 SKILL.md 就位（always + memory: 嵌入配置）、logcat 无 crash；用户完成记忆捕获/回放初步对话验收并反馈可用。
 - 边界：记忆捕获的"先征询后写"依赖模型对 skill 文案的遵从（模型偏差表现为未经同意写入，属行为问题而非运行时缺陷）；同一 run 内 provider 与 resolver 各扫盘一次属已接受设计；agent 自沉淀 skill（`skill_save`）列为 v2 展望；全授权模式下 `memory_delete` 不弹确认对话框（对话内复述确认仍由 skill 协议约束）。
 
@@ -84,7 +87,7 @@
 - 无交互确认窗口时，受保护动作默认安全拒绝；仅当用户显式开启全授权时，后台才允许执行这些动作。
 - 增加重复任务状态迁移、失败收敛、Prompt 结果通知、时间算术溢出校验、会话重建和后台确认兜底测试。
 
-### 当前证据与边界
+### 当时证据与边界
 
 - 全工程 JVM 单元测试共 198 个、0 个失败；`:demo-app:assembleDebug` 已通过；APK 元数据为 `versionCode 6 / versionName 0.5.0`，合并 Manifest 已包含 `AgentTaskJobService`。
 - APK 已安装并启动于第二台授权小米 `e0b93f2f`（型号 `2304FPN6DC`）；用户已完成一次性 `RUN_AGENT_PROMPT` 后台唤醒/读屏体验验证并反馈可用。主目标小米 `QSG6Q8IFDMDELVGQ` 当时离线，三星设备 `R5CRB11B2AW` 未操作。
@@ -109,7 +112,7 @@
 - 第二台小米 `e0b93f2f`（型号 `2304FPN6DC`）已安装并启动包含剪贴板功能的 Debug APK，用户完成剪贴板体验验证并反馈正常。
 - 主目标小米 `QSG6Q8IFDMDELVGQ` 在本轮部署时不在线；三星设备 `R5CRB11B2AW` 未操作。
 
-### 当前边界
+### 当时边界
 
 - `0.4.0` 标签和提交已作为历史版本基线同步至远端；Release/AAB、API 配置和正式分发仍按发布清单单独验收。
 - 剪贴板后台读取仍受 Android 焦点/默认 IME 策略约束；写入剪贴板不等于自动向其他 App 粘贴。
@@ -161,21 +164,21 @@
 - `:demo-app:connectedDebugAndroidTest`：在 source checkpoint `28bc352622458d29e090656ae42fd32f057e9196` 的 `SM-A526U1`（Android 14/API 34、arm64-v8a、4 KB）上 `14/14` 通过；测试结束后已重新安装 Debug APK 并启动，未见已知致命异常。
 - 独立审查线程 `019ffc0d-ca14-77f3-83f7-beeaae65d310` 已完成最终代码复验：六维检查无 P1/P2 阻塞；建议后续补充 presenter release/detach、最新快照写入和无 API 发送路径的自动化测试。
 
-### 当前未完成证据
+### 当时未完成证据
 
 - 本轮尚未重新执行人工悬浮窗、Activity 重建和键盘触控验收；连接的真机回归覆盖的是自动化 Demo/Runtime 测试。
-- 未覆盖的人工场景仍需使用当前 APK、当前 tag 和设备序列号重新记录，不能用旧版本报告替代。
+- 未覆盖的人工场景仍需使用该版本 APK、该版本 tag 和设备序列号重新记录，不能用旧版本报告替代。
 
 ### 2026-08-25 屏幕自动化稳定性补强（不升版本）
 
 - `screen_read_ui_tree` 增加屏幕尺寸、非自身窗口数、截断标记和有界 `max_nodes`；`screen_gesture` 改为按当前屏幕尺寸生成滑动终点并拒绝越界输入。
 - `screen_perform_action` 对未知动作和缺失 `set_text.text` fail-closed；屏幕树和动作窗口路径补齐节点回收；手势回调等待改为可取消协程等待。
-- 新增坐标边界、屏幕尺寸适配和输入拒绝 JVM 回归；当前 Debug APK 在 Pixel 8 / Android 17 Preview 与 SM-A526U1 / Android 14 上各完成 `14/14` connected instrumentation。
-- 两台设备本轮均未启用 Demo AccessibilityService，因此跨 App 的真实微信/设置/浏览器无障碍操作仍未形成当前版本证据；本条不提升 `versionName` 或 `versionCode`。
+- 新增坐标边界、屏幕尺寸适配和输入拒绝 JVM 回归；当时 Debug APK 在 Pixel 8 / Android 17 Preview 与 SM-A526U1 / Android 14 上各完成 `14/14` connected instrumentation。
+- 两台设备本轮均未启用 Demo AccessibilityService，因此跨 App 的真实微信/设置/浏览器无障碍操作仍未形成当时版本证据；本条不提升 `versionName` 或 `versionCode`。
 
 ### 稳定化测试期版本边界
 
-- 本次保存不提升 `versionName` 或 `versionCode`；`0.2.1 / versionCode 3` 继续代表当前 Demo 测试交付物。
+- 在当时的稳定化测试期，本次保存不提升 `versionName` 或 `versionCode`；`0.2.1 / versionCode 3` 继续代表该阶段的 Demo 测试交付物。
 - `demo-app-v0.2.1` 保持不变；稳定化 checkpoint 使用独立标签，不能当作新的产品版本或正式发布标签。
 - 后续若只是稳定性修复、测试和证据整理，先更新本台账和 SDK 稳定化文档；只有形成新的可安装交付物或用户可感知行为变化时才评估 patch/minor bump。
 

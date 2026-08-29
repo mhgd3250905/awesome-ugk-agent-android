@@ -11,6 +11,9 @@
 
 当前基线：`demo-app 0.7.1` / `versionCode 9`；SDK publication 仍为开发期坐标 `0.1.0`，当前处于持续开发阶段。
 
+> 文首基线和末尾 `SDK-OPT-011`/`0.7.1` 保存段描述当前状态；其余按编号的已完成条目保留历史记录。
+> 历史条目中的“当前”仅限定为该条目记录时点，不覆盖文首或最新保存段。
+
 ## SDK-OPT-001：ToolRegistry 重复 Tool ID 治理
 
 状态：已实现，主线程复核通过
@@ -335,7 +338,7 @@ git diff --check
 - 补充 Core 的 Assistant 外壳正向/错配测试，并让 Terminal Runtime instrumentation 断言受保护 ToolResult 确实成功，避免只检查事件名称而掩盖授权失败。
 - 不引入 Coordinator、TicketStore、runId 或新的生产 API；不改变 ticket 字段、有效期、bypass 和 delegate 执行逻辑。
 
-验证结果：Core 定向单元测试、Core/Demo 单元测试、Demo AndroidTest 编译均通过；修复后 Demo 真机 `connectedDebugAndroidTest` 14/14 通过；当前 Debug APK 已重新安装并启动。独立子线程审核确认该方案属于 v1 有界修复，不需要提前引入 Runtime sequence API。
+验证结果：Core 定向单元测试、Core/Demo 单元测试、Demo AndroidTest 编译均通过；修复后 Demo 真机 `connectedDebugAndroidTest` 14/14 通过；该轮 Debug APK 已重新安装并启动。独立子线程审核确认该方案属于 v1 有界修复，不需要提前引入 Runtime sequence API。
 
 ## SDK-OPT-010：SDK 版本与外部发布边界收口
 
@@ -359,7 +362,7 @@ git diff --check
 状态：已封存，进入稳定化测试期；不代表正式发布
 
 封存结论：
-- 当前 Core publication 保持 `com.ugk.pi:ugk-pi-android:0.1.0`，Demo 保持 `0.2.1 / versionCode 3`；既有 `demo-app-v0.2.1` 标签不移动、不覆盖。
+- 当时 Core publication 保持 `com.ugk.pi:ugk-pi-android:0.1.0`，Demo 保持 `0.2.1 / versionCode 3`；既有 `demo-app-v0.2.1` 标签不移动、不覆盖。
 - 将此前已完成但尚未提交的实现、测试、构建配置模板和验证记录保存为独立 Git checkpoint；父提交完整 SHA 为 `641847b0f1c4d1da5e62c395a50f632d5f29a2ba`，source checkpoint 为 `28bc352622458d29e090656ae42fd32f057e9196`，保存点标签为 `sdk-stabilization-baseline-2026-08-14`，该标签不是发布标签。
 - 本记录只代表指定 commit/工作树上的内部测试基线，不代表 SDK 或 Demo 正式发布，不提供 API/ABI 兼容承诺；关键测试已在 `28bc352622458d29e090656ae42fd32f057e9196` 的干净工作树重新执行，不能把父提交或 dirty worktree 当作最终证据。
 - `.kotlin/` 临时缓存和被 Git 忽略的 `local.properties` 不进入版本保存；API key 不进入源码、文档或提交。
@@ -370,7 +373,7 @@ git diff --check
 - `SM-A526U1`（Android 14/API 34、`arm64-v8a`、4 KB page）上的 Demo `connectedDebugAndroidTest` 为 `14/14` 通过；测试结束后已重新安装并启动 APK，未见 `FATAL EXCEPTION`、`UnsatisfiedLinkError` 或 `BadTokenException`。
 - Runtime Probe 为 A `9/10`、B `4/5`；A 的 `curl` 为 `Could not resolve host: example.com`，B 为 `Resolving timed out after 15000 milliseconds`，均由设备当前 VPN/网络无上游导致，不归因于本地 Runtime 能力；因此双 Probe 网络 Gate 仍未通过。
 
-稳定化阶段的详细测试矩阵、已知未覆盖范围、冻结规则和退出条件见 [`sdk-stabilization-baseline.md`](sdk-stabilization-baseline.md)。当前仍未完成 16 KB page size、真实 Provider 端到端、Activity 生命周期和人工无障碍操作的完整证据；在这些证据补齐前，不宣称架构整改完成或全设备兼容。
+稳定化阶段的历史测试矩阵、已知未覆盖范围、冻结规则和退出条件见历史快照 [`sdk-stabilization-baseline.md`](sdk-stabilization-baseline.md)。该条目不再作为当前状态或架构整改结论的事实源；当前架构整改完成事实以本文 `SDK-OPT-011` 及其 `0.7.1` 保存段为准，不能由该快照推出全设备兼容或正式发布。
 
 实现范围：本条目只完成版本保存和状态文档收口，不产生 SDK/Demo 版本 bump，不改变公共 API 或运行时行为。
 

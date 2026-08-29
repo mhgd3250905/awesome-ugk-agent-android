@@ -2,7 +2,10 @@
 
 更新时间：2026-08-29
 验证源码：`E:\AII\ugk-android-new`
-注意：最新物理设备结果仍绑定到 source checkpoint `28bc352622458d29e090656ae42fd32f057e9196`；2026-08-29 的架构整改只完成本机 JVM、构建、AAR/APK 和静态验收，没有重跑设备、网络或真实 Provider。两类证据不得互相替代。
+注意：最新 Terminal instrumentation/probe 的物理设备证据绑定到 source checkpoint `28bc352622458d29e090656ae42fd32f057e9196`；第 21 节另记录以 `885c1e9` 为阶段基线、Demo `0.7.0 / versionCode 8` 元数据下的后续人工 Demo 体验。后者不关闭 Terminal 设备矩阵、网络或发布 Gate。
+
+> 第 6—14、18—19 节按日期保留历史验证快照；这些章节中的“当前”仅指当时的源码、APK 或设备上下文。
+> 当前 Gate 结论和 2026-08-29 保存点以文首总表、第 20 节和第 21 节为准。
 
 ## 1. 环境变量
 
@@ -21,10 +24,12 @@ $env:ANDROID_USER_HOME = 'C:\Users\29485\.android'
 | Gate | 验证内容 | 当前结果 |
 |---|---|---|
 | Gate 1 | 两 ABI 原生静态/锁文件/AAR/APK/无 Node | 已通过 |
-| Gate 2 | x86_64 API 24/29/35 4KB、API36 16KB、arm64 API34/4KB、A+B 重定位 | x86_64 已通过；arm64 API34/4KB 子集已通过 |
-| Gate 3 | API24/4KB、API36/16KB 的确认/取消/超时/进程组/并发/输出/环境 | x86_64 子集已通过；arm64 本地控制子集已通过 |
+| Gate 2 | x86_64 API 24/29/35 4KB、API36 16KB、arm64 API34/4KB、A+B 重定位 | x86_64 已通过；arm64 API34/4KB 子集（受限证据）已通过 |
+| Gate 3 | API24/4KB、API36/16KB 的确认/取消/超时/进程组/并发/输出/环境 | x86_64 子集已通过；arm64 本地控制子集（受限证据）已通过 |
 | Host integration | `demo-app` 接入 Terminal Plugin、确认工具和真实 APK Runtime | API35 x86_64/4KB、API34 arm64/4KB 已通过 |
 | Release Gate | arm64、完整 API/page size、Release AAB、升级、低盘、性能、许可证 | 未通过/未完成 |
+
+> Gate 2/3 中的 arm64 “子集已通过”仅表示既有 4 KB、受限 Terminal 证据，不代表 `0.7.0` 当前完整 Terminal 体验，也不关闭 Release Gate；第 21 节的 Demo 人工体验不改变这一点。
 
 ## 3. 单元测试和静态验收
 
@@ -71,7 +76,7 @@ $env:ANDROID_USER_HOME = 'C:\Users\29485\.android'
 
 ## 6. 宿主 `demo-app` 集成验证
 
-验证日期：2026-08-13；源码状态：当前工作树未提交改动。
+验证日期：2026-08-13；源码状态：该轮工作树包含未提交改动。
 
 设备：`ugk_dev_api35_smooth`，API 35、Google Play、x86_64、实际 page size `4096`，ADB `emulator-5556`。
 
@@ -113,7 +118,7 @@ $env:ANDROID_SERIAL = 'emulator-5556'
 
 ## 9. Debug 签名与本机默认配置
 
-- `demo-app` 当前 Debug APK 与固定的 `E:\Android\.android\debug.keystore` 签名一致；后续覆盖安装不应再出现默认 debug key 不一致。
+- 该轮 `demo-app` Debug APK 与固定的 `E:\Android\.android\debug.keystore` 签名一致；后续覆盖安装不应再出现默认 debug key 不一致。
 - `E:\AII\deepseek-202608.txt` 只作为本机外部输入；首次启动 Debug App 后，应用私有 `SharedPreferences` 已确认写入 active provider、API host、model 和 API key（验证只记录存在性与长度，不输出 key）。
 - `:demo-app:assembleRelease` 已通过，Release 侧默认 API 资源为空；Debug APK 含 key，不能用于分发。
 
@@ -126,16 +131,16 @@ $env:ANDROID_SERIAL = 'emulator-5556'
 .\gradlew.bat :demo-app:connectedDebugAndroidTest '-Pandroid.injected.device.serial=emulator-5556' --console=plain
 ```
 
-结果：`BUILD SUCCESSFUL`；该轮 Intent/自动化相关测试共 `12` 个，失败 `0`。当前 demo-app 总测试数因新增本地 HTTP 服务回归为 `13/13`。其中 `AndroidIntentIntegrationInstrumentedTest`、
+结果：`BUILD SUCCESSFUL`；该轮 Intent/自动化相关测试共 `12` 个，失败 `0`。该轮 demo-app 总测试数因新增本地 HTTP 服务回归为 `13/13`。其中 `AndroidIntentIntegrationInstrumentedTest`、
 `AndroidAutomationToolsInstrumentedTest` 和 `AndroidAutomationAgentIntegrationInstrumentedTest` 覆盖：
 
 - AgentRuntime 使用 fake provider 完成 `show_user_confirmation_dialog` → `launch_android_app_intent` 的工具循环；
 - 有 URL 处理器时构造并派发 `Intent.ACTION_VIEW`，返回 `launched=true`、`resolvedPackage`；
-- 通过注入无处理器解析器确定性验证 `no_handler`，不把终端 `am`/`pm` 失败误判成设备事实；实际设备处理器分支按当前 AVD 安装状态验证；
+ - 通过注入无处理器解析器确定性验证 `no_handler`，不把终端 `am`/`pm` 失败误判成设备事实；实际设备处理器分支按当时 AVD 安装状态验证；
 - 用户取消确认时，外部 Intent 不被派发；
 - `find_android_app` 通过 launcher 查询将宿主 App 名称解析为包名；
 - `launch_android_app` 在没有无障碍连接时仍能通过原生 launcher Intent 启动 App；
-- `get_android_accessibility_status` 正确报告用户开关、服务连接、当前包名和可操作门禁；
+ - `get_android_accessibility_status` 正确报告用户开关、服务连接、当时包名和可操作门禁；
 - `open_android_accessibility_settings` 只打开系统设置，不伪造或静默授予权限；
 - 无 `SYSTEM_ALERT_WINDOW` 权限时，Agent 运行期间通过原生 Intent 打开 Chrome 不再触发悬浮窗 `BadTokenException`；真实 URL `https://example.com` 成功显示 `Example Domain`，宿主 PID 保持存活；
 - fake `LLMProvider` 实际跑通 `find_android_app` → `show_user_confirmation_dialog` → `launch_android_app` 的 AgentRuntime 工具循环；
@@ -176,9 +181,9 @@ $env:ANDROID_SERIAL = 'emulator-5556'
 - `data_app_anr` 没有 demo 的 ANR 条目；没有发现 demo `FATAL EXCEPTION`。demo 进程仍存活，托管的 `libugk_python.so -m http.server 8765` 仍在运行。
 - demo 的累计 `gfxinfo` 显示 `Janky frames=61.97%`、`GPU 90th/95th/99th percentile=4950ms`；这是本次模拟器图形压力的辅助证据，统计为进程累计值，不能单独作为每一帧的因果证明。
 
-判定：本次现场故障应归类为模拟器的 SystemUI/图形/输入链路 ANR，不判定为本地 HTTP Runtime 启动失败。当前仍需关注 demo UI 的渲染压力：它同时存在 Activity、悬浮窗和确认对话框渲染根，且 `MainActivity` 在 `Dispatchers.Main` 收集 Agent 事件；模型请求体构造和响应解析也可能在调用方上下文执行。后续应在不调用真实 API 的前提下补充 UI 性能回归，并考虑把序列化/解析与长 Agent 回路移出主线程。
+判定：本次现场故障应归类为模拟器的 SystemUI/图形/输入链路 ANR，不判定为本地 HTTP Runtime 启动失败。该轮仍需关注 demo UI 的渲染压力：它同时存在 Activity、悬浮窗和确认对话框渲染根，且 `MainActivity` 在 `Dispatchers.Main` 收集 Agent 事件；模型请求体构造和响应解析也可能在调用方上下文执行。后续应在不调用真实 API 的前提下补充 UI 性能回归，并考虑把序列化/解析与长 Agent 回路移出主线程。
 
-## 14. 当前物理 arm64/API34 回归
+## 14. 历史物理 arm64/API34 回归（2026-08-14）
 
 验证日期：2026-08-14；设备：`SM-A526U1`，Android 14/API 34、arm64-v8a、4 KB page size；ADB 序列号：`R5CRB11B2AW`。
 
@@ -191,7 +196,7 @@ $env:ANDROID_SERIAL = 'R5CRB11B2AW'
   --console=plain
 ```
 
-- `:demo-app:connectedDebugAndroidTest`：`14/14` 通过；当前 `demo-app` APK 为 `versionCode 3` / `versionName 0.2.1`。Instrumentation 执行期间由 Gradle 管理测试 APK 安装生命周期；结束后已使用 `adb install -r` 重新安装并启动 Demo，未把测试过程误记为用户数据保留。
+- `:demo-app:connectedDebugAndroidTest`：`14/14` 通过；该轮 `demo-app` APK 为 `versionCode 3` / `versionName 0.2.1`。Instrumentation 执行期间由 Gradle 管理测试 APK 安装生命周期；结束后已使用 `adb install -r` 重新安装并启动 Demo，未把测试过程误记为用户数据保留。
 - `terminal-probe-demo-a`：`9/10` 通过；`terminal-probe-demo-b`：`4/5` 通过。除联网用例外的 Runtime、本地 HTTP、进程控制、Python/SQLite/OpenSSL 等本地能力均通过。
 - 两个未通过用例均为 `https://example.com` 联网测试：Probe A 为 `curl (6) Could not resolve host`，Probe B 为 `curl (28) Resolving timed out after 15000 milliseconds`。设备当时由 VPN 接管默认网络，`wlan0` 无 carrier、无可用外网路由，DNS/ICMP 均失败；这是测试环境阻塞，不判定为 Runtime 本地能力失败，双 Probe 网络 Gate 仍保持未通过。
 - 该轮还修正了 probe A 对 `TerminalAgentPlugin.tools()` 使用 `.single()` 的过时假设，并同步刷新了 CPython manifest 的锁文件摘要与大小。

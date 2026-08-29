@@ -1,5 +1,8 @@
 # Android 文本剪贴板 Tool/Skill
 
+> 本文继续维护剪贴板 Tool/Skill 的当前 API、安全和系统限制；文末版本信息仅作历史交付溯源。
+> 当前 Demo 版本以 [`demo-app-version-ledger.md`](demo-app-version-ledger.md) 为准。
+
 ## 当前决策
 
 剪贴板属于 Android 系统能力，已经作为 `pi-system-skill-android` 的内置
@@ -46,6 +49,8 @@ val plugin = AndroidAutomationAgentPlugin(
 
 如果宿主只需要系统能力，也可以注册 `AndroidSystemAgentPlugin`；不要同时注册两个插件，否则会重复注册相同的剪贴板 Tool 和确认 Tool。
 
-## 当前状态
+## 交付溯源（历史版本）
 
-本能力已归档到本地 `0.4.0`（`versionCode 5`）版本基线，并与视觉兜底共同使用 Git 标签 `demo-app-v0.4.0`。该标签和提交仅保存在本地，尚未推送远端。
+本能力首次随 Demo `0.4.0`（`versionCode 5`）交付，并与视觉兜底共同使用 Git 标签
+`demo-app-v0.4.0`。该标签和对应提交已存在于本地，并已同步至 `origin`；它们是历史版本边界，
+不是当前 Demo 版本事实。

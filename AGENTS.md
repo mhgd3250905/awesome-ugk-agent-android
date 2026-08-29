@@ -109,6 +109,7 @@ v1 Terminal Core Profile：Bash、curl、OpenSSL、SQLite、CPython 3.14.6；Nod
 | `pi-system-skill-android/src/main/.../ScreenAutomationTools.kt` | SDK 统一的 screen read/find/action/gesture/IME/global Tools |
 | `pi-system-skill-android/src/main/.../AccessibilityScreenAutomationBackend.kt` | AccessibilityService 默认 backend、snapshot/target 校验和 fail-closed 恢复 |
 | `pi-system-skill-android/src/main/.../ScreenAutomationSkills.kt` | Android Accessibility 屏幕自动化 Skill 与确认/验证策略 |
-| `ApiSettings.kt` | API 源配置 + SharedPreferences 持久化 + Ui 色彩工具 |
+| `ApiSettings.kt` | API 源配置 + SharedPreferences 持久化 |
+| `Ui.kt` | 动态主题色彩 Token 与代码构建 UI 的样式辅助 |
 
 需要权限：无障碍服务 + SYSTEM_ALERT_WINDOW（悬浮窗）
