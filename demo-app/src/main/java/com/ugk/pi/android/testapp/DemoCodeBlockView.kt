@@ -214,7 +214,7 @@ class DemoCodeBlockView @JvmOverloads constructor(
             context.codeDp(12),
             context.codeDp(5)
         )
-        background = Ui.rounded(context, Ui.SurfaceSubtle, 6, Ui.Outline, 1)
+        background = Ui.rounded(context, Ui.SurfaceSubtle, 6, Ui.OutlineSubtle, 1)
     }
 
     private val langLabel = TextView(context).apply {
@@ -227,7 +227,7 @@ class DemoCodeBlockView @JvmOverloads constructor(
     private val copyButton = TextView(context).apply {
         text = "复制代码"
         setTextSize(TypedValue.COMPLEX_UNIT_SP, 11f)
-        setTextColor(Ui.AccentDark)
+        setTextColor(Ui.TextSecondary)
         typeface = Typeface.create("sans-serif-medium", Typeface.NORMAL)
         letterSpacing = 0.015f
         setPadding(
@@ -260,7 +260,7 @@ class DemoCodeBlockView @JvmOverloads constructor(
 
     init {
         orientation = VERTICAL
-        background = Ui.rounded(context, Ui.CodeBg, 8, Ui.Outline, 1)
+        background = Ui.rounded(context, Ui.CodeBg, 8, Ui.OutlineSubtle, 1)
 
         header.addView(langLabel, LayoutParams(0, LayoutParams.WRAP_CONTENT, 1f))
         header.addView(copyButton, LayoutParams(LayoutParams.WRAP_CONTENT, LayoutParams.WRAP_CONTENT))
@@ -283,14 +283,14 @@ class DemoCodeBlockView @JvmOverloads constructor(
     }
 
     private fun applyThemeColors() {
-        val isDark = ThemeManager.isDark
-        // 全新色彩：浅色米白调，深色纯曜石炭黑（拒绝绿感深色）
-        val cardBg = if (isDark) android.graphics.Color.rgb(21, 22, 25) else android.graphics.Color.rgb(245, 242, 236)
-        val headerBg = if (isDark) android.graphics.Color.rgb(31, 32, 36) else android.graphics.Color.rgb(240, 236, 229)
-        val border = if (isDark) android.graphics.Color.rgb(47, 50, 56) else android.graphics.Color.rgb(229, 224, 216)
-        val codeColor = if (isDark) android.graphics.Color.rgb(110, 231, 183) else android.graphics.Color.rgb(45, 106, 79)
-        val labelColor = if (isDark) android.graphics.Color.rgb(156, 161, 174) else android.graphics.Color.rgb(107, 102, 94)
-        val copyColor = if (isDark) android.graphics.Color.rgb(255, 110, 74) else android.graphics.Color.rgb(234, 84, 52)
+        // Evidence remains neutral; the copy affordance is intentionally
+        // secondary so tool output does not compete with the assistant.
+        val cardBg = Ui.CodeBg
+        val headerBg = Ui.CodeHeader
+        val border = Ui.OutlineSubtle
+        val codeColor = Ui.CodeText
+        val labelColor = Ui.TextSecondary
+        val copyColor = Ui.TextSecondary
 
         background = Ui.rounded(context, cardBg, 8, border, 1)
         header.background = Ui.rounded(context, headerBg, 6, border, 1)

@@ -8,6 +8,8 @@
         android:allowBackup="false"
         android:name=".DemoApplication"
         android:label="@string/app_name"
+        android:icon="@drawable/brand_owl"
+        android:roundIcon="@drawable/brand_owl"
         android:supportsRtl="true"
         android:theme="@style/AppTheme">
         <activity

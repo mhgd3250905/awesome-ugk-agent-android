@@ -1,0 +1,6 @@
+<?xml version="1.0" encoding="utf-8"?>
+<resources>
+    <!-- Static platform defaults; runtime View surfaces are resolved by Ui. -->
+    <color name="app_window_background">#FBF9F5</color>
+    <color name="app_color_accent">#197A52</color>
+</resources>

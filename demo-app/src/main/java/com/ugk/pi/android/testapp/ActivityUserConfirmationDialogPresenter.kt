@@ -85,7 +85,7 @@ class ActivityUserConfirmationDialogPresenter(
 
         active?.cancelFromLifecycle()
         suspendCancellableCoroutine { continuation ->
-            val fallbackId = buttons.firstOrNull(::isCancellationButton)?.id ?: CANCEL_BUTTON_ID
+            val fallbackId = buttons.firstOrNull { it.isCancellationButton() }?.id ?: CANCEL_BUTTON_ID
             val pending = PendingConfirmation(
                 request = request.copy(buttons = buttons),
                 buttons = buttons,
@@ -134,19 +134,66 @@ class ActivityUserConfirmationDialogPresenter(
 
     private fun createButtonPanel(
         buttons: List<UserConfirmationDialogButton>,
+        request: UserConfirmationDialogRequest,
         onSelected: (String) -> Unit
     ): View {
         val hostActivity = requireNotNull(activity) { "Activity confirmation host is not attached" }
         val isHorizontal = buttons.size <= 2
+        val visualRoles = request.confirmationVisualRoles(buttons)
         return LinearLayout(hostActivity).apply {
             orientation = if (isHorizontal) LinearLayout.HORIZONTAL else LinearLayout.VERTICAL
             gravity = Gravity.END
             setPadding(dp(16), dp(4), dp(16), dp(8))
 
             buttons.forEachIndexed { index, button ->
+                val visualRole = visualRoles[index]
                 val actionButton = Button(hostActivity).apply {
                     text = button.label
                     isAllCaps = false
+                    minHeight = dp(48)
+                    setPadding(dp(12), dp(8), dp(12), dp(8))
+                    setTextColor(
+                        when (visualRole) {
+                            ConfirmationVisualRole.CANCEL -> Ui.stateColorList(
+                                normal = Ui.TextSecondary,
+                                pressed = Ui.TextPrimary
+                            )
+                            ConfirmationVisualRole.PRIMARY -> Ui.stateColorList(
+                                normal = Ui.OnPrimary,
+                                pressed = Ui.OnPrimary
+                            )
+                            ConfirmationVisualRole.WARNING -> Ui.stateColorList(
+                                normal = Ui.WarningOnContainer,
+                                pressed = Ui.WarningOnContainer
+                            )
+                            ConfirmationVisualRole.DANGER -> Ui.stateColorList(
+                                normal = Ui.DangerOnContainer,
+                                pressed = Ui.OnDanger
+                            )
+                        }
+                    )
+                    background = Ui.clickableRounded(
+                        hostActivity,
+                        normalColor = when (visualRole) {
+                            ConfirmationVisualRole.CANCEL -> Ui.SurfaceSubtle
+                            ConfirmationVisualRole.PRIMARY -> Ui.Primary
+                            ConfirmationVisualRole.WARNING -> Ui.WarningSoft
+                            ConfirmationVisualRole.DANGER -> Ui.DangerSoft
+                        },
+                        pressedColor = when (visualRole) {
+                            ConfirmationVisualRole.CANCEL -> Ui.SurfaceSoft
+                            ConfirmationVisualRole.PRIMARY -> Ui.PrimaryPressed
+                            ConfirmationVisualRole.WARNING -> Ui.SurfaceSoft
+                            ConfirmationVisualRole.DANGER -> Ui.Danger
+                        },
+                        radiusDp = 10,
+                        strokeColor = when (visualRole) {
+                            ConfirmationVisualRole.CANCEL -> Ui.OutlineSubtle
+                            ConfirmationVisualRole.PRIMARY -> Ui.Primary
+                            ConfirmationVisualRole.WARNING -> Ui.Warning
+                            ConfirmationVisualRole.DANGER -> Ui.Danger
+                        }
+                    )
                     setOnClickListener { onSelected(button.id) }
                 }
                 val layoutParams = if (isHorizontal) {
@@ -176,10 +223,6 @@ class ActivityUserConfirmationDialogPresenter(
     private fun isActivityUsable(): Boolean {
         val hostActivity = activity ?: return false
         return !hostActivity.isFinishing && !hostActivity.isDestroyed
-    }
-
-    private fun isCancellationButton(button: UserConfirmationDialogButton): Boolean {
-        return button.id.lowercase() in CANCELLATION_BUTTON_IDS
     }
 
     private fun runOnMain(action: () -> Unit) {
@@ -281,7 +324,7 @@ class ActivityUserConfirmationDialogPresenter(
                 overlayVisible = false
             }
 
-            val nextDialog = AlertDialog.Builder(hostActivity)
+            val nextDialog = AlertDialog.Builder(hostActivity, Ui.dialogTheme())
                 .setTitle(request.title)
                 .setMessage(
                     request.target?.let { target ->
@@ -290,7 +333,7 @@ class ActivityUserConfirmationDialogPresenter(
                     } ?: request.message
                 )
                 .setCancelable(true)
-                .setView(createButtonPanel(buttons) { buttonId -> select(buttonId) })
+                .setView(createButtonPanel(buttons, request) { buttonId -> select(buttonId) })
                 .create()
             dialog = nextDialog
             nextDialog.setOnCancelListener { cancelFromDialog() }
@@ -352,13 +395,5 @@ class ActivityUserConfirmationDialogPresenter(
 
     private companion object {
         const val CANCEL_BUTTON_ID = "cancel"
-        val CANCELLATION_BUTTON_IDS = setOf(
-            "cancel",
-            "deny",
-            "no",
-            "reject",
-            "stop",
-            "close"
-        )
     }
 }

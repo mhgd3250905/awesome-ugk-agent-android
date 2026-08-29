@@ -138,43 +138,23 @@ class DemoTableView(context: Context) : FrameLayout(context) {
     }
 
     private fun cardBgColor(): Int {
-        return if (ThemeManager.isDark) {
-            Color.parseColor("#232220")
-        } else {
-            Color.parseColor("#FAF9F6")
-        }
+        return Ui.Surface
     }
 
     private fun strokeColor(): Int {
-        return if (ThemeManager.isDark) {
-            Color.parseColor("#383734")
-        } else {
-            Color.parseColor("#E6E4DE")
-        }
+        return Ui.OutlineSubtle
     }
 
     private fun headerBgColor(): Int {
-        return if (ThemeManager.isDark) {
-            Color.parseColor("#2C2B29")
-        } else {
-            Color.parseColor("#F0EEE9")
-        }
+        return Ui.SurfaceSoft
     }
 
     private fun oddRowBgColor(): Int {
-        return if (ThemeManager.isDark) {
-            Color.parseColor("#262523")
-        } else {
-            Color.parseColor("#F5F3EF")
-        }
+        return Ui.SurfaceSubtle
     }
 
     private fun dividerColor(): Int {
-        return if (ThemeManager.isDark) {
-            Color.parseColor("#383734")
-        } else {
-            Color.parseColor("#E5E2DC")
-        }
+        return Ui.Divider
     }
 
     /**
@@ -244,8 +224,7 @@ class DemoTableView(context: Context) : FrameLayout(context) {
 
     private fun createCellTextView(isHeader: Boolean, gravity: Int): TextView {
         return TextView(context).apply {
-            val textColor = if (ThemeManager.isDark) Color.parseColor("#EDEBE8") else Color.parseColor("#1C1B1A")
-            setTextColor(textColor)
+            setTextColor(Ui.TextPrimary)
             this.gravity = gravity or Gravity.CENTER_VERTICAL
             setPadding(
                 dp(12),

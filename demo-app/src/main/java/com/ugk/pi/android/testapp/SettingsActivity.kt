@@ -13,6 +13,7 @@ import android.view.WindowInsetsController
 import android.view.WindowManager
 import android.widget.EditText
 import android.widget.HorizontalScrollView
+import android.widget.ImageButton
 import android.widget.LinearLayout
 import android.widget.ScrollView
 import android.widget.Switch
@@ -52,6 +53,22 @@ class SettingsActivity : Activity() {
     private var selectedAutoCompaction: Boolean = true
     private var selectedCompactionThreshold: Double = 0.70
 
+    private enum class TestStatusTone {
+        NONE,
+        SUCCESS,
+        FAILURE
+    }
+
+    private enum class BalanceStatusTone {
+        NONE,
+        SUCCESS,
+        ERROR,
+        INFO
+    }
+
+    private var testStatusTone = TestStatusTone.NONE
+    private var balanceStatusTone = BalanceStatusTone.NONE
+
     private val thresholdOptions = listOf(
         0.60 to "60%",
         0.65 to "65%",
@@ -66,7 +83,7 @@ class SettingsActivity : Activity() {
     private lateinit var headerBar: LinearLayout
     private lateinit var titleText: TextView
     private lateinit var subtitleText: TextView
-    private lateinit var backButton: TextView
+    private lateinit var backButton: ImageButton
 
     private lateinit var themeCard: LinearLayout
     private lateinit var themeTitle: TextView
@@ -164,7 +181,7 @@ class SettingsActivity : Activity() {
     private fun buildUi(): View {
         rootLayout = LinearLayout(this).apply {
             orientation = LinearLayout.VERTICAL
-            background = Ui.rounded(this@SettingsActivity, Ui.Surface, 0)
+            background = Ui.rounded(this@SettingsActivity, Ui.Background, 0)
         }
 
         // 1. 顶部标题栏 (Back Button + Title + Subtitle)
@@ -174,13 +191,14 @@ class SettingsActivity : Activity() {
             setPadding(dp(16), dp(12), dp(16), dp(12))
         }
 
-        backButton = TextView(this).apply {
-            text = "←"
-            textSize = 22f
-            gravity = Gravity.CENTER
-            setTextColor(Ui.TextPrimary)
-            background = Ui.clickableRounded(this@SettingsActivity, Ui.SurfaceSoft, Ui.SurfaceSubtle, 12, Ui.Outline)
-            setPadding(dp(12), dp(6), dp(12), dp(6))
+        backButton = ImageButton(this).apply {
+            setImageResource(R.drawable.ic_arrow_back)
+            imageTintList = android.content.res.ColorStateList.valueOf(Ui.TextPrimary)
+            scaleType = android.widget.ImageView.ScaleType.CENTER
+            contentDescription = "返回上一页"
+            isClickable = true
+            isFocusable = true
+            background = Ui.clickableRounded(this@SettingsActivity, Color.TRANSPARENT, Ui.SurfaceSoft, 12)
             setOnClickListener { finish() }
         }
 
@@ -203,7 +221,7 @@ class SettingsActivity : Activity() {
         titleContainer.addView(titleText)
         titleContainer.addView(subtitleText)
 
-        headerBar.addView(backButton, LinearLayout.LayoutParams(dp(44), dp(40)))
+        headerBar.addView(backButton, LinearLayout.LayoutParams(dp(48), dp(48)))
         headerBar.addView(titleContainer, LinearLayout.LayoutParams(0, LinearLayout.LayoutParams.WRAP_CONTENT, 1f))
         rootLayout.addView(headerBar)
 
@@ -227,10 +245,12 @@ class SettingsActivity : Activity() {
         }
         AppThemeMode.values().forEach { mode ->
             val btn = TextView(this).apply {
-                text = "${mode.icon} ${mode.displayName}"
+                text = mode.displayName
                 textSize = 13f
                 gravity = Gravity.CENTER
                 setPadding(dp(8), dp(10), dp(8), dp(10))
+                isClickable = true
+                isFocusable = true
                 setOnClickListener {
                     ThemeManager.setMode(this@SettingsActivity, mode)
                 }
@@ -386,18 +406,18 @@ class SettingsActivity : Activity() {
         // 2.8 通信检测与额度卡片
         testCard = sectionCard()
         testButton = TextView(this).apply {
-            text = "⚡ 检测通信与平台额度"
+            text = "检测通信与平台额度"
             textSize = 13.5f
             gravity = Gravity.CENTER
-            setTextColor(Ui.Mint)
+            setTextColor(Ui.Primary)
             setTypeface(null, Typeface.BOLD)
-            background = Ui.clickableRounded(this@SettingsActivity, Ui.SurfaceSoft, Ui.SurfaceSubtle, 12, Ui.MintStroke)
+            background = Ui.clickableRounded(this@SettingsActivity, Ui.SurfaceSoft, Ui.SurfaceSubtle, 12, Ui.OutlineFocus)
             setPadding(dp(12), dp(12), dp(12), dp(12))
             setOnClickListener { runConnectivityAndQuotaTest() }
         }
         testStatusCard = LinearLayout(this).apply {
             orientation = LinearLayout.VERTICAL
-            background = Ui.rounded(this@SettingsActivity, Ui.SurfaceSoft, 10, Ui.Outline)
+            background = Ui.rounded(this@SettingsActivity, Ui.SurfaceSoft, 10, Ui.OutlineSubtle)
             setPadding(dp(12), dp(10), dp(12), dp(10))
             visibility = View.GONE
         }
@@ -434,9 +454,9 @@ class SettingsActivity : Activity() {
             text = "保存并启用此配置"
             textSize = 15f
             gravity = Gravity.CENTER
-            setTextColor(Ui.SurfaceElevated)
+            setTextColor(Ui.OnPrimary)
             setTypeface(null, Typeface.BOLD)
-            background = Ui.clickableRounded(this@SettingsActivity, Ui.Mint, Ui.MintDark, 14)
+            background = Ui.clickableRounded(this@SettingsActivity, Ui.Primary, Ui.PrimaryPressed, 14)
             setPadding(dp(16), dp(14), dp(16), dp(14))
             setOnClickListener { saveAndActivateCurrentConfig() }
         }
@@ -444,7 +464,10 @@ class SettingsActivity : Activity() {
             text = "删除此配置"
             textSize = 14f
             gravity = Gravity.CENTER
-            setTextColor(Ui.Danger)
+            setTextColor(Ui.stateColorList(
+                normal = Ui.DangerOnContainer,
+                pressed = Ui.DangerOnContainer
+            ))
             background = Ui.clickableRounded(this@SettingsActivity, Ui.DangerSoft, Ui.SurfaceSubtle, 12, Ui.Danger)
             setPadding(dp(16), dp(12), dp(16), dp(12))
             setOnClickListener { deleteCurrentConfig() }
@@ -504,17 +527,27 @@ class SettingsActivity : Activity() {
             val isSelected = cfg.id == selectedConfigId
             val isCurrentActive = cfg.id == state.activeId
             val chip = TextView(this).apply {
-                val prefix = if (isCurrentActive) "● " else ""
+                val prefix = if (isSelected) "✓ " else if (isCurrentActive) "● " else ""
                 text = "$prefix${cfg.displayName()}"
                 textSize = 12.5f
                 setPadding(dp(12), dp(7), dp(12), dp(7))
                 if (isSelected) {
-                    setTextColor(Ui.SurfaceElevated)
-                    background = Ui.rounded(this@SettingsActivity, Ui.Mint, 14)
+                    setTextColor(Ui.OnPrimaryContainer)
+                    background = Ui.rounded(this@SettingsActivity, Ui.PrimaryContainer, 10)
                 } else {
                     setTextColor(Ui.TextSecondary)
-                    background = Ui.rounded(this@SettingsActivity, Ui.SurfaceSoft, 14, Ui.Outline)
+                    background = Ui.rounded(this@SettingsActivity, Ui.SurfaceSoft, 10, Ui.OutlineSubtle)
                 }
+                applyChoiceSemantics(
+                    label = cfg.displayName(),
+                    selected = isSelected,
+                    stateLabel = when {
+                        isSelected && isCurrentActive -> "已选中，当前启用"
+                        isSelected -> "已选中"
+                        isCurrentActive -> "当前启用"
+                        else -> "未选中"
+                    }
+                )
                 setOnClickListener {
                     loadConfigToInputs(cfg)
                     renderChips()
@@ -527,17 +560,21 @@ class SettingsActivity : Activity() {
         }
 
         val newChip = TextView(this).apply {
-            text = "+ 新增配置"
             textSize = 12.5f
             setPadding(dp(12), dp(7), dp(12), dp(7))
             val isNew = selectedConfigId == null
+            text = if (isNew) "✓ + 新增配置" else "+ 新增配置"
             if (isNew) {
-                setTextColor(Ui.SurfaceElevated)
-                background = Ui.rounded(this@SettingsActivity, Ui.Mint, 14)
+                setTextColor(Ui.OnPrimaryContainer)
+                background = Ui.rounded(this@SettingsActivity, Ui.PrimaryContainer, 10)
             } else {
-                setTextColor(Ui.Mint)
-                background = Ui.rounded(this@SettingsActivity, Ui.SurfaceSoft, 14, Ui.MintStroke)
+                setTextColor(Ui.TextSecondary)
+                background = Ui.rounded(this@SettingsActivity, Ui.SurfaceSoft, 10, Ui.OutlineSubtle)
             }
+            applyChoiceSemantics(
+                label = "+ 新增配置",
+                selected = isNew
+            )
             setOnClickListener {
                 loadConfigToInputs(null)
                 renderChips()
@@ -551,17 +588,18 @@ class SettingsActivity : Activity() {
         contextWindowOptions.forEach { profile ->
             val isSelected = profile.stableId.equals(selectedContextWindow, ignoreCase = true)
             val chip = TextView(this).apply {
-                text = profile.displayLabel
+                text = if (isSelected) "✓ ${profile.displayLabel}" else profile.displayLabel
                 textSize = 12.5f
                 setTypeface(null, if (isSelected) Typeface.BOLD else Typeface.NORMAL)
                 setPadding(dp(14), dp(7), dp(14), dp(7))
                 if (isSelected) {
-                    setTextColor(Ui.SurfaceElevated)
-                    background = Ui.rounded(this@SettingsActivity, Ui.Mint, 14)
+                    setTextColor(Ui.OnPrimaryContainer)
+                    background = Ui.rounded(this@SettingsActivity, Ui.PrimaryContainer, 10)
                 } else {
                     setTextColor(Ui.TextSecondary)
-                    background = Ui.rounded(this@SettingsActivity, Ui.SurfaceSoft, 14, Ui.Outline)
+                    background = Ui.rounded(this@SettingsActivity, Ui.SurfaceSoft, 10, Ui.OutlineSubtle)
                 }
+                applyChoiceSemantics(profile.displayLabel, isSelected)
                 setOnClickListener {
                     selectedContextWindow = profile.stableId
                     renderContextWindowChips()
@@ -580,17 +618,18 @@ class SettingsActivity : Activity() {
         ProviderProtocol.entries.forEach { protocol ->
             val isSelected = protocol == selectedProtocol
             val chip = TextView(this).apply {
-                text = protocol.displayLabel
+                text = if (isSelected) "✓ ${protocol.displayLabel}" else protocol.displayLabel
                 textSize = 12.5f
                 setTypeface(null, if (isSelected) Typeface.BOLD else Typeface.NORMAL)
                 setPadding(dp(14), dp(7), dp(14), dp(7))
                 if (isSelected) {
-                    setTextColor(Ui.SurfaceElevated)
-                    background = Ui.rounded(this@SettingsActivity, Ui.Mint, 14)
+                    setTextColor(Ui.OnPrimaryContainer)
+                    background = Ui.rounded(this@SettingsActivity, Ui.PrimaryContainer, 10)
                 } else {
                     setTextColor(Ui.TextSecondary)
-                    background = Ui.rounded(this@SettingsActivity, Ui.SurfaceSoft, 14, Ui.Outline)
+                    background = Ui.rounded(this@SettingsActivity, Ui.SurfaceSoft, 10, Ui.OutlineSubtle)
                 }
+                applyChoiceSemantics(protocol.displayLabel, isSelected)
                 setOnClickListener {
                     selectedProtocol = protocol
                     renderProtocolChips()
@@ -608,17 +647,18 @@ class SettingsActivity : Activity() {
         maxOutputOptions.forEach { (tokens, label) ->
             val isSelected = tokens == selectedMaxOutputTokens
             val chip = TextView(this).apply {
-                text = label
+                text = if (isSelected) "✓ $label" else label
                 textSize = 12.5f
                 setTypeface(null, if (isSelected) Typeface.BOLD else Typeface.NORMAL)
                 setPadding(dp(14), dp(7), dp(14), dp(7))
                 if (isSelected) {
-                    setTextColor(Ui.SurfaceElevated)
-                    background = Ui.rounded(this@SettingsActivity, Ui.Mint, 14)
+                    setTextColor(Ui.OnPrimaryContainer)
+                    background = Ui.rounded(this@SettingsActivity, Ui.PrimaryContainer, 10)
                 } else {
                     setTextColor(Ui.TextSecondary)
-                    background = Ui.rounded(this@SettingsActivity, Ui.SurfaceSoft, 14, Ui.Outline)
+                    background = Ui.rounded(this@SettingsActivity, Ui.SurfaceSoft, 10, Ui.OutlineSubtle)
                 }
+                applyChoiceSemantics(label, isSelected)
                 setOnClickListener {
                     selectedMaxOutputTokens = tokens
                     renderMaxOutputChips()
@@ -637,19 +677,29 @@ class SettingsActivity : Activity() {
         thresholdOptions.forEach { (ratio, label) ->
             val isSelected = Math.abs(ratio - selectedCompactionThreshold) < 0.001
             val chip = TextView(this).apply {
-                text = label
+                text = if (isSelected) "✓ $label" else label
                 textSize = 12.5f
                 setTypeface(null, if (isSelected) Typeface.BOLD else Typeface.NORMAL)
                 setPadding(dp(14), dp(7), dp(14), dp(7))
                 isEnabled = selectedAutoCompaction
                 alpha = if (selectedAutoCompaction) 1.0f else 0.45f
                 if (isSelected && selectedAutoCompaction) {
-                    setTextColor(Ui.SurfaceElevated)
-                    background = Ui.rounded(this@SettingsActivity, Ui.Mint, 14)
+                    setTextColor(Ui.OnPrimaryContainer)
+                    background = Ui.rounded(this@SettingsActivity, Ui.PrimaryContainer, 10)
                 } else {
                     setTextColor(Ui.TextSecondary)
-                    background = Ui.rounded(this@SettingsActivity, Ui.SurfaceSoft, 14, Ui.Outline)
+                    background = Ui.rounded(this@SettingsActivity, Ui.SurfaceSoft, 10, Ui.OutlineSubtle)
                 }
+                applyChoiceSemantics(
+                    label = label,
+                    selected = isSelected,
+                    stateLabel = when {
+                        isSelected && selectedAutoCompaction -> "已选中"
+                        isSelected -> "已选中，已停用"
+                        !selectedAutoCompaction -> "未选中，已停用"
+                        else -> "未选中"
+                    }
+                )
                 setOnClickListener {
                     if (selectedAutoCompaction) {
                         selectedCompactionThreshold = ratio
@@ -676,6 +726,8 @@ class SettingsActivity : Activity() {
         errorText.visibility = View.GONE
         testButton.isEnabled = false
         testButton.text = "正在检测通信与额度..."
+        testStatusTone = TestStatusTone.NONE
+        balanceStatusTone = BalanceStatusTone.NONE
         testStatusCard.visibility = View.GONE
 
         scope.launch {
@@ -690,40 +742,43 @@ class SettingsActivity : Activity() {
                     )
                 )
                 testButton.isEnabled = true
-                testButton.text = "⚡ 检测通信与平台额度"
+                testButton.text = "检测通信与平台额度"
                 testStatusCard.visibility = View.VISIBLE
 
                 if (summary.connectivity.success) {
-                    connectivityResultText.setTextColor(Ui.Success)
+                    testStatusTone = TestStatusTone.SUCCESS
                     connectivityResultText.text = "✓ ${summary.connectivity.message}"
                 } else {
-                    connectivityResultText.setTextColor(Ui.Danger)
+                    testStatusTone = TestStatusTone.FAILURE
                     connectivityResultText.text = "✕ ${summary.connectivity.message}"
                 }
-
                 val balance = summary.balance
                 if (balance != null && balance.supported) {
                     balanceResultText.visibility = View.VISIBLE
                     if (!balance.balanceText.isNullOrBlank()) {
-                        balanceResultText.setTextColor(Ui.MintDark)
-                        balanceResultText.text = "💰 ${balance.provider.displayName} 额度: ${balance.balanceText}"
+                        balanceStatusTone = BalanceStatusTone.SUCCESS
+                        balanceResultText.text = "${balance.provider.displayName} 额度：${balance.balanceText}"
                     } else if (!balance.error.isNullOrBlank()) {
-                        balanceResultText.setTextColor(Ui.TextSecondary)
-                        balanceResultText.text = "💰 额度查询: ${balance.error}"
+                        balanceStatusTone = BalanceStatusTone.ERROR
+                        balanceResultText.text = "额度查询：${balance.error}"
                     }
                 } else if (balance != null && !balance.supported) {
                     balanceResultText.visibility = View.VISIBLE
-                    balanceResultText.setTextColor(Ui.TextMuted)
-                    balanceResultText.text = "ℹ️ ${balance.error ?: "该平台未开放公开额度接口"}"
+                    balanceStatusTone = BalanceStatusTone.INFO
+                    balanceResultText.text = "提示：${balance.error ?: "该平台未开放公开额度接口"}"
                 } else {
+                    balanceStatusTone = BalanceStatusTone.NONE
                     balanceResultText.visibility = View.GONE
                 }
+                applyTestStatusTheme()
             } catch (e: Exception) {
                 testButton.isEnabled = true
-                testButton.text = "⚡ 检测通信与平台额度"
+                testButton.text = "检测通信与平台额度"
                 testStatusCard.visibility = View.VISIBLE
-                connectivityResultText.setTextColor(Ui.Danger)
+                testStatusTone = TestStatusTone.FAILURE
+                balanceStatusTone = BalanceStatusTone.NONE
                 connectivityResultText.text = "✕ 检测异常: ${e.message}"
+                applyTestStatusTheme()
                 balanceResultText.visibility = View.GONE
             }
         }
@@ -772,64 +827,75 @@ class SettingsActivity : Activity() {
     }
 
     private fun applyTheme() {
-        rootLayout.background = Ui.rounded(this, Ui.Surface, 0)
+        rootLayout.background = Ui.rounded(this, Ui.Background, 0)
         titleText.setTextColor(Ui.TextPrimary)
         subtitleText.setTextColor(Ui.TextSecondary)
-        backButton.setTextColor(Ui.TextPrimary)
-        backButton.background = Ui.clickableRounded(this, Ui.SurfaceSoft, Ui.SurfaceSubtle, 12, Ui.Outline)
+        backButton.imageTintList = android.content.res.ColorStateList.valueOf(Ui.TextPrimary)
+        backButton.contentDescription = "返回上一页"
+        backButton.isClickable = true
+        backButton.isFocusable = true
+        backButton.background = Ui.clickableRounded(this, Color.TRANSPARENT, Ui.SurfaceSoft, 12)
 
-        themeCard.background = Ui.rounded(this, Ui.SurfaceSubtle, 14, Ui.Outline)
+        themeCard.background = Ui.rounded(this, Ui.Surface, 14)
         themeTitle.setTextColor(Ui.TextPrimary)
         themeButtons.forEach { (mode, btn) ->
             val isSelected = ThemeManager.currentMode == mode
-            btn.setTextColor(if (isSelected) Ui.SurfaceElevated else Ui.TextSecondary)
+            btn.text = if (isSelected) "✓ ${mode.displayName}" else mode.displayName
+            btn.setTextColor(if (isSelected) Ui.OnPrimaryContainer else Ui.TextSecondary)
+            btn.applyChoiceSemantics(mode.displayName, isSelected)
             btn.background = if (isSelected) {
-                Ui.rounded(this, Ui.Mint, 10)
+                Ui.rounded(this, Ui.PrimaryContainer, 10)
             } else {
-                Ui.rounded(this, Ui.SurfaceSoft, 10, Ui.Outline)
+                Ui.rounded(this, Ui.SurfaceSoft, 10, Ui.OutlineSubtle)
             }
         }
 
-        authCard.background = Ui.rounded(this, Ui.SurfaceSubtle, 14, Ui.Outline)
+        authCard.background = Ui.rounded(this, Ui.Surface, 14)
         fullAuthSwitch.setTextColor(Ui.TextPrimary)
+        fullAuthSwitch.thumbTintList = Ui.switchThumbTint()
+        fullAuthSwitch.trackTintList = Ui.switchTrackTint()
         authHintText.setTextColor(Ui.TextSecondary)
 
-        presetCard.background = Ui.rounded(this, Ui.SurfaceSubtle, 14, Ui.Outline)
+        presetCard.background = Ui.rounded(this, Ui.Surface, 14)
         presetTitle.setTextColor(Ui.TextPrimary)
         renderChips()
 
-        configCard.background = Ui.rounded(this, Ui.SurfaceSubtle, 14, Ui.Outline)
+        configCard.background = Ui.rounded(this, Ui.Surface, 14)
         configCardTitle.setTextColor(Ui.TextPrimary)
         protocolTitle.setTextColor(Ui.TextPrimary)
         renderProtocolChips()
         listOf(nameInput, urlInput, modelInput, keyInput).forEach { input ->
             input.setTextColor(Ui.TextPrimary)
             input.setHintTextColor(Ui.TextMuted)
-            input.background = Ui.rounded(this, Ui.SurfaceSoft, 12, Ui.Outline)
+            input.background = Ui.rounded(this, Ui.SurfaceSoft, 12, Ui.OutlineSubtle)
         }
 
-        contextCard.background = Ui.rounded(this, Ui.SurfaceSubtle, 14, Ui.Outline)
+        contextCard.background = Ui.rounded(this, Ui.Surface, 14)
         contextTitle.setTextColor(Ui.TextPrimary)
         renderContextWindowChips()
 
-        maxOutputCard.background = Ui.rounded(this, Ui.SurfaceSubtle, 14, Ui.Outline)
+        maxOutputCard.background = Ui.rounded(this, Ui.Surface, 14)
         maxOutputTitle.setTextColor(Ui.TextPrimary)
         renderMaxOutputChips()
 
-        compactionCard.background = Ui.rounded(this, Ui.SurfaceSubtle, 14, Ui.Outline)
+        compactionCard.background = Ui.rounded(this, Ui.Surface, 14)
         compactionSwitch.setTextColor(Ui.TextPrimary)
+        compactionSwitch.thumbTintList = Ui.switchThumbTint()
+        compactionSwitch.trackTintList = Ui.switchTrackTint()
         compactionHintText.setTextColor(Ui.TextSecondary)
         compactionThresholdTitle.setTextColor(Ui.TextPrimary)
         renderThresholdChips()
 
-        testCard.background = Ui.rounded(this, Ui.SurfaceSubtle, 14, Ui.Outline)
-        testButton.setTextColor(Ui.Mint)
-        testButton.background = Ui.clickableRounded(this, Ui.SurfaceSoft, Ui.SurfaceSubtle, 12, Ui.MintStroke)
-        testStatusCard.background = Ui.rounded(this, Ui.SurfaceSoft, 10, Ui.Outline)
+        testCard.background = Ui.rounded(this, Ui.Surface, 14)
+        applyTestButtonTheme()
+        applyTestStatusTheme()
 
-        saveButton.setTextColor(Ui.SurfaceElevated)
-        saveButton.background = Ui.clickableRounded(this, Ui.Mint, Ui.MintDark, 14)
-        deleteButton.setTextColor(Ui.Danger)
+        saveButton.setTextColor(Ui.OnPrimary)
+        saveButton.background = Ui.clickableRounded(this, Ui.Primary, Ui.PrimaryPressed, 14)
+        deleteButton.setTextColor(Ui.stateColorList(
+            normal = Ui.DangerOnContainer,
+            pressed = Ui.DangerOnContainer
+        ))
         deleteButton.background = Ui.clickableRounded(this, Ui.DangerSoft, Ui.SurfaceSubtle, 12, Ui.Danger)
 
         // 系统状态栏图标颜色
@@ -863,6 +929,54 @@ class SettingsActivity : Activity() {
         }
     }
 
+    private fun applyTestButtonTheme() {
+        if (!::testButton.isInitialized) return
+        testButton.setTextColor(
+            Ui.stateColorList(
+                normal = Ui.Primary,
+                pressed = Ui.PrimaryPressed,
+                disabled = Ui.DisabledContent
+            )
+        )
+        testButton.background = Ui.clickableRounded(
+            this,
+            normalColor = Ui.SurfaceSoft,
+            pressedColor = Ui.SurfaceSubtle,
+            radiusDp = 12,
+            strokeColor = Ui.OutlineFocus,
+            disabledColor = Ui.DisabledContainer,
+            disabledStrokeColor = Ui.DisabledContainer
+        )
+    }
+
+    private fun applyTestStatusTheme() {
+        if (!::testStatusCard.isInitialized) return
+        val cardColor = when (testStatusTone) {
+            TestStatusTone.SUCCESS -> Ui.SuccessSoft
+            TestStatusTone.FAILURE -> Ui.DangerSoft
+            TestStatusTone.NONE -> Ui.SurfaceSoft
+        }
+        val resultTextColor = when (testStatusTone) {
+            TestStatusTone.SUCCESS -> Ui.OnPrimaryContainer
+            TestStatusTone.FAILURE -> Ui.DangerOnContainer
+            TestStatusTone.NONE -> Ui.TextPrimary
+        }
+        testStatusCard.background = Ui.rounded(this, cardColor, 10, Ui.OutlineSubtle)
+        connectivityResultText.setTextColor(resultTextColor)
+        balanceResultText.setTextColor(
+            when (balanceStatusTone) {
+                BalanceStatusTone.SUCCESS -> if (testStatusTone == TestStatusTone.SUCCESS) {
+                    Ui.OnPrimaryContainer
+                } else {
+                    Ui.TextPrimary
+                }
+                BalanceStatusTone.ERROR -> Ui.TextSecondary
+                BalanceStatusTone.INFO -> Ui.InfoOnContainer
+                BalanceStatusTone.NONE -> Ui.TextSecondary
+            }
+        )
+    }
+
     private fun applyWindowInsets() {
         if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.R) {
             rootLayout.setOnApplyWindowInsetsListener { _, insets ->
@@ -879,15 +993,15 @@ class SettingsActivity : Activity() {
 
     private fun sectionCard(): LinearLayout = LinearLayout(this).apply {
         orientation = LinearLayout.VERTICAL
-        background = Ui.rounded(this@SettingsActivity, Ui.SurfaceSubtle, 14, Ui.Outline)
+        background = Ui.rounded(this@SettingsActivity, Ui.Surface, 14)
         setPadding(dp(16), dp(14), dp(16), dp(14))
     }
 
     private fun sectionTitle(title: String): TextView = TextView(this).apply {
         text = title
-        textSize = 14f
-        setTypeface(null, Typeface.BOLD)
-        setTextColor(Ui.TextPrimary)
+        textSize = 12.5f
+        setTypeface(Typeface.create("sans-serif-medium", Typeface.NORMAL))
+        setTextColor(Ui.TextSecondary)
     }
 
     private fun settingsInput(hint: String): EditText = EditText(this).apply {
@@ -897,7 +1011,21 @@ class SettingsActivity : Activity() {
         setTextColor(Ui.TextPrimary)
         setHintTextColor(Ui.TextMuted)
         setPadding(dp(14), 0, dp(14), 0)
-        background = Ui.rounded(this@SettingsActivity, Ui.SurfaceSoft, 12, Ui.Outline)
+        background = Ui.rounded(this@SettingsActivity, Ui.SurfaceSoft, 12, Ui.OutlineSubtle)
+    }
+
+    private fun TextView.applyChoiceSemantics(
+        label: String,
+        selected: Boolean,
+        stateLabel: String = if (selected) "已选中" else "未选中"
+    ) {
+        isSelected = selected
+        isClickable = true
+        isFocusable = true
+        contentDescription = "$label，$stateLabel"
+        if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.R) {
+            stateDescription = stateLabel
+        }
     }
 
     private fun cardLayoutParams(): LinearLayout.LayoutParams = LinearLayout.LayoutParams(

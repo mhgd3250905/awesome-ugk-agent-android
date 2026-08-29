@@ -17,7 +17,8 @@ data class AgentOverlayStep(
 
 data class AgentOverlayConfirmationButton(
     val id: String,
-    val label: String
+    val label: String,
+    val visualRole: ConfirmationVisualRole = ConfirmationVisualRole.WARNING
 )
 
 data class AgentOverlayConfirmationTarget(
@@ -37,11 +38,18 @@ const val MAX_CONFIRMATION_INPUT_SUMMARY_CHARS = 512
 fun UserConfirmationTarget.toConfirmationInputSummary(): String =
     input.toString().truncateForConfirmationDisplay(MAX_CONFIRMATION_INPUT_SUMMARY_CHARS)
 
-fun UserConfirmationDialogRequest.toOverlayConfirmation(): AgentOverlayConfirmation =
-    AgentOverlayConfirmation(
+fun UserConfirmationDialogRequest.toOverlayConfirmation(): AgentOverlayConfirmation {
+    val visualRoles = confirmationVisualRoles()
+    return AgentOverlayConfirmation(
         title = title,
         message = message,
-        buttons = buttons.map { AgentOverlayConfirmationButton(it.id, it.label) },
+        buttons = buttons.mapIndexed { index, button ->
+            AgentOverlayConfirmationButton(
+                id = button.id,
+                label = button.label,
+                visualRole = visualRoles[index]
+            )
+        },
         target = target?.let {
             AgentOverlayConfirmationTarget(
                 toolName = it.toolName,
@@ -49,6 +57,7 @@ fun UserConfirmationDialogRequest.toOverlayConfirmation(): AgentOverlayConfirmat
             )
         }
     )
+}
 
 private fun String.truncateForConfirmationDisplay(maxChars: Int): String {
     if (length <= maxChars) return this

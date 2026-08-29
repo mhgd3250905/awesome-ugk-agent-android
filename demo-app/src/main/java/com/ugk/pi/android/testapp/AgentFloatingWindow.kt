@@ -21,6 +21,7 @@ import android.view.ViewConfiguration
 import android.view.inputmethod.InputMethodManager
 import android.widget.EditText
 import android.widget.FrameLayout
+import android.widget.ImageView
 import android.widget.LinearLayout
 import android.widget.ScrollView
 import android.widget.TextView
@@ -55,7 +56,7 @@ class AgentFloatingWindow(private val context: Context) : ConfirmationOverlayHos
     private var inputField: EditText? = null
     private var sendButton: TextView? = null
     private var stopButton: TextView? = null
-    private var collapsedIconView: TextView? = null
+    private var collapsedIconView: ImageView? = null
     private var collapsedStatusText: TextView? = null
 
     private var snapshot = AgentOverlaySnapshot(
@@ -93,8 +94,8 @@ class AgentFloatingWindow(private val context: Context) : ConfirmationOverlayHos
     }
 
     private val collapsedParams = WindowManager.LayoutParams().apply {
-        width = dp(92)
-        height = dp(38)
+        width = dp(112)
+        height = dp(48)
         type = overlayType
         flags = WindowManager.LayoutParams.FLAG_NOT_FOCUSABLE or
                 WindowManager.LayoutParams.FLAG_NOT_TOUCH_MODAL
@@ -296,14 +297,13 @@ class AgentFloatingWindow(private val context: Context) : ConfirmationOverlayHos
 
     enum class CollapsedDisplayState(
         val label: String,
-        val icon: String,
         val colorProvider: () -> Int
     ) {
-        RUNNING("运行中", "●", { Ui.Mint }),
-        CONFIRMING("待确认", "⚠", { Ui.Warning }),
-        COMPLETED("完成", "✓", { Ui.Success }),
-        FAILED("失败", "✕", { Ui.Danger }),
-        IDLE("就绪", "✦", { Ui.TextMuted })
+        RUNNING("运行中", { Ui.Primary }),
+        CONFIRMING("待确认", { Ui.Warning }),
+        COMPLETED("完成", { Ui.Success }),
+        FAILED("失败", { Ui.Danger }),
+        IDLE("就绪", { Ui.TextMuted })
     }
 
     private fun resolveCollapsedState(): CollapsedDisplayState {
@@ -330,14 +330,23 @@ class AgentFloatingWindow(private val context: Context) : ConfirmationOverlayHos
             orientation = LinearLayout.HORIZONTAL
             gravity = Gravity.CENTER
             setPadding(dp(10), dp(4), dp(10), dp(4))
-            background = Ui.rounded(context, Ui.SurfaceElevated, 19, Ui.Outline)
+            background = Ui.rounded(context, Ui.SurfaceElevated, 19, Ui.OutlineSubtle)
             contentDescription = "Agent 悬浮窗 (${state.label})，点击展开"
+            isClickable = true
+            isFocusable = true
         }
-        val icon = TextView(context).apply {
-            text = state.icon
-            textSize = 13f
-            setTextColor(state.colorProvider())
-            gravity = Gravity.CENTER
+        val icon = ImageView(context).apply {
+            setImageResource(R.drawable.brand_owl_avatar)
+            scaleType = ImageView.ScaleType.CENTER_INSIDE
+            setPadding(dp(2), dp(2), dp(2), dp(2))
+            clipToOutline = true
+            outlineProvider = object : android.view.ViewOutlineProvider() {
+                override fun getOutline(view: View, outline: android.graphics.Outline) {
+                    outline.setRoundRect(0, 0, view.width, view.height, dp(8).toFloat())
+                }
+            }
+            background = Ui.rounded(context, Ui.AssistantAvatarSurface, 10)
+            contentDescription = "绿色猫头鹰助手，${state.label}"
         }
         collapsedIconView = icon
 
@@ -345,13 +354,13 @@ class AgentFloatingWindow(private val context: Context) : ConfirmationOverlayHos
             text = state.label
             textSize = 12f
             setTypeface(Typeface.create("sans-serif-medium", Typeface.BOLD))
-            setTextColor(Ui.TextPrimary)
+            setTextColor(state.colorProvider())
             gravity = Gravity.CENTER_VERTICAL
             setPadding(dp(5), 0, 0, 0)
         }
         collapsedStatusText = label
 
-        root.addView(icon, LinearLayout.LayoutParams(LinearLayout.LayoutParams.WRAP_CONTENT, LinearLayout.LayoutParams.WRAP_CONTENT))
+        root.addView(icon, LinearLayout.LayoutParams(dp(32), dp(32)))
         root.addView(label, LinearLayout.LayoutParams(LinearLayout.LayoutParams.WRAP_CONTENT, LinearLayout.LayoutParams.WRAP_CONTENT))
 
         setupDrag(root, root, collapsedParams) {
@@ -363,7 +372,7 @@ class AgentFloatingWindow(private val context: Context) : ConfirmationOverlayHos
     @SuppressLint("ClickableViewAccessibility")
     private fun buildExpandedView(): View {
         val root = FrameLayout(context).apply {
-            background = Ui.rounded(context, Ui.SurfaceElevated, 16, Ui.Outline)
+            background = Ui.rounded(context, Ui.SurfaceElevated, 16, Ui.OutlineSubtle)
             clipChildren = true
         }
         val contentRoot = LinearLayout(context).apply {
@@ -422,13 +431,13 @@ class AgentFloatingWindow(private val context: Context) : ConfirmationOverlayHos
         header.addView(headerText, LinearLayout.LayoutParams(0, LinearLayout.LayoutParams.WRAP_CONTENT, 1f))
         header.addView(actionButton("主界面", "打开完整 Agent 主界面") {
             onOpenApp?.invoke()
-        })
+        }.also { it.background = Ui.clickableRounded(context, Color.TRANSPARENT, Ui.SurfaceSoft, 10) })
         header.addView(actionButton("隐藏", "隐藏 Agent 悬浮窗") {
             onHide?.invoke()
-        })
+        }.also { it.background = Ui.clickableRounded(context, Color.TRANSPARENT, Ui.SurfaceSoft, 10) })
         header.addView(actionButton("收起", "收起 Agent 悬浮窗") {
             collapseToBubble()
-        })
+        }.also { it.background = Ui.clickableRounded(context, Color.TRANSPARENT, Ui.SurfaceSoft, 10) })
         contentRoot.addView(header, LinearLayout.LayoutParams(
             LinearLayout.LayoutParams.MATCH_PARENT,
             LinearLayout.LayoutParams.WRAP_CONTENT
@@ -439,7 +448,7 @@ class AgentFloatingWindow(private val context: Context) : ConfirmationOverlayHos
 
         scrollView = ScrollView(context).apply {
             isFillViewport = true
-            setBackgroundColor(Ui.Surface)
+            setBackgroundColor(Ui.ConversationCanvas)
         }
         contentContainer = LinearLayout(context).apply {
             orientation = LinearLayout.VERTICAL
@@ -458,11 +467,11 @@ class AgentFloatingWindow(private val context: Context) : ConfirmationOverlayHos
         val composer = LinearLayout(context).apply {
             orientation = LinearLayout.HORIZONTAL
             gravity = Gravity.BOTTOM
-            background = Ui.rounded(context, Ui.SurfaceElevated, 14, Ui.Outline)
+            background = Ui.rounded(context, Ui.Surface, 14, Ui.OutlineSubtle)
             setPadding(dp(6), dp(3), dp(6), dp(3))
         }
         inputField = EditText(context).apply {
-            hint = "给 Agent 发消息"
+            hint = "发消息"
             setHintTextColor(Ui.TextMuted)
             setTextColor(Ui.TextPrimary)
             textSize = 13f
@@ -487,16 +496,39 @@ class AgentFloatingWindow(private val context: Context) : ConfirmationOverlayHos
 
             override fun afterTextChanged(editable: android.text.Editable?) = Unit
         })
-        sendButton = actionButton("发送", "发送悬浮窗消息") { sendInput() }
-        stopButton = actionButton("停止", "停止 Agent 当前任务") { onStopAgent?.invoke() }
+        sendButton = actionButton(
+            label = "发送",
+            description = "发送悬浮窗消息",
+            foregroundColor = Ui.OnPrimary,
+            pressedForegroundColor = Ui.OnPrimary,
+            backgroundColor = Ui.Primary,
+            pressedBackgroundColor = Ui.PrimaryPressed,
+            strokeColor = Color.TRANSPARENT,
+            disabledForegroundColor = Ui.DisabledContent,
+            disabledBackgroundColor = Ui.DisabledContainer,
+            disabledStrokeColor = Color.TRANSPARENT,
+            minHeightDp = 48
+        ) { sendInput() }.apply {
+            isEnabled = false
+        }
+        stopButton = actionButton(
+            label = "停止",
+            description = "停止 Agent 当前任务",
+            foregroundColor = Ui.DangerOnContainer,
+            pressedForegroundColor = Ui.OnDanger,
+            backgroundColor = Ui.DangerSoft,
+            pressedBackgroundColor = Ui.Danger,
+            strokeColor = Ui.Danger,
+            minHeightDp = 48
+        ) { onStopAgent?.invoke() }
         composer.addView(inputField, LinearLayout.LayoutParams(0, LinearLayout.LayoutParams.WRAP_CONTENT, 1f))
         composer.addView(sendButton, LinearLayout.LayoutParams(
             LinearLayout.LayoutParams.WRAP_CONTENT,
-            dp(38)
+            dp(48)
         ).apply { marginStart = dp(4) })
         composer.addView(stopButton, LinearLayout.LayoutParams(
             LinearLayout.LayoutParams.WRAP_CONTENT,
-            dp(38)
+            dp(48)
         ).apply { marginStart = dp(4) })
         contentRoot.addView(composer, LinearLayout.LayoutParams(
             LinearLayout.LayoutParams.MATCH_PARENT,
@@ -507,17 +539,42 @@ class AgentFloatingWindow(private val context: Context) : ConfirmationOverlayHos
     }
 
     @SuppressLint("ClickableViewAccessibility")
-    private fun actionButton(label: String, description: String, action: () -> Unit): TextView =
+    private fun actionButton(
+        label: String,
+        description: String,
+        foregroundColor: Int = Ui.TextSecondary,
+        pressedForegroundColor: Int = foregroundColor,
+        backgroundColor: Int = Ui.SurfaceSoft,
+        pressedBackgroundColor: Int = Ui.SurfaceSoft,
+        strokeColor: Int = Ui.OutlineSubtle,
+        disabledForegroundColor: Int = Ui.DisabledContent,
+        disabledBackgroundColor: Int? = null,
+        disabledStrokeColor: Int? = null,
+        minHeightDp: Int = 48,
+        action: () -> Unit
+    ): TextView =
         TextView(context).apply {
             text = label
             textSize = 11.5f
             setTypeface(Typeface.create("sans-serif-medium", Typeface.NORMAL))
-            setTextColor(Ui.MintDark)
+            setTextColor(Ui.stateColorList(
+                normal = foregroundColor,
+                pressed = pressedForegroundColor,
+                disabled = disabledForegroundColor
+            ))
             gravity = Gravity.CENTER
             minWidth = dp(42)
-            minHeight = dp(34)
+            minHeight = dp(minHeightDp)
             setPadding(dp(8), dp(4), dp(8), dp(4))
-            background = Ui.clickableRounded(context, Ui.SurfaceSubtle, Ui.SurfaceSoft, 10, Ui.Outline)
+            background = Ui.clickableRounded(
+                context,
+                backgroundColor,
+                pressedBackgroundColor,
+                10,
+                strokeColor,
+                disabledColor = disabledBackgroundColor,
+                disabledStrokeColor = disabledStrokeColor
+            )
             contentDescription = description
             setOnClickListener { action() }
             // A swipe that starts on a button must stay a window drag, not
@@ -649,10 +706,17 @@ class AgentFloatingWindow(private val context: Context) : ConfirmationOverlayHos
     private fun renderSnapshot() {
         val collapsedState = resolveCollapsedState()
         collapsedIconView?.apply {
-            text = collapsedState.icon
+            contentDescription = "绿色猫头鹰助手，${collapsedState.label}"
+            background = Ui.rounded(
+                context,
+                Ui.AssistantAvatarSurface,
+                10
+            )
+        }
+        collapsedStatusText?.apply {
+            text = collapsedState.label
             setTextColor(collapsedState.colorProvider())
         }
-        collapsedStatusText?.text = collapsedState.label
         collapsedView?.contentDescription = "Agent 悬浮窗 (${collapsedState.label})，点击展开"
 
         titleText?.text = snapshot.title
@@ -662,9 +726,9 @@ class AgentFloatingWindow(private val context: Context) : ConfirmationOverlayHos
         }
         stopButton?.visibility = if (snapshot.isBusy) View.VISIBLE else View.GONE
         sendButton?.let { button ->
-            val hasText = !inputField?.text.isNullOrBlank()
-            button.isEnabled = hasText
-            button.alpha = if (hasText) 1f else 0.55f
+            val canSend = !inputField?.text?.toString()?.trim().isNullOrEmpty() && onSendMessage != null
+            button.isEnabled = canSend
+            button.alpha = 1f
         }
         if (expandedView == null) return
 
@@ -703,7 +767,7 @@ class AgentFloatingWindow(private val context: Context) : ConfirmationOverlayHos
                 container,
                 "已排队 ${snapshot.queuedMessages} 条消息，当前任务完成后继续",
                 11f,
-                Ui.MintDark,
+                Ui.PrimaryPressed,
                 Ui.SurfaceSoft,
                 dp(8)
             )
@@ -741,9 +805,65 @@ class AgentFloatingWindow(private val context: Context) : ConfirmationOverlayHos
         message: String,
         role: String?
     ) {
-        val label = if (role == "assistant") "Agent" else "你"
-        addSectionLabel(container, label)
-        addText(container, message, 13f, Ui.TextPrimary, Ui.SurfaceElevated, dp(10), selectable = true)
+        val isAssistant = role == "assistant"
+        val row = LinearLayout(context).apply {
+            orientation = LinearLayout.HORIZONTAL
+            gravity = Gravity.TOP or (if (isAssistant) Gravity.START else Gravity.END)
+            contentDescription = "${if (isAssistant) "助手" else "你"}：$message"
+        }
+        val bubble = TextView(context).apply {
+            text = message
+            textSize = 13f
+            setTextColor(if (isAssistant) Ui.OnAssistantBubble else Ui.OnUserBubble)
+            setLineSpacing(0f, 1.15f)
+            setTextIsSelectable(true)
+            setPadding(dp(10), dp(8), dp(10), dp(8))
+            background = if (isAssistant) {
+                Ui.asymmetricRounded(context, Ui.AssistantBubble, 4, 16, 16, 16)
+            } else {
+                Ui.asymmetricRounded(context, Ui.UserBubble, 16, 4, 4, 16)
+            }
+        }
+        val bubbleParams = LinearLayout.LayoutParams(0, LinearLayout.LayoutParams.WRAP_CONTENT, 0.84f)
+        if (isAssistant) {
+            DemoMarkdownFormatter.setMarkdown(bubble, message)
+        }
+        val avatar: View = if (isAssistant) {
+            ImageView(context).apply {
+                setImageResource(R.drawable.brand_owl_avatar)
+                scaleType = ImageView.ScaleType.CENTER_INSIDE
+                setPadding(dp(2), dp(2), dp(2), dp(2))
+                clipToOutline = true
+                background = Ui.rounded(context, Ui.AssistantAvatarSurface, 8)
+                contentDescription = "助手头像"
+            }
+        } else {
+            ImageView(context).apply {
+                setImageResource(R.drawable.ic_person)
+                scaleType = ImageView.ScaleType.CENTER_INSIDE
+                setPadding(dp(7), dp(7), dp(7), dp(7))
+                imageTintList = android.content.res.ColorStateList.valueOf(Ui.OnUserAvatar)
+                background = Ui.rounded(context, Ui.UserAvatarSurface, 8)
+                contentDescription = "用户头像"
+            }
+        }
+        if (isAssistant) {
+            row.addView(avatar, LinearLayout.LayoutParams(dp(32), dp(32)).apply {
+                marginEnd = dp(6)
+                topMargin = dp(2)
+            })
+            row.addView(bubble, bubbleParams)
+        } else {
+            row.addView(bubble, bubbleParams)
+            row.addView(avatar, LinearLayout.LayoutParams(dp(32), dp(32)).apply {
+                marginStart = dp(6)
+                topMargin = dp(2)
+            })
+        }
+        container.addView(row, LinearLayout.LayoutParams(
+            LinearLayout.LayoutParams.MATCH_PARENT,
+            LinearLayout.LayoutParams.WRAP_CONTENT
+        ).apply { bottomMargin = dp(6) })
     }
 
     private fun addConfirmation(
@@ -760,7 +880,7 @@ class AgentFloatingWindow(private val context: Context) : ConfirmationOverlayHos
             text = "需要你的确认"
             textSize = 11f
             setTypeface(null, Typeface.BOLD)
-            setTextColor(Ui.Warning)
+            setTextColor(Ui.WarningOnContainer)
         })
         card.addView(TextView(context).apply {
             text = confirmation.title
@@ -802,15 +922,50 @@ class AgentFloatingWindow(private val context: Context) : ConfirmationOverlayHos
             gravity = Gravity.END
         }
         confirmation.buttons.forEachIndexed { index, button ->
-            val action = actionButton(button.label, "确认：${button.label}") {
+            val visualRole = button.visualRole
+            val action = actionButton(
+                label = button.label,
+                description = "确认：${button.label}",
+                foregroundColor = when (visualRole) {
+                    ConfirmationVisualRole.CANCEL -> Ui.TextSecondary
+                    ConfirmationVisualRole.PRIMARY -> Ui.OnPrimary
+                    ConfirmationVisualRole.WARNING -> Ui.WarningOnContainer
+                    ConfirmationVisualRole.DANGER -> Ui.DangerOnContainer
+                },
+                pressedForegroundColor = when (visualRole) {
+                    ConfirmationVisualRole.CANCEL -> Ui.TextPrimary
+                    ConfirmationVisualRole.PRIMARY -> Ui.OnPrimary
+                    ConfirmationVisualRole.WARNING -> Ui.WarningOnContainer
+                    ConfirmationVisualRole.DANGER -> Ui.OnDanger
+                },
+                backgroundColor = when (visualRole) {
+                    ConfirmationVisualRole.CANCEL -> Ui.SurfaceSubtle
+                    ConfirmationVisualRole.PRIMARY -> Ui.Primary
+                    ConfirmationVisualRole.WARNING -> Ui.WarningSoft
+                    ConfirmationVisualRole.DANGER -> Ui.DangerSoft
+                },
+                pressedBackgroundColor = when (visualRole) {
+                    ConfirmationVisualRole.CANCEL -> Ui.SurfaceSoft
+                    ConfirmationVisualRole.PRIMARY -> Ui.PrimaryPressed
+                    ConfirmationVisualRole.WARNING -> Ui.SurfaceSoft
+                    ConfirmationVisualRole.DANGER -> Ui.Danger
+                },
+                strokeColor = when (visualRole) {
+                    ConfirmationVisualRole.CANCEL -> Ui.OutlineSubtle
+                    ConfirmationVisualRole.PRIMARY -> Ui.Primary
+                    ConfirmationVisualRole.WARNING -> Ui.Warning
+                    ConfirmationVisualRole.DANGER -> Ui.Danger
+                },
+                minHeightDp = 48
+            ) {
                 selectConfirmation(button.id)
             }
             val params = if (confirmation.buttons.size <= 2) {
-                LinearLayout.LayoutParams(0, dp(40), 1f)
+                LinearLayout.LayoutParams(0, dp(48), 1f)
             } else {
                 LinearLayout.LayoutParams(
                     LinearLayout.LayoutParams.MATCH_PARENT,
-                    dp(40)
+                    dp(48)
                 )
             }
             if (index > 0) {
@@ -843,7 +998,7 @@ class AgentFloatingWindow(private val context: Context) : ConfirmationOverlayHos
             this.text = text
             textSize = 11f
             setTypeface(null, Typeface.BOLD)
-            setTextColor(Ui.MintDark)
+            setTextColor(Ui.TextSecondary)
             setPadding(dp(2), dp(8), dp(2), dp(4))
         })
     }
@@ -875,7 +1030,7 @@ class AgentFloatingWindow(private val context: Context) : ConfirmationOverlayHos
         val expanded = expandedStepKeys.contains(key)
         val row = LinearLayout(context).apply {
             orientation = LinearLayout.VERTICAL
-            background = Ui.rounded(context, if (expanded) Ui.SurfaceSoft else Ui.SurfaceElevated, 10, Ui.Outline)
+            background = Ui.rounded(context, if (expanded) Ui.SurfaceSoft else Ui.SurfaceElevated, 10, Ui.OutlineSubtle)
             setPadding(dp(9), dp(7), dp(9), dp(7))
             contentDescription = "${step.title}，${step.statusLabel}，${if (expanded) "收起" else "展开"}详情"
             setOnClickListener {
@@ -904,7 +1059,7 @@ class AgentFloatingWindow(private val context: Context) : ConfirmationOverlayHos
         val disclosure = TextView(context).apply {
             text = if (expanded) "收起" else "详情"
             textSize = 10f
-            setTextColor(Ui.MintDark)
+            setTextColor(Ui.PrimaryPressed)
             gravity = Gravity.CENTER
         }
         header.addView(marker, LinearLayout.LayoutParams(dp(20), dp(24)))
@@ -953,7 +1108,7 @@ class AgentFloatingWindow(private val context: Context) : ConfirmationOverlayHos
     private inner class ResizeCornerHandle(context: Context) : View(context) {
         private val cornerPaint = Paint(Paint.ANTI_ALIAS_FLAG).apply {
             style = Paint.Style.STROKE
-            color = Ui.MintDark
+            color = Ui.PrimaryPressed
             strokeCap = Paint.Cap.ROUND
         }
 
@@ -1054,7 +1209,7 @@ class AgentFloatingWindow(private val context: Context) : ConfirmationOverlayHos
         status.contains("失败") -> Ui.Danger
         status.contains("确认") || status.contains("等待") -> Ui.Warning
         status.contains("完成") -> Ui.Success
-        else -> Ui.MintDark
+        else -> Ui.PrimaryPressed
     }
 
     private fun expandedWidth(): Int = clampExpandedWidth(dp(360))

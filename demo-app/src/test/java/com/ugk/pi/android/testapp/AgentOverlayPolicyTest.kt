@@ -161,4 +161,71 @@ class AgentOverlayPolicyTest {
 
         assertNull(confirmation.target)
     }
+
+    @Test
+    fun confirmationVisualPolicyInspectsDangerousTargetInput() {
+        val request = UserConfirmationDialogRequest(
+            title = "执行终端脚本",
+            message = "是否继续？",
+            buttons = listOf(UserConfirmationDialogButton("confirm", "执行")),
+            target = UserConfirmationTarget(
+                "terminal_bash_execute",
+                buildJsonObject { put("script", "rm -rf /tmp/demo") }
+            )
+        )
+
+        assertEquals(
+            ConfirmationVisualRole.DANGER,
+            request.confirmationVisualRole(request.buttons.single())
+        )
+    }
+
+    @Test
+    fun overlayConversionPreservesPrecomputedVisualRoles() {
+        val request = UserConfirmationDialogRequest(
+            title = "清空剪贴板",
+            message = "将清除当前剪贴板内容。",
+            buttons = listOf(
+                UserConfirmationDialogButton("cancel", "取消"),
+                UserConfirmationDialogButton("confirm", "清空")
+            ),
+            target = UserConfirmationTarget(
+                "clipboard_clear",
+                buildJsonObject { put("confirmed", true) }
+            )
+        )
+
+        val confirmation = request.toOverlayConfirmation()
+
+        assertEquals(ConfirmationVisualRole.CANCEL, confirmation.buttons[0].visualRole)
+        assertEquals(ConfirmationVisualRole.DANGER, confirmation.buttons[1].visualRole)
+        assertEquals("clipboard_clear", confirmation.target?.toolName)
+    }
+
+    @Test
+    fun onlyClearOrdinaryConfirmationGetsPrimaryOtherwiseWarning() {
+        val ordinary = UserConfirmationDialogRequest(
+            title = "打开应用",
+            message = "允许打开目标应用？",
+            buttons = listOf(UserConfirmationDialogButton("confirm", "打开")),
+            target = UserConfirmationTarget(
+                "launch_android_app",
+                buildJsonObject { put("package_name", "com.example.target") }
+            )
+        )
+        val unknown = UserConfirmationDialogRequest(
+            title = "需要确认",
+            message = "请确认这个操作。",
+            buttons = listOf(UserConfirmationDialogButton("confirm", "继续"))
+        )
+
+        assertEquals(
+            ConfirmationVisualRole.PRIMARY,
+            ordinary.confirmationVisualRole(ordinary.buttons.single())
+        )
+        assertEquals(
+            ConfirmationVisualRole.WARNING,
+            unknown.confirmationVisualRole(unknown.buttons.single())
+        )
+    }
 }

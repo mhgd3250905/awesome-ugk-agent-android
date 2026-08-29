@@ -44,18 +44,19 @@ object DemoMarkdownFormatter {
         val density = context.resources.displayMetrics.density
         val dp = { value: Int -> (value * density).toInt() }
 
-        // 全新美学设计系统：米白、橙红、淡绿与纯曜石炭黑
-        val tableBorder = if (isDark) Color.rgb(47, 50, 56) else Color.rgb(229, 224, 216)
-        val tableHeaderBg = if (isDark) Color.rgb(36, 38, 43) else Color.rgb(245, 242, 236)
-        val tableOddBg = if (isDark) Color.rgb(30, 32, 36) else Color.rgb(251, 249, 245)
+        // Markdown evidence follows the same neutral surfaces and semantic
+        // green signal as the native code/table cards.
+        val tableBorder = Ui.OutlineSubtle
+        val tableHeaderBg = Ui.SurfaceSoft
+        val tableOddBg = Ui.SurfaceSubtle
 
-        val inlineCodeBg = if (isDark) Color.rgb(36, 38, 43) else Color.rgb(245, 242, 236)
-        val inlineCodeText = if (isDark) Color.rgb(110, 231, 183) else Color.rgb(45, 106, 79)
+        val inlineCodeBg = Ui.CodeBg
+        val inlineCodeText = Ui.CodeText
 
-        val codeBlockBg = if (isDark) Color.rgb(21, 22, 25) else Color.rgb(245, 242, 236)
-        val codeBlockText = if (isDark) Color.rgb(110, 231, 183) else Color.rgb(45, 106, 79)
+        val codeBlockBg = Ui.CodeBg
+        val codeBlockText = Ui.CodeText
 
-        val quoteColor = if (isDark) Color.rgb(255, 110, 74) else Color.rgb(234, 84, 52)
+        val quoteColor = Ui.OutlineSubtle
 
         val tableTheme = TableTheme.Builder()
             .tableBorderColor(tableBorder)

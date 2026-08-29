@@ -40,14 +40,16 @@ enum class DemoChatMessageRole(val accessibilityLabel: String) {
 /** 过程卡片可展示的 Agent 阶段。 */
 enum class DemoChatProcessStage(
     val label: String,
-    val accentColor: Int
+    private val accentColorProvider: () -> Int
 ) {
-    THINKING("思考中", DemoChatPalette.mintDark),
-    TOOL_CALL("调用工具", DemoChatPalette.mintDark),
-    WAITING_CONFIRMATION("等待确认", DemoChatPalette.amber),
-    RESULT("收到结果", DemoChatPalette.mintDark),
-    COMPLETED("已完成", DemoChatPalette.mintDark),
-    ERROR("执行失败", DemoChatPalette.danger)
+    THINKING("思考中", { Ui.PrimaryPressed }),
+    TOOL_CALL("调用工具", { Ui.PrimaryPressed }),
+    WAITING_CONFIRMATION("等待确认", { Ui.Warning }),
+    RESULT("收到结果", { Ui.PrimaryPressed }),
+    COMPLETED("已完成", { Ui.Success }),
+    ERROR("执行失败", { Ui.Danger });
+
+    val accentColor: Int get() = accentColorProvider()
 }
 
 /** 一行可验证的 Agent 过程步骤，不包含模型隐性思维内容。 */
@@ -91,7 +93,7 @@ class DemoChatMessageView @JvmOverloads constructor(
 
     private val userBubble = TextView(context).apply {
         setTextSize(TypedValue.COMPLEX_UNIT_SP, 15f)
-        setTextColor(DemoChatPalette.textPrimary)
+        setTextColor(DemoChatPalette.onUserBubble)
         typeface = Typeface.create("sans-serif", Typeface.NORMAL)
         setLineSpacing(0f, 1.18f)
         letterSpacing = 0.012f
@@ -126,7 +128,7 @@ class DemoChatMessageView @JvmOverloads constructor(
         }
         background = asymmetricRoundedBackground(
             context = context,
-            fillColor = DemoChatPalette.userBubble,
+            fillColor = DemoChatPalette.userAvatarSurface,
             strokeColor = DemoChatPalette.userStroke,
             topLeftDp = 18,
             topRightDp = 4,
@@ -137,27 +139,39 @@ class DemoChatMessageView @JvmOverloads constructor(
         importantForAccessibility = View.IMPORTANT_FOR_ACCESSIBILITY_NO
     }
 
-    private val assistantAvatar = TextView(context).apply {
-        text = "✦"
-        textSize = 13f
-        gravity = Gravity.CENTER
-        setTextColor(DemoChatPalette.accentDark)
+    /** A quiet, neutral user identity marker keeps message ownership visible. */
+    private val userAvatar = ImageView(context).apply {
+        setImageResource(R.drawable.ic_person)
+        scaleType = ImageView.ScaleType.CENTER_INSIDE
+        setPadding(context.chatDp(7), context.chatDp(7), context.chatDp(7), context.chatDp(7))
+        imageTintList = android.content.res.ColorStateList.valueOf(DemoChatPalette.onUserAvatar)
         background = roundedBackground(
             context,
-            DemoChatPalette.accentSoft,
-            DemoChatPalette.accentStroke,
-            15
+            DemoChatPalette.userAvatarSurface,
+            0,
+            9
         )
+        contentDescription = "用户头像"
         importantForAccessibility = View.IMPORTANT_FOR_ACCESSIBILITY_NO
     }
 
-    private val assistantHeader = TextView(context).apply {
-        text = "UGK Agent"
-        textSize = 11.5f
-        typeface = Typeface.create("sans-serif-medium", Typeface.NORMAL)
-        letterSpacing = 0.015f
-        setTextColor(DemoChatPalette.textSecondary)
-        setPadding(context.chatDp(4), 0, 0, context.chatDp(4))
+    private val assistantAvatar = ImageView(context).apply {
+        setImageResource(R.drawable.brand_owl_avatar)
+        scaleType = ImageView.ScaleType.CENTER_INSIDE
+        setPadding(context.chatDp(2), context.chatDp(2), context.chatDp(2), context.chatDp(2))
+        clipToOutline = true
+        outlineProvider = object : android.view.ViewOutlineProvider() {
+            override fun getOutline(view: View, outline: android.graphics.Outline) {
+                outline.setRoundRect(0, 0, view.width, view.height, context.chatDp(9).toFloat())
+            }
+        }
+        background = roundedBackground(
+            context,
+            DemoChatPalette.assistantAvatarSurface,
+            0,
+            15
+        )
+        contentDescription = "助手头像"
         importantForAccessibility = View.IMPORTANT_FOR_ACCESSIBILITY_NO
     }
 
@@ -197,7 +211,7 @@ class DemoChatMessageView @JvmOverloads constructor(
     private var messageText: String = ""
 
     private val userCopyButton = createCopyButton()
-    private val userMessageColumn = LinearLayout(context).apply {
+    private val userContentColumn = LinearLayout(context).apply {
         orientation = LinearLayout.VERTICAL
         gravity = Gravity.END
         addView(userImageView, LinearLayout.LayoutParams(
@@ -213,6 +227,16 @@ class DemoChatMessageView @JvmOverloads constructor(
         addView(userCopyButton, copyButtonLayoutParams(Gravity.END))
     }
 
+    private val userContainer = LinearLayout(context).apply {
+        orientation = LinearLayout.HORIZONTAL
+        gravity = Gravity.TOP or Gravity.END
+        addView(userContentColumn, LinearLayout.LayoutParams(0, LinearLayout.LayoutParams.WRAP_CONTENT, 1f))
+        addView(userAvatar, LinearLayout.LayoutParams(context.chatDp(32), context.chatDp(32)).apply {
+            marginStart = context.chatDp(8)
+            topMargin = context.chatDp(2)
+        })
+    }
+
     private val assistantCopyButton = createCopyButton()
     private val assistantContainer = LinearLayout(context).apply {
         orientation = LinearLayout.HORIZONTAL
@@ -225,17 +249,13 @@ class DemoChatMessageView @JvmOverloads constructor(
 
         val rightColumn = LinearLayout(context).apply {
             orientation = LinearLayout.VERTICAL
-            addView(assistantHeader, LinearLayout.LayoutParams(
-                LinearLayout.LayoutParams.WRAP_CONTENT,
-                LinearLayout.LayoutParams.WRAP_CONTENT
-            ))
             addView(assistantBubble, LinearLayout.LayoutParams(
                 LinearLayout.LayoutParams.WRAP_CONTENT,
                 LinearLayout.LayoutParams.WRAP_CONTENT
             ))
             addView(assistantCopyButton, copyButtonLayoutParams(Gravity.START))
         }
-        addView(rightColumn, LinearLayout.LayoutParams(0, LinearLayout.LayoutParams.WRAP_CONTENT, 1f))
+        addView(rightColumn, LinearLayout.LayoutParams(0, LinearLayout.LayoutParams.WRAP_CONTENT, 0.86f))
     }
 
     init {
@@ -249,8 +269,8 @@ class DemoChatMessageView @JvmOverloads constructor(
         )
         importantForAccessibility = View.IMPORTANT_FOR_ACCESSIBILITY_YES
         addView(
-            userMessageColumn,
-            LayoutParams(LayoutParams.WRAP_CONTENT, LayoutParams.WRAP_CONTENT).apply {
+            userContainer,
+            LayoutParams(LayoutParams.MATCH_PARENT, LayoutParams.WRAP_CONTENT).apply {
                 gravity = Gravity.END
             }
         )
@@ -269,7 +289,7 @@ class DemoChatMessageView @JvmOverloads constructor(
         this.role = role
         messageText = text.toString()
         if (role == DemoChatMessageRole.USER) {
-            userMessageColumn.visibility = View.VISIBLE
+            userContainer.visibility = View.VISIBLE
             assistantContainer.visibility = View.GONE
 
             if (!imagePath.isNullOrBlank() && java.io.File(imagePath).exists()) {
@@ -290,7 +310,7 @@ class DemoChatMessageView @JvmOverloads constructor(
 
             if (messageText.isNotBlank()) {
                 userBubble.visibility = View.VISIBLE
-                userBubble.setTextColor(DemoChatPalette.textPrimary)
+                userBubble.setTextColor(DemoChatPalette.onUserBubble)
                 userBubble.background = asymmetricRoundedBackground(
                     context = context,
                     fillColor = DemoChatPalette.userBubble,
@@ -304,10 +324,10 @@ class DemoChatMessageView @JvmOverloads constructor(
             } else {
                 userBubble.visibility = View.GONE
             }
-            userCopyButton.background = pressedCardBackground(context)
+            userCopyButton.background = copyButtonBackground(context)
             userCopyButton.setTextColor(DemoChatPalette.textSecondary)
         } else {
-            userMessageColumn.visibility = View.GONE
+            userContainer.visibility = View.GONE
             assistantContainer.visibility = View.VISIBLE
             assistantBubble.background = asymmetricRoundedBackground(
                 context = context,
@@ -318,7 +338,7 @@ class DemoChatMessageView @JvmOverloads constructor(
                 bottomRightDp = 18,
                 bottomLeftDp = 18
             )
-            assistantCopyButton.background = pressedCardBackground(context)
+            assistantCopyButton.background = copyButtonBackground(context)
             assistantCopyButton.setTextColor(DemoChatPalette.textSecondary)
             renderAssistantContent(messageText)
         }
@@ -341,12 +361,13 @@ class DemoChatMessageView @JvmOverloads constructor(
         messageText = text.toString()
         if (role == DemoChatMessageRole.ASSISTANT) {
             assistantContainer.visibility = View.VISIBLE
-            userMessageColumn.visibility = View.GONE
+            userContainer.visibility = View.GONE
             renderAssistantContent(messageText, isStreaming = true)
         } else {
-            userMessageColumn.visibility = View.VISIBLE
+            userContainer.visibility = View.VISIBLE
             assistantContainer.visibility = View.GONE
             userBubble.text = messageText
+            userBubble.setTextColor(DemoChatPalette.onUserBubble)
         }
     }
 
@@ -471,7 +492,7 @@ class DemoChatMessageView @JvmOverloads constructor(
         minWidth = context.chatDp(52)
         minHeight = context.chatDp(28)
         setPadding(context.chatDp(10), 0, context.chatDp(10), 0)
-        background = pressedCardBackground(context)
+        background = copyButtonBackground(context)
         isClickable = true
         isFocusable = true
         contentDescription = "复制这条消息"
@@ -499,7 +520,7 @@ class DemoChatMessageView @JvmOverloads constructor(
 
     private companion object {
         const val DEFAULT_BUBBLE_MAX_WIDTH_DP = 320
-        const val MAX_BUBBLE_WIDTH_FRACTION = 0.85f
+        const val MAX_BUBBLE_WIDTH_FRACTION = 0.80f
     }
 }
 
@@ -574,7 +595,7 @@ class DemoChatProcessCardView @JvmOverloads constructor(
     private val stepHolders = mutableMapOf<String, StepRowHolder>()
 
     private val header = LinearLayout(context)
-    private val headerIcon = TextView(context)
+    private val headerIcon = ImageView(context)
     private val headerTitle = TextView(context)
     private val headerMeta = TextView(context)
     private val expansionView = TextView(context)
@@ -603,7 +624,7 @@ class DemoChatProcessCardView @JvmOverloads constructor(
         isClickable = true
         isFocusable = true
         importantForAccessibility = View.IMPORTANT_FOR_ACCESSIBILITY_YES
-        background = pressedCardBackground(context)
+        background = processCardBackground(context)
 
         header.orientation = HORIZONTAL
         header.gravity = Gravity.CENTER_VERTICAL
@@ -621,7 +642,7 @@ class DemoChatProcessCardView @JvmOverloads constructor(
 
         header.addView(
             headerIcon,
-            LayoutParams(context.chatDp(28), context.chatDp(28)).apply {
+            LayoutParams(context.chatDp(32), context.chatDp(32)).apply {
                 marginEnd = context.chatDp(8)
             }
         )
@@ -733,16 +754,22 @@ class DemoChatProcessCardView @JvmOverloads constructor(
 
     private fun configureHeaderIcon() {
         headerIcon.apply {
-            text = "✦"
-            gravity = Gravity.CENTER
-            setTextSize(TypedValue.COMPLEX_UNIT_SP, 15f)
-            setTextColor(DemoChatPalette.mintDark)
+            setImageResource(R.drawable.brand_owl_avatar)
+            scaleType = ImageView.ScaleType.CENTER_INSIDE
+            setPadding(context.chatDp(2), context.chatDp(2), context.chatDp(2), context.chatDp(2))
+            clipToOutline = true
+            outlineProvider = object : android.view.ViewOutlineProvider() {
+                override fun getOutline(view: View, outline: android.graphics.Outline) {
+                    outline.setRoundRect(0, 0, view.width, view.height, context.chatDp(8).toFloat())
+                }
+            }
             background = roundedBackground(
                 context,
-                DemoChatPalette.mintSoft,
-                DemoChatPalette.mintStroke,
+                DemoChatPalette.assistantAvatarSurface,
+                0,
                 14
             )
+            contentDescription = "绿色猫头鹰助手"
             importantForAccessibility = View.IMPORTANT_FOR_ACCESSIBILITY_NO
         }
     }
@@ -771,16 +798,16 @@ class DemoChatProcessCardView @JvmOverloads constructor(
     private fun configureExpansionView() {
         expansionView.apply {
             setTextSize(TypedValue.COMPLEX_UNIT_SP, 11.5f)
-            setTextColor(DemoChatPalette.accentDark)
+            setTextColor(DemoChatPalette.textSecondary)
             typeface = Typeface.create("sans-serif-medium", Typeface.NORMAL)
             letterSpacing = 0.015f
             maxLines = 1
             setPadding(context.chatDp(9), context.chatDp(3), context.chatDp(9), context.chatDp(3))
             background = roundedBackground(
                 context,
-                DemoChatPalette.accentSoft,
-                DemoChatPalette.accentStroke,
-                999
+                DemoChatPalette.surfaceSoft,
+                DemoChatPalette.outlineSubtle,
+                10
             )
             importantForAccessibility = View.IMPORTANT_FOR_ACCESSIBILITY_NO
         }
@@ -824,7 +851,7 @@ class DemoChatProcessCardView @JvmOverloads constructor(
             text = "收起整个过程 ︿"
             gravity = Gravity.CENTER
             setTextSize(TypedValue.COMPLEX_UNIT_SP, 12f)
-            setTextColor(DemoChatPalette.mintDark)
+            setTextColor(DemoChatPalette.textSecondary)
             typeface = Typeface.create("sans-serif-medium", Typeface.NORMAL)
             isClickable = true
             isFocusable = true
@@ -957,7 +984,7 @@ class DemoChatProcessCardView @JvmOverloads constructor(
         currentState.steps.forEachIndexed { index, step ->
             if (index > 0) {
                 stepsContainer.addView(View(context).apply {
-                    setBackgroundColor(DemoChatPalette.outline)
+                    setBackgroundColor(DemoChatPalette.divider)
                 }, LayoutParams(
                     context.chatDp(1),
                     context.chatDp(10)
@@ -1032,7 +1059,7 @@ class DemoChatProcessCardView @JvmOverloads constructor(
                 background = roundedBackground(
                     context,
                     DemoChatPalette.surfaceSubtle,
-                    DemoChatPalette.outline,
+                    DemoChatPalette.outlineSubtle,
                     8
                 )
             }
@@ -1086,7 +1113,7 @@ class DemoChatProcessCardView @JvmOverloads constructor(
         val disclosure = TextView(context).apply {
             text = if (isStepExpanded) "收起" else "展开"
             setTextSize(TypedValue.COMPLEX_UNIT_SP, 11f)
-            setTextColor(DemoChatPalette.mintDark)
+            setTextColor(DemoChatPalette.textSecondary)
             gravity = Gravity.CENTER
             maxLines = 1
             visibility = if (hasDetails) View.VISIBLE else View.GONE
@@ -1142,53 +1169,60 @@ class DemoChatProcessCardView @JvmOverloads constructor(
     }
 
     private fun stepIndicatorTextColor(status: DemoChatProcessStepStatus): Int = when (status) {
-        DemoChatProcessStepStatus.COMPLETE -> DemoChatPalette.surface
-        DemoChatProcessStepStatus.ACTIVE -> DemoChatPalette.accentDark
-        DemoChatProcessStepStatus.WAITING -> DemoChatPalette.amber
-        DemoChatProcessStepStatus.ERROR -> DemoChatPalette.danger
+        DemoChatProcessStepStatus.COMPLETE -> DemoChatPalette.primaryOnContainer
+        DemoChatProcessStepStatus.ACTIVE -> DemoChatPalette.primaryOnContainer
+        DemoChatProcessStepStatus.WAITING -> DemoChatPalette.amberOnContainer
+        DemoChatProcessStepStatus.ERROR -> DemoChatPalette.dangerOnContainer
         DemoChatProcessStepStatus.PENDING -> DemoChatPalette.textMuted
     }
 
     private fun stepIndicatorFill(status: DemoChatProcessStepStatus): Int = when (status) {
-        DemoChatProcessStepStatus.COMPLETE -> DemoChatPalette.sage
-        DemoChatProcessStepStatus.ACTIVE -> DemoChatPalette.accentSoft
+        DemoChatProcessStepStatus.COMPLETE -> DemoChatPalette.successSoft
+        DemoChatProcessStepStatus.ACTIVE -> DemoChatPalette.primaryContainer
         DemoChatProcessStepStatus.WAITING -> DemoChatPalette.amberSoft
         DemoChatProcessStepStatus.ERROR -> DemoChatPalette.dangerSoft
         DemoChatProcessStepStatus.PENDING -> DemoChatPalette.surface
     }
 
     private fun stepIndicatorStroke(status: DemoChatProcessStepStatus): Int = when (status) {
-        DemoChatProcessStepStatus.COMPLETE -> DemoChatPalette.sage
-        DemoChatProcessStepStatus.ACTIVE -> DemoChatPalette.accent
+        DemoChatProcessStepStatus.COMPLETE -> DemoChatPalette.success
+        DemoChatProcessStepStatus.ACTIVE -> DemoChatPalette.primary
         DemoChatProcessStepStatus.WAITING -> DemoChatPalette.amber
         DemoChatProcessStepStatus.ERROR -> DemoChatPalette.danger
-        DemoChatProcessStepStatus.PENDING -> DemoChatPalette.outline
+        DemoChatProcessStepStatus.PENDING -> DemoChatPalette.outlineSubtle
     }
 }
 
 private object DemoChatPalette {
     val surface get() = Ui.Surface
     val surfaceSubtle get() = Ui.SurfaceSubtle
+    val surfaceSoft get() = Ui.SurfaceSoft
+    val outlineSubtle get() = Ui.OutlineSubtle
+    val divider get() = Ui.Divider
     val assistantBubble get() = Ui.AssistantBubble
     val assistantStroke get() = Ui.AssistantStroke
+    val assistantAvatarSurface get() = Ui.AssistantAvatarSurface
     val userBubble get() = Ui.UserBubble
+    val onUserBubble get() = Ui.OnUserBubble
     val userStroke get() = Ui.UserStroke
+    val userAvatarSurface get() = Ui.UserAvatarSurface
+    val onUserAvatar get() = Ui.OnUserAvatar
     val cardSurface get() = Ui.SurfaceElevated
     val cardPressed get() = Ui.SurfaceSoft
-    val cardStroke get() = Ui.Outline
-    val accent get() = Ui.Accent
-    val accentDark get() = Ui.AccentDark
-    val accentSoft get() = Ui.AccentLight
-    val accentStroke get() = Ui.AccentStroke
-    val sage get() = Ui.Sage
-    val sageSoft get() = Ui.SageSoft
-    val mintDark get() = Ui.MintDark
-    val mintSoft get() = Ui.MintLight
-    val mintStroke get() = Ui.MintStroke
+    val cardStroke get() = Ui.OutlineSubtle
+    val primaryContainer get() = Ui.PrimaryContainer
+    val primary get() = Ui.Primary
+    val primaryPressed get() = Ui.PrimaryPressed
+    val focusRing get() = Ui.FocusRing
+    val primaryOnContainer get() = Ui.OnPrimaryContainer
+    val success get() = Ui.Success
+    val successSoft get() = Ui.SuccessSoft
     val amber get() = Ui.Warning
     val amberSoft get() = Ui.WarningSoft
+    val amberOnContainer get() = Ui.WarningOnContainer
     val danger get() = Ui.Danger
     val dangerSoft get() = Ui.DangerSoft
+    val dangerOnContainer get() = Ui.DangerOnContainer
     val outline get() = Ui.Outline
     val textMuted get() = Ui.TextMuted
     val textPrimary get() = Ui.TextPrimary
@@ -1206,7 +1240,9 @@ private fun roundedBackground(
 ): Drawable = GradientDrawable().apply {
     setColor(fillColor)
     cornerRadius = context.chatDp(radiusDp).toFloat()
-    setStroke(context.chatDp(1), strokeColor)
+    if (strokeColor != Color.TRANSPARENT) {
+        setStroke(context.chatDp(1), strokeColor)
+    }
 }
 
 private fun asymmetricRoundedBackground(
@@ -1224,10 +1260,33 @@ private fun asymmetricRoundedBackground(
     val br = context.chatDp(bottomRightDp).toFloat()
     val bl = context.chatDp(bottomLeftDp).toFloat()
     cornerRadii = floatArrayOf(tl, tl, tr, tr, br, br, bl, bl)
-    setStroke(context.chatDp(1), strokeColor)
+    if (strokeColor != Color.TRANSPARENT) {
+        setStroke(context.chatDp(1), strokeColor)
+    }
 }
 
-private fun pressedCardBackground(context: Context): Drawable = StateListDrawable().apply {
+private fun copyButtonBackground(context: Context): Drawable = StateListDrawable().apply {
+    addState(
+        intArrayOf(android.R.attr.state_pressed),
+        roundedBackground(
+            context = context,
+            fillColor = DemoChatPalette.surfaceSoft,
+            strokeColor = Color.TRANSPARENT,
+            radiusDp = 8
+        )
+    )
+    addState(
+        intArrayOf(),
+        roundedBackground(
+            context = context,
+            fillColor = Color.TRANSPARENT,
+            strokeColor = Color.TRANSPARENT,
+            radiusDp = 8
+        )
+    )
+}
+
+private fun processCardBackground(context: Context): Drawable = StateListDrawable().apply {
     addState(
         intArrayOf(android.R.attr.state_pressed),
         roundedBackground(
@@ -1272,4 +1331,3 @@ private fun showFullImageDialog(context: Context, imagePath: String) {
     dialog.setContentView(container)
     dialog.show()
 }
-
