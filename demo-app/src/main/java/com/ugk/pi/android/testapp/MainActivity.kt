@@ -100,7 +100,6 @@ class MainActivity : Activity() {
     private lateinit var headerView: LinearLayout
     private lateinit var headerDividerView: View
     private lateinit var historyButton: ImageButton
-    private lateinit var themeButton: ImageButton
     private lateinit var settingsButton: ImageButton
     private lateinit var composerLayout: LinearLayout
     private lateinit var composerDividerView: View
@@ -500,20 +499,6 @@ class MainActivity : Activity() {
             maxLines = 1
         }
 
-        themeButton = ImageButton(this).apply {
-            setThemeIcon(ThemeManager.currentMode)
-            imageTintList = android.content.res.ColorStateList.valueOf(Ui.TextPrimary)
-            scaleType = ImageView.ScaleType.CENTER
-            background = Ui.clickableRounded(this@MainActivity, Color.TRANSPARENT, Ui.SurfaceSoft, 12)
-            contentDescription = "切换主题模式"
-            isClickable = true
-            isFocusable = true
-            setOnClickListener {
-                val next = ThemeManager.toggle(this@MainActivity)
-                setThemeIcon(next)
-            }
-        }
-
         settingsButton = ImageButton(this).apply {
             setImageResource(R.drawable.ic_settings)
             imageTintList = android.content.res.ColorStateList.valueOf(Ui.TextPrimary)
@@ -538,9 +523,6 @@ class MainActivity : Activity() {
                 LinearLayout.LayoutParams.WRAP_CONTENT,
                 LinearLayout.LayoutParams.WRAP_CONTENT
             ).apply { marginEnd = dp(6) })
-            addView(themeButton, LinearLayout.LayoutParams(dp(48), dp(48)).apply {
-                marginEnd = dp(6)
-            })
             addView(settingsButton, LinearLayout.LayoutParams(dp(48), dp(48)))
         }
         content.addView(headerView, LinearLayout.LayoutParams(
@@ -800,9 +782,6 @@ class MainActivity : Activity() {
         headerDividerView.setBackgroundColor(Ui.Divider)
         historyButton.imageTintList = android.content.res.ColorStateList.valueOf(Ui.TextPrimary)
         historyButton.background = Ui.clickableRounded(this, Color.TRANSPARENT, Ui.SurfaceSoft, 12)
-        themeButton.setThemeIcon(ThemeManager.currentMode)
-        themeButton.imageTintList = android.content.res.ColorStateList.valueOf(Ui.TextPrimary)
-        themeButton.background = Ui.clickableRounded(this, Color.TRANSPARENT, Ui.SurfaceSoft, 12)
         settingsButton.imageTintList = android.content.res.ColorStateList.valueOf(Ui.TextPrimary)
         settingsButton.background = Ui.clickableRounded(this, Color.TRANSPARENT, Ui.SurfaceSoft, 12)
         appBarTitle.setTextColor(Ui.TextPrimary)
@@ -2081,16 +2060,6 @@ internal fun shouldShowFloatingWindowOnPause(
     overlayPermissionGranted = overlayPermissionGranted,
     activityResumed = false
 )
-
-private fun ImageButton.setThemeIcon(mode: AppThemeMode) {
-    setImageResource(
-        when (mode) {
-            AppThemeMode.LIGHT -> R.drawable.ic_sun
-            AppThemeMode.DARK -> R.drawable.ic_moon
-            AppThemeMode.SYSTEM -> R.drawable.ic_system_theme
-        }
-    )
-}
 
 private class SendActionButton(context: android.content.Context) : View(context) {
     enum class State {
