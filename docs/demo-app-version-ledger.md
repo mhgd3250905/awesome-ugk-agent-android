@@ -1,18 +1,34 @@
 # demo-app 版本与变更台账
 
 更新时间：2026-08-29
-当前保存版本：`0.7.0`（`versionCode 8`）
+当前保存版本：`0.7.1`（`versionCode 9`）
 版本范围：仅 `:demo-app`；SDK/AAR 模块版本继续独立维护。
-当前阶段：`0.7.0` 独立设置页、旗舰大模型上下文参数适配、70% 阈值智能上下文压缩引擎与底部动态占用指示条已在标签 `demo-app-v0.7.0`（`6a35704`）完成当时的 JVM 单测、真机安装与实测验收；其后的架构整改未重跑设备，不能把该真机证据绑定到当前 `main`。本轮未核验标签远端同步状态。
+当前阶段：快速迭代后的模块化架构收敛已保存为稳定性 patch `0.7.1 / versionCode 9`。架构整改代码先以 `0.7.0` 安装到小米 `QSG6Q8IFDMDELVGQ` 并由用户完成体验测试；`0.7.1` 只改变版本元数据和收束文档，本轮不重复安装或设备测试。本地标签 `demo-app-v0.7.1` 不推送远端。
 
 ## 版本规则
 
 - `versionCode` 只递增，不因重新打包或覆盖安装回退。
 - `versionName` 使用面向测试交付的 SemVer 风格；聊天、会话和悬浮窗等一组可感知能力完成后提升 minor 版本。
 - 稳定性修复、生命周期恢复和验收证据整理使用 patch 版本递增，不与新的用户可感知 UI 能力混用。
-- 最近已保存版本 Git 标签为 `demo-app-v0.7.0`；`demo-app-v0.6.0`、`demo-app-v0.5.0`、`demo-app-v0.4.0` 和 `demo-app-v0.3.0` 保留为历史 Demo 交付标签，不代表 Terminal Runtime 已达到最终发布状态。
+- 最近已保存版本 Git 标签为 `demo-app-v0.7.1`；`demo-app-v0.7.0`、`demo-app-v0.6.0`、`demo-app-v0.5.0`、`demo-app-v0.4.0` 和 `demo-app-v0.3.0` 保留为历史 Demo 交付标签，不代表 Terminal Runtime 已达到最终发布状态。
 - Debug APK 允许本机从被 Git 忽略的配置读取 API 默认值，不能作为对外分发包；API Key 不进入源码、文档或提交。
 - 真机迭代使用固定 Debug 签名和 `adb install -r -d`，不以卸载、清数据作为常规版本升级步骤。
+
+## 0.7.1 · 2026-08-29 · 模块化架构稳定化保存
+
+### 变更范围
+
+- 不新增用户功能；保存 `0.7.0` 之后完成的 Runtime 生命周期、API 设置、上下文档位、Provider profile、进程/悬浮窗 ownership、conversation runtime、Session transcript、capability assembly 与 Terminal/Screen host interlock 收敛。
+- Demo 版本由 `0.7.0 / versionCode 8` 提升到 `0.7.1 / versionCode 9`；Core SDK publication 继续保持开发期坐标 `0.1.0`，没有依赖升级或权限变化。
+- Canonical 文档、SDK 优化台账、验证矩阵、UI 版本元数据和交接信息对齐到当前保存点。
+
+### 当前证据与边界
+
+- `885c1e9` 对应代码已构建为 `0.7.0`，安装到 `QSG6Q8IFDMDELVGQ`（`2602BRT18C`）并启动；用户随后反馈当前测试无明显问题。旧设备 App 为不同签名的 `0.6.0`，按用户明确授权卸载后重新安装，因此旧 App 本地数据已清除。
+- `0.7.1` 元数据更新后，全工程 JVM XML 合计 `375/375` 通过、0 failure/error/skipped；其中八个 SDK/Runtime 模块为 `271`，Demo 为 `104`，`ugk-terminal-runtime-android` 当前为 `NO-SOURCE`。
+- `:demo-app:assembleDebug` 成功；APK 元数据确认为 `versionCode 9 / versionName 0.7.1`。
+- `0.7.1` 本轮未重复安装、未运行 instrumentation、真实网络或 Provider/API；除版本元数据与文档外，生产行为与用户已测试的架构整改代码一致。
+- 本地保存 commit/tag 不 push、不创建 PR、不发布远程 Release。
 
 ## 0.7.0 · 2026-08-28 · 独立设置页、旗舰大模型参数适配、70% 智能上下文压缩与动态监控
 

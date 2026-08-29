@@ -9,7 +9,7 @@
 - 未形成正式发布物前，不因内部修复擅自提升 `demo-app` 版本或 Maven Artifact 版本。
 - 每一步只修改目标范围，保留工作树中已有的用户改动。
 
-当前基线：`demo-app 0.7.0` / `versionCode 8`；SDK publication 仍为开发期坐标 `0.1.0`，当前处于持续开发阶段。
+当前基线：`demo-app 0.7.1` / `versionCode 9`；SDK publication 仍为开发期坐标 `0.1.0`，当前处于持续开发阶段。
 
 ## SDK-OPT-001：ToolRegistry 重复 Tool ID 治理
 
@@ -431,3 +431,7 @@ git diff --check
 阶段 8 验证：八模块 JVM XML `271/271`，Demo JVM `104/104`；Demo Debug、五个关键 Release AAR、两个 Probe Release APK和 Terminal Runtime `-CheckPackages` 全部通过。Core 当前 inventory 为 122 class / 82 source-facing public types / 800 public members；该统计不是兼容承诺，缺少可信旧发布 AAR和升级 consumer，不能宣称完整 ABI 兼容。一次隔离临时 Maven consumer 检查因内部仍调用被阶段约束排除的 `publishReleasePublicationToMavenLocal` task，仅记录为非 Gate 补充事实，不用于 closeout 接收。详细命令、包验收修复和限制见 `terminal-runtime-validation.md` 第 20 节。
 
 仍开放：arm64 16KB、完整 API/page-size 设备矩阵、Release AAB/split 安装、升级/低资源/性能/许可证发布检查；这些是发布 Gate，不否定本轮模块化整改的本机收束，也不能被本机收束结果替代。
+
+### 0.7.1 版本保存
+
+架构整改在 `885c1e9` 完成文档/验证收束后，按 Demo 现有版本规则保存为稳定性 patch `0.7.1 / versionCode 9`；不新增用户功能，不改变 SDK publication `0.1.0`。版本元数据更新后的全工程 JVM XML 为 `375/375`，`:demo-app:assembleDebug` 通过，APK metadata 已核对。真机体验证据来自同一代码在 `0.7.0 / 8` 元数据下的安装与用户测试；`0.7.1` 本轮不重复设备操作。详细边界见 `demo-app-version-ledger.md` 与 `terminal-runtime-validation.md` 第 21 节。

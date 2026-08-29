@@ -105,7 +105,7 @@ AAR，也没有旧 consumer 升级矩阵，因此本次 inventory 只能描述�
 - publication 只配置 `release` variant，坐标固定为 `com.ugk.pi:ugk-pi-android:0.1.0`。
 - 版本写在 `ugk-pi-android/build.gradle.kts` 中，当前没有 API/ABI 检查插件、兼容性基线、远程发布、签名或多版本矩阵。
 - `0.1.0` 是当前开发阶段用于本地/临时 consumer 验证的坐标，不是正式发布承诺；不能据此推断 API、ABI、运行时行为或升级兼容性。
-- Core SDK 版本与 Demo 版本分开管理；当前 Demo 为 `0.7.0 / versionCode 8`，本步骤不因 inventory 结果提升任何版本。
+- Core SDK 版本与 Demo 版本分开管理；当前 Demo 为 `0.7.1 / versionCode 9`，本步骤不因 inventory 结果提升 SDK publication 版本。
 
 ### 轻量版本策略（当前持续开发阶段）
 

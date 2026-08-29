@@ -1,8 +1,8 @@
 # awesome-ugk-agent-android 项目交接文档 (Handover Document)
 
-> **最新保存版本**：`0.7.0` (`versionCode 8`)
-> **最近已保存标签**：`demo-app-v0.7.0`
-> **当前接手基线**：架构整改实现 checkpoint `9268bc2`；阶段 8 closeout 见当前 `main` 最新提交
+> **最新保存版本**：`0.7.1` (`versionCode 9`，架构稳定化 patch)
+> **最近已保存标签**：`demo-app-v0.7.1`（本地；本轮未 push）
+> **当前接手基线**：架构整改实现 checkpoint `9268bc2`，阶段 8 closeout `885c1e9`；`0.7.1` 保存点见当前 `main`
 > **分支**：`main`  
 > **交接时间**：2026-08-29
 > **工作区**：`E:\AII\ugk-android-new`
@@ -16,12 +16,13 @@
 ## 0. 2026-08-29 架构整改收束（当前事实）
 
 - 快速迭代后的模块化审查已完成计划中的 7 个实现阶段，并形成 9 个本地 checkpoint：Runtime 生命周期、设置领域/UI、上下文档位、Provider profile、进程/悬浮窗 ownership、conversation runtime、Session transcript、capability assembly、Terminal/Screen host interlock 均已形成明确单一 owner。
-- 本地 checkpoint 顺序为 `1409610`、`ccc76c9`、`20b2b60`、`f20bee7`、`1003cc1`、`74dd2ff`、`47964b5`、`9956116`、`9268bc2`；本轮没有 push、创建新 tag/PR 或版本提升，既有 `demo-app-v0.7.0` 标签保持不变。
+- 架构整改实现 checkpoint 顺序为 `1409610`、`ccc76c9`、`20b2b60`、`f20bee7`、`1003cc1`、`74dd2ff`、`47964b5`、`9956116`、`9268bc2`，阶段 8 文档/验证收束为 `885c1e9`；随后按 patch 规则保存 `0.7.1 / versionCode 9`，本轮不 push、不创建 PR。
 - 2026-08-29 本机收束：八模块 JVM `271/271`、Demo JVM `104/104`；Demo Debug、五个关键 Release AAR、两个 Probe Release APK、Terminal Runtime 静态/哈希/AAR/APK/zipalign 验收均通过。
 - `verify-runtime.ps1` 修复了 `zh-CN` 下文化相关文件名排序造成的 CPython extension tree 哈希误报；改为 `StringComparer.Ordinal`，没有改动二进制或锁文件。
 - 当前 Core AAR inventory 为 122 class、82 个审查口径 source-facing public type、800 个 `javap` public member。D-023/D-024 包含明确的 `0.x` source/semantic change；没有可信旧发布 AAR和升级 consumer，不能宣称完整 API/ABI 兼容。
 - 本轮没有执行 ADB、instrumentation、真实网络或 Provider/API。arm64 16KB、完整设备矩阵、Release AAB/split、升级、低资源、性能和许可证仍是发布 Gate。
-- `0.7.0` 真机证据绑定 `demo-app-v0.7.0`（`6a35704`）；架构整改 checkpoint 未重跑设备，不能沿用为当前 HEAD 的设备通过结论。
+- 2026-08-29 已将 `885c1e9` 对应代码构建为 `0.7.0 / versionCode 8`，安装到 `QSG6Q8IFDMDELVGQ`（`2602BRT18C`）并启动；用户随后反馈当前测试无明显问题。因旧设备上的 `0.6.0` 使用不同签名，本次按用户明确授权先卸载再安装，旧 App 本地数据已清除。`0.7.1` 只改变版本元数据和文档，本轮不重复设备验证。
+- `0.7.1 / versionCode 9` 更新后全工程 JVM XML `375/375`、`:demo-app:assembleDebug` 与 APK metadata 检查通过；本地 commit/tag 构成保存边界，不 push、不发布远程 Release。
 - 以 `docs/README.md`、`docs/sdk-optimization-ledger.md`、`docs/terminal-runtime-validation.md`、`docs/terminal-runtime-decisions.md` 为当前事实源。下文 0.2—0.7 的功能记录是历史累计说明；遇到提交、测试数或路径冲突时，以本节和上述 canonical 文档为准。
 
 ---

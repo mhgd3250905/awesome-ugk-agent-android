@@ -313,3 +313,14 @@ Core API/JVM 边界：
 静态边界：`git diff --check` 通过；Terminal 生产源码与 runtime `AGENTS.md` 不含 screen capability 知识，仓库没有 `startsWith("screen_")` workflow matcher，前后台复用同一 Demo exact matcher/interlock seam。
 
 未执行：设备/instrumentation、ADB、真实网络、真实 Provider/API、发布到远程仓库、tag/push/PR。物理设备与 Release AAB/升级/低资源/16KB 剩余项继续沿用本文件 Gate 总表和未覆盖矩阵，不能因本节静态通过而关闭。
+
+## 21. Demo 0.7.1 架构稳定化版本保存
+
+验证日期：2026-08-29；阶段基线：`885c1e9`；范围仅为 Demo patch 版本元数据、canonical 文档和本地版本边界，不改变 Terminal 原生载荷、Core publication、依赖、权限或运行时行为。
+
+- `0.7.1 / versionCode 9` 更新后运行九个模块的 `testDebugUnitTest` 与 `:demo-app:assembleDebug`，`BUILD SUCCESSFUL`。
+- XML 合计 `375/375`，0 failure/error/skipped：八个 SDK/Runtime 模块 `271`，Demo `104`；`ugk-terminal-runtime-android` 为 `NO-SOURCE`。
+- `aapt2 dump badging` 确认 APK 为 `com.ugk.pi.android.testapp`、`versionCode='9'`、`versionName='0.7.1'`。
+- 设备事实：同一架构整改代码已在版本元数据仍为 `0.7.0 / 8` 时安装到授权小米 `QSG6Q8IFDMDELVGQ`（`2602BRT18C`）并启动，用户完成体验测试并反馈无明显问题。`0.7.1` 只调整版本元数据与文档，本轮不重复安装或设备测试。
+- 未运行 instrumentation、真实网络、真实 Provider/API、Terminal 原生 `-CheckPackages` 或 Release 包矩阵：本次没有触及对应代码/载荷，前四项不是 patch 元数据保存的必需 Gate；原生与 Release 证据继续使用第 20 节，但不得泛化为新设备矩阵。
+- 不 push、不创建 PR、不发布远程 Release；本地 commit/tag 是本次唯一版本边界。
