@@ -4,6 +4,7 @@
 > **0.7.1 版本保存点**：commit `b2c14fdc091207c5aab2f00e365c6e2b0f5d7e01`（`demo-app-v0.7.1`）
 > **架构整改实现 checkpoint**：`9268bc2`
 > **阶段 8 文档/验证 closeout**：`885c1e9`
+> **微信式对话视觉实现 checkpoint**：`af5b0b7075dd8a201dbfd857987521f7b0d3470a`
 > **分支**：`main`  
 > **交接时间**：2026-08-29
 > **工作区**：`E:\AII\ugk-android-new`
@@ -25,6 +26,11 @@
 - 阶段 8 的本机静态收束没有执行 ADB、instrumentation、真实网络或 Provider/API；其后的人工真机体验见下一条。arm64 16KB、完整设备矩阵、Release AAB/split、升级、低资源、性能和许可证仍是发布 Gate。
 - 2026-08-29 已将 `885c1e9` 对应代码构建为 `0.7.0 / versionCode 8`，安装到 `QSG6Q8IFDMDELVGQ`（`2602BRT18C`）并启动；用户反馈该轮测试无明显问题。因旧设备上的 `0.6.0` 使用不同签名，本次按用户明确授权先卸载再安装，旧 App 本地数据已清除。`0.7.1` 只改变版本元数据和文档，本轮不重复设备验证。
 - `0.7.1 / versionCode 9` 更新后全工程 JVM XML `375/375`、`:demo-app:assembleDebug` 与 APK metadata 检查通过；版本保存点和标签构成版本边界，不代表远程 Release。
+- 2026-08-29 微信式对话视觉重构已在实现 checkpoint `af5b0b7075dd8a201dbfd857987521f7b0d3470a` 保存：用户消息右侧主题绿、AI 回复左侧 Light 白/Dark 深灰中性表面，顶栏/composer、过程证据、设置页、悬浮窗和组件状态统一使用 Light/Dark 语义 Token；透明猫头鹰统一 launcher、助手头像、空状态和悬浮窗入口。
+- 该视觉 checkpoint 不升版本：当前实际安装并启动的 Debug APK 仍为 `0.7.1 / versionCode 9`，通过 `adb install -r -d` 覆盖安装至授权小米 `QSG6Q8IFDMDELVGQ`，未卸载、未清理数据，启动进程未见 `FATAL`。
+- 当前视觉阶段验证：`:demo-app:compileDebugKotlin`、`:demo-app:assembleDebug`、`:demo-app:compileDebugAndroidTestKotlin` 通过；`:demo-app:testDebugUnitTest` XML `107/107`，0 failure/error/skipped；`git diff --check` 通过。
+- 主会话已查看并验收 Light/Dark 主聊天、Settings Dark、悬浮窗折叠/展开第二轮截图，确认用户绿、AI 中性、透明猫头鹰、无框顶栏与 composer、Markdown 和 disabled send 符合基线。截图在用户 Temp，未复制入仓库。
+- 本阶段未运行 `connectedDebugAndroidTest`，因其可能安装/清理测试目标包并影响现有数据/API 设置；未调用真实 Provider/API。该边界不能被描述为自动化或真实网络通过。
 - 当前文档入口与规范清单以 `docs/README.md` 为准；版本以 `docs/demo-app-version-ledger.md`，架构整改以 `docs/sdk-optimization-ledger.md`，Terminal Gate 以 `docs/terminal-runtime-baseline.md`、`docs/terminal-runtime-validation.md` 和 `docs/terminal-runtime-decisions.md` 为准。`sdk-stabilization-baseline.md` 是已 superseded 的历史快照。下文的功能和验证记录均为历史累计说明；遇到提交、测试数或路径冲突时，以本节和上述当前事实源为准。
 
 ---
@@ -278,3 +284,4 @@ adb -s QSG6Q8IFDMDELVGQ pull /sdcard/screen_debug.png $env:TEMP\screen_debug.png
    - 根目录 `AGENTS.md`：仅供开发者/助手协作，不打包进 APK。
    - 运行时 `pi-terminal-skill-android/src/main/assets/ugk/AGENTS.md`：随 APK 打包，作为模型全局环境提示词。
 4. **UI 构建原则**：项目纯代码构建界面（无 XML layout），增改视图时保持代码构建风格与 `ThemeManager` 动态调色规范。
+5. **当前视觉基线**：用户消息右侧主题绿，AI 回复左侧中性表面；绿色预算只用于用户气泡、主要动作、已选控件和成功状态，等待确认/危险/失败使用独立语义色。实现事实先读 `docs/demo-app-ui-redesign.md` 的当前视觉章节，再读 `docs/demo-app-version-ledger.md` 的同版本 checkpoint；不要把旧的橙红美学历史条目当作当前基线。

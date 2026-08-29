@@ -6,9 +6,36 @@
 
 ## 需求结论
 
-当前 Demo 的问题不是颜色或按钮数量，而是信息架构没有区分四类内容：用户意图、助手回答、Agent 运行进度、工具证据。本轮重构采用 ChatGPT 移动端常见的聊天优先模型，但不复制品牌素材或内部实现：聊天流是主界面，过程是可展开的辅助层，会话历史是次级导航。
+当前 Demo 的问题不是单独的颜色或按钮数量，而是信息架构没有区分四类内容：用户意图、助手回答、Agent 运行进度、工具证据。本轮以用户提供的微信界面为交互秩序参考，采用成熟 IM-style 的聊天优先模型，但不复制商标、图标或内部实现：聊天流是主界面，过程是可展开的辅助层，会话历史是次级导航。
 
-OpenAI 官方 Android 帮助中心把聊天历史、删除会话和设置作为移动端的独立能力；官方移动端更新也强调消息栏、搜索历史定位、提示示例和任务进度审阅等体验。参考：[Android app help](https://help.openai.com/en/collections/5461535-android-%E6%87%89%E7%94%A8%E7%A8%8B%E5%BC%8F)、[ChatGPT release notes](https://help.openai.com/en/articles/6825453-chatgpt-conversation-history)、[ChatGPT Voice](https://help.openai.com/en/articles/20001274)。
+聊天历史、删除会话和设置继续作为独立能力；本轮仅借鉴成熟 IM 的层级、留白和状态表达，不复制任何第三方品牌资产。
+
+## 2026-08-29 微信式视觉重构（当前视觉基线）
+
+本阶段只改变 `:demo-app` 的视觉表达与状态语义，保持 `0.7.1 / versionCode 9`、SDK 能力、权限、依赖和 API 配置边界不变。
+
+| 区域 | Light | Dark | 语义约束 |
+|---|---|---|---|
+| 应用背景 | 暖白/米白低对比背景 | 深碳灰背景 | 作为安静的对话画布 |
+| 用户消息 | 右侧主题绿气泡 | 右侧深绿主题容器 | 只表达用户意图与发送动作 |
+| AI 回复 | 左侧白色/中性气泡 | 左侧深灰中性气泡 | 不使用品牌绿，保持阅读主次 |
+| 过程与证据 | 中性卡片、细分隔线 | 深灰卡片、低对比边界 | 工具结果不与聊天气泡竞争 |
+| 状态与操作 | 绿色、琥珀、红色按语义使用 | 同一语义在深色容器中适配 | 成功、警告、危险、禁用彼此区分 |
+
+- 品牌资产统一使用透明猫头鹰：launcher、助手头像、空状态和悬浮窗入口共用同一品牌语汇；不把临时截图或会话信息写入仓库。
+- 顶栏与 composer 采用低噪声、无厚重外框的布局；输入框、发送/停止按钮、按压态和禁用态共享同一套状态 Token。
+- 设置页使用中性分组卡片、紧凑选择 Chip 和明确的已选/停用语义；悬浮窗折叠/展开、Markdown、代码/表格卡片与主聊天复用同一套 Light/Dark Token。
+- 过程摘要、工具步骤、代码和表格属于证据层，默认使用中性颜色；用户/AI 气泡属于对话层，保持右绿左中性的稳定视觉顺序。
+- 绿色预算固定为：用户气泡、主要动作、已选控件和成功状态；等待确认使用 warning，危险或不可逆操作使用 danger，失败不伪装成成功。
+
+### 当前阶段验收证据与边界
+
+- 实现 checkpoint：`af5b0b7075dd8a201dbfd857987521f7b0d3470a`（`feat(demo-app): refine conversation visual hierarchy`）。
+- `:demo-app:compileDebugKotlin`、`:demo-app:assembleDebug`、`:demo-app:compileDebugAndroidTestKotlin`：通过。
+- `:demo-app:testDebugUnitTest`：测试 XML `107/107`，0 failure、0 error、0 skipped；`git diff --check`：通过。
+- Debug APK 元数据仍为 `0.7.1 / versionCode 9`；已使用 `adb install -r -d` 覆盖安装至授权小米 `QSG6Q8IFDMDELVGQ`，未卸载、未清理数据，启动进程未见 `FATAL`。
+- 主会话已查看并验收 Light/Dark 主聊天、Settings Dark、悬浮窗折叠/展开第二轮截图：用户绿、AI 中性、透明猫头鹰、无框顶栏与 composer、设置页、Markdown/disabled send 均符合基线。截图保留在用户 Temp，不入库。
+- 未运行 `connectedDebugAndroidTest`：该测试可能安装/清理测试目标包并影响现有数据/API 设置；未调用真实 Provider/API。上述为本阶段明确边界，不扩大为自动化或真实网络通过。
 
 ## 当前交付范围
 

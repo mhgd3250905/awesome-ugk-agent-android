@@ -3,7 +3,7 @@
 更新时间：2026-08-29
 当前保存版本：`0.7.1`（`versionCode 9`）
 版本范围：仅 `:demo-app`；SDK/AAR 模块版本继续独立维护。
-当前阶段：快速迭代后的模块化架构收敛已保存为稳定性 patch `0.7.1 / versionCode 9`。架构整改代码先以 `0.7.0` 安装到小米 `QSG6Q8IFDMDELVGQ` 并由用户完成体验测试；`0.7.1` 只改变版本元数据和收束文档，本轮不重复安装或设备测试。本地标签 `demo-app-v0.7.1` 不推送远端。
+当前阶段：快速迭代后的模块化架构收敛已保存为稳定性 patch `0.7.1 / versionCode 9`；随后在同一版本范围内完成 demo-app 微信式对话视觉重构并形成独立本地 checkpoint，不创建新版本或新标签。本地标签 `demo-app-v0.7.1` 不推送远端。
 
 > 文首元数据、版本规则和 `0.7.1` 记录描述当前保存点；其后的版本条目是不可改写的历史记录。
 > 历史条目中的“当前”仅指该条目记录时点，不是今天的版本或验证状态。
@@ -19,19 +19,36 @@
 
 ## 0.7.1 · 2026-08-29 · 模块化架构稳定化保存
 
-### 变更范围
+### 变更范围（架构保存）
 
 - 不新增用户功能；保存 `0.7.0` 之后完成的 Runtime 生命周期、API 设置、上下文档位、Provider profile、进程/悬浮窗 ownership、conversation runtime、Session transcript、capability assembly 与 Terminal/Screen host interlock 收敛。
 - Demo 版本由 `0.7.0 / versionCode 8` 提升到 `0.7.1 / versionCode 9`；Core SDK publication 继续保持开发期坐标 `0.1.0`，没有依赖升级或权限变化。
 - Canonical 文档、SDK 优化台账、验证矩阵、UI 版本元数据和交接信息对齐到当前保存点。
 
-### 当前证据与边界
+### 当前证据与边界（架构保存）
 
 - `885c1e9` 对应代码已构建为 `0.7.0`，安装到 `QSG6Q8IFDMDELVGQ`（`2602BRT18C`）并启动；用户随后反馈该轮测试无明显问题。旧设备 App 为不同签名的 `0.6.0`，按用户明确授权卸载后重新安装，因此旧 App 本地数据已清除。
 - `0.7.1` 元数据更新后，全工程 JVM XML 合计 `375/375` 通过、0 failure/error/skipped；其中八个 SDK/Runtime 模块为 `271`，Demo 为 `104`，`ugk-terminal-runtime-android` 当前为 `NO-SOURCE`。
 - `:demo-app:assembleDebug` 成功；APK 元数据确认为 `versionCode 9 / versionName 0.7.1`。
-- `0.7.1` 本轮未重复安装、未运行 instrumentation、真实网络或 Provider/API；除版本元数据与文档外，生产行为与用户已测试的架构整改代码一致。
+- 上述架构保存本身未重复安装、未运行 instrumentation、真实网络或 Provider/API；随后同版本视觉 checkpoint 的实现、真机安装和验收见下节，未改变 SDK、权限、依赖或 API 配置边界。
 - 本地保存 commit/tag 不 push、不创建 PR、不发布远程 Release。
+
+### 同版本微信式对话视觉 checkpoint（不升版本）
+
+#### 变更范围
+
+- 实现 checkpoint：`af5b0b7075dd8a201dbfd857987521f7b0d3470a`（`feat(demo-app): refine conversation visual hierarchy`）。
+- 用户消息统一为右侧主题绿气泡；AI 回复统一为左侧 Light 白色/Dark 深灰中性气泡；顶栏、composer、设置页、过程/工具证据和悬浮窗共享同一套 Light/Dark 语义 Token。
+- 使用透明猫头鹰资产统一 launcher、助手头像、空状态和悬浮窗入口；组件状态区分进行中、等待确认、成功、失败、危险、禁用和按压态，绿色预算不扩展到 AI 或证据层。
+- 不涉及 SDK/Terminal、依赖、权限、API key 内容、版本号、远程 push/PR/release、tag 或外部台账。
+
+#### 验收证据与边界
+
+- `:demo-app:compileDebugKotlin`、`:demo-app:assembleDebug`、`:demo-app:compileDebugAndroidTestKotlin`：通过。
+- `:demo-app:testDebugUnitTest`：测试 XML `107/107`，0 failure、0 error、0 skipped；`git diff --check`：通过。
+- APK 元数据仍为 `0.7.1 / versionCode 9`；已对授权小米 `QSG6Q8IFDMDELVGQ` 执行 `adb install -r -d` 覆盖安装，未卸载、未清理数据，启动进程未见 `FATAL`。
+- 主会话已查看并验收 Light/Dark 主聊天、Settings Dark、悬浮窗折叠/展开第二轮截图，确认用户绿、AI 中性、透明猫头鹰、无框顶栏与 composer、Markdown 和 disabled send 符合基线。截图保留在用户 Temp，不入库。
+- 未运行 `connectedDebugAndroidTest`：该测试可能安装/清理测试目标包并影响现有数据/API 设置；未调用真实 Provider/API。该跳过项属于本阶段明确边界，不代表自动化或真实网络通过。
 
 ## 0.7.0 · 2026-08-28 · 独立设置页、旗舰大模型参数适配、70% 智能上下文压缩与动态监控
 
