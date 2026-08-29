@@ -1,11 +1,11 @@
 # demo-app 版本与变更台账
 
-更新时间：2026-08-29
-当前保存版本：`0.7.1`（`versionCode 9`）
+更新时间：2026-08-30
+当前保存版本：`0.8.0`（`versionCode 10`）
 版本范围：仅 `:demo-app`；SDK/AAR 模块版本继续独立维护。
-当前阶段：快速迭代后的模块化架构收敛已保存为稳定性 patch `0.7.1 / versionCode 9`；随后在同一版本范围内完成 demo-app 微信式对话视觉重构并形成独立本地 checkpoint，不创建新版本或新标签。本地标签 `demo-app-v0.7.1` 不推送远端。
+当前阶段：`0.7.1` 之后完成的 demo-app 微信式对话视觉重构、Light/Dark 语义 Token、设置页与悬浮窗统一，以及首页顶栏收束，现保存为 `0.8.0 / versionCode 10`。本地标签 `demo-app-v0.8.0` 不推送远端。
 
-> 文首元数据、版本规则和 `0.7.1` 记录描述当前保存点；其后的版本条目是不可改写的历史记录。
+> 文首元数据、版本规则和 `0.8.0` 记录描述当前保存点；其后的版本条目是不可改写的历史记录。
 > 历史条目中的“当前”仅指该条目记录时点，不是今天的版本或验证状态。
 
 ## 版本规则
@@ -13,9 +13,26 @@
 - `versionCode` 只递增，不因重新打包或覆盖安装回退。
 - `versionName` 使用面向测试交付的 SemVer 风格；聊天、会话和悬浮窗等一组可感知能力完成后提升 minor 版本。
 - 稳定性修复、生命周期恢复和验收证据整理使用 patch 版本递增，不与新的用户可感知 UI 能力混用。
-- 最近已保存版本 Git 标签为 `demo-app-v0.7.1`；`demo-app-v0.7.0`、`demo-app-v0.6.0`、`demo-app-v0.5.0`、`demo-app-v0.4.0` 和 `demo-app-v0.3.0` 保留为历史 Demo 交付标签，不代表 Terminal Runtime 已达到最终发布状态。
+- 最近已保存版本 Git 标签为 `demo-app-v0.8.0`；`demo-app-v0.7.1`、`demo-app-v0.7.0`、`demo-app-v0.6.0`、`demo-app-v0.5.0`、`demo-app-v0.4.0` 和 `demo-app-v0.3.0` 保留为历史 Demo 交付标签，不代表 Terminal Runtime 已达到最终发布状态。
 - Debug APK 允许本机从被 Git 忽略的配置读取 API 默认值，不能作为对外分发包；API Key 不进入源码、文档或提交。
 - 真机迭代使用固定 Debug 签名和 `adb install -r -d`，不以卸载、清数据作为常规版本升级步骤。
+
+## 0.8.0 · 2026-08-30 · 微信式对话视觉与顶栏收束
+
+### 变更范围
+
+- 以成熟 IM 的交互秩序统一主聊天：用户消息右侧主题绿，AI 回复左侧 Light 白色/Dark 深灰中性表面；过程、工具证据、代码和表格使用中性层级，不与对话气泡争夺视觉焦点。
+- 统一 Light/Dark 语义 Token、品牌猫头鹰、组件状态、设置页和悬浮窗折叠/展开视觉；悬浮窗最终回答支持 Markdown，空输入发送保持禁用语义。
+- 首页顶栏只保留会话入口、运行状态和设置入口；主题切换集中在设置页；设置入口由异常描边资源改为标准实心齿轮矢量图标。
+- 视觉实现 checkpoint 为 `af5b0b7075dd8a201dbfd857987521f7b0d3470a`，顶栏收束 checkpoint 为 `cde30bf9d12d262fce5141986a77230cbf6ff7b6`。Demo 版本由 `0.7.1 / versionCode 9` 提升到 `0.8.0 / versionCode 10`；SDK/AAR 坐标、依赖、权限和 API 配置边界不变。
+
+### 验收证据与边界
+
+- `:demo-app:compileDebugKotlin`、`:demo-app:testDebugUnitTest`、`:demo-app:assembleDebug`、`:demo-app:compileDebugAndroidTestKotlin` 通过；Demo JVM XML `107/107`，0 failure/error/skipped；`git diff --check` 通过。
+- 最终 APK 元数据确认为 `versionCode 10 / versionName 0.8.0`。
+- 与最终生产代码一致、版本元数据仍为 `0.7.1 / versionCode 9` 的 Debug APK 已通过 `adb install -r -d` 覆盖安装至授权小米 `QSG6Q8IFDMDELVGQ`，未卸载、未清理数据；Light/Dark 主聊天、Settings Dark、悬浮窗折叠/展开和顶栏修复均已完成真机人工验收。`0.8.0` 元数据保存不重复安装。
+- 未运行 `connectedDebugAndroidTest`：该测试可能安装/清理测试目标包并影响现有数据/API 设置；未调用真实 Provider/API。该边界不代表自动化或真实网络通过。
+- 本地版本 checkpoint 与 `demo-app-v0.8.0` 标签不 push、不创建 PR、不发布远程 Release。
 
 ## 0.7.1 · 2026-08-29 · 模块化架构稳定化保存
 

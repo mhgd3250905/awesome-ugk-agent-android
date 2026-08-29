@@ -1,7 +1,7 @@
 # Demo App 对话体验与悬浮窗基线
 
-更新时间：2026-08-29
-当前版本：`0.7.1`（`versionCode 9`）；本文只定义聊天与悬浮窗 UI 基线，版本交付证据以 `demo-app-version-ledger.md` 为准。
+更新时间：2026-08-30
+当前版本：`0.8.0`（`versionCode 10`）；本文只定义聊天与悬浮窗 UI 基线，版本交付证据以 `demo-app-version-ledger.md` 为准。
 适用范围：`:demo-app` 的聊天主界面、过程展示、多模态识图交互、代码与表格原生卡片组件、美学设计、输入交互、本地会话管理和悬浮窗摘要。
 
 ## 需求结论
@@ -12,7 +12,7 @@
 
 ## 2026-08-29 微信式视觉重构（当前视觉基线）
 
-本阶段只改变 `:demo-app` 的视觉表达与状态语义，保持 `0.7.1 / versionCode 9`、SDK 能力、权限、依赖和 API 配置边界不变。
+本阶段起于 `0.7.1` 的同版本视觉 checkpoint，并在完整验收后保存为 `0.8.0 / versionCode 10`；只改变 `:demo-app` 的视觉表达与状态语义，SDK 能力、权限、依赖和 API 配置边界不变。
 
 | 区域 | Light | Dark | 语义约束 |
 |---|---|---|---|
@@ -23,18 +23,18 @@
 | 状态与操作 | 绿色、琥珀、红色按语义使用 | 同一语义在深色容器中适配 | 成功、警告、危险、禁用彼此区分 |
 
 - 品牌资产保持同一猫头鹰语汇：launcher 沿用原品牌图，透明变体用于 App 内助手头像、空状态和悬浮窗入口；不把临时截图或会话信息写入仓库。
-- 顶栏与 composer 采用低噪声、无厚重外框的布局；输入框、发送/停止按钮、按压态和禁用态共享同一套状态 Token。
+- 顶栏与 composer 采用低噪声、无厚重外框的布局；首页顶栏只保留会话入口、运行状态和设置入口，主题切换集中在设置页，设置入口使用标准齿轮矢量图标；输入框、发送/停止按钮、按压态和禁用态共享同一套状态 Token。
 - 设置页使用中性分组卡片、紧凑选择 Chip 和明确的已选/停用语义；悬浮窗折叠/展开、Markdown、代码/表格卡片与主聊天复用同一套 Light/Dark Token。
 - 过程摘要、工具步骤、代码和表格属于证据层，默认使用中性颜色；用户/AI 气泡属于对话层，保持右绿左中性的稳定视觉顺序。
 - 绿色预算固定为：用户气泡、主要动作、已选控件和成功状态；等待确认使用 warning，危险或不可逆操作使用 danger，失败不伪装成成功。
 
 ### 当前阶段验收证据与边界
 
-- 实现 checkpoint：`af5b0b7075dd8a201dbfd857987521f7b0d3470a`（`feat(demo-app): refine conversation visual hierarchy`）。
+- 视觉实现 checkpoint：`af5b0b7075dd8a201dbfd857987521f7b0d3470a`；首页顶栏收束 checkpoint：`cde30bf9d12d262fce5141986a77230cbf6ff7b6`。
 - `:demo-app:compileDebugKotlin`、`:demo-app:assembleDebug`、`:demo-app:compileDebugAndroidTestKotlin`：通过。
 - `:demo-app:testDebugUnitTest`：测试 XML `107/107`，0 failure、0 error、0 skipped；`git diff --check`：通过。
-- Debug APK 元数据仍为 `0.7.1 / versionCode 9`；已使用 `adb install -r -d` 覆盖安装至授权小米 `QSG6Q8IFDMDELVGQ`，未卸载、未清理数据，启动进程未见 `FATAL`。
-- 主会话已查看并验收 Light/Dark 主聊天、Settings Dark、悬浮窗折叠/展开第二轮截图：用户绿、AI 中性、透明猫头鹰、无框顶栏与 composer、设置页、Markdown/disabled send 均符合基线。截图保留在用户 Temp，不入库。
+- 最终 Debug APK 元数据为 `0.8.0 / versionCode 10`。与其生产代码一致、版本元数据仍为 `0.7.1` 的 APK 已使用 `adb install -r -d` 覆盖安装至授权小米 `QSG6Q8IFDMDELVGQ`，未卸载、未清理数据；`0.8.0` 元数据保存不重复安装。
+- 主会话已查看并验收 Light/Dark 主聊天、Settings Dark、悬浮窗折叠/展开第二轮截图，以及顶栏修复真机截图：用户绿、AI 中性、透明猫头鹰、无框顶栏与 composer、设置页、Markdown/disabled send、标准设置齿轮和首页无主题快捷按钮均符合基线。截图保留在用户 Temp，不入库。
 - 未运行 `connectedDebugAndroidTest`：该测试可能安装/清理测试目标包并影响现有数据/API 设置；未调用真实 Provider/API。上述为本阶段明确边界，不扩大为自动化或真实网络通过。
 
 ## 当前交付范围

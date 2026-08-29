@@ -13,7 +13,7 @@ Android Agent Runtime SDK：提供通用 Agent 工具循环、Android Skill，�
 - v1 不支持、不打包、不宣称 Node.js、Git、OpenSSH、jq。
 - Runtime 无 UI，不要求安装 Termux 或第二个 App；它与宿主共享 Android UID，不是安全沙箱。
 - `pi-system-skill-android` 提供白名单 Android 原生 Intent Tool；打开网页、相机、拨号、地图、分享等动作不通过终端执行。
-- `demo-app` 当前保存版本为 `0.7.1`（`versionCode 9`），本地标签为 `demo-app-v0.7.1`；该 patch 保存快速迭代后的模块化架构收敛，不新增用户功能。
+- `demo-app` 当前保存版本为 `0.8.0`（`versionCode 10`），本地标签为 `demo-app-v0.8.0`；该 minor 保存微信式对话层级、Light/Dark 语义 Token、设置页与悬浮窗视觉，以及首页顶栏收束。
 - 2026-08-29 已完成快速迭代后的模块化架构收敛：生命周期、配置、Provider、会话、transcript、capability assembly 与 Terminal/Screen interlock 均有单一 owner；本机 JVM、Debug/Release 构建和 Terminal 包验收通过，设备/发布矩阵仍未关闭。
 
 ## 模块
@@ -43,7 +43,7 @@ Windows PowerShell：
 
 完整单元测试、双宿主仪器测试和 Runtime 静态验收见 [`AGENTS.md`](AGENTS.md) 与 [`docs/terminal-runtime-validation.md`](docs/terminal-runtime-validation.md)。
 
-当前授权真机以 [`HANDOVER.md`](HANDOVER.md) 为准，仅允许操作小米设备（`QSG6Q8IFDMDELVGQ`）。2026-08-29 已将架构整改代码以 `0.7.0` 安装到该设备，用户完成体验测试并反馈无明显问题；`0.7.1` 只调整版本元数据与收束文档，本轮不重复安装或设备测试。
+当前授权真机以 [`HANDOVER.md`](HANDOVER.md) 为准，仅允许操作小米设备（`QSG6Q8IFDMDELVGQ`）。2026-08-29 已将与 `0.8.0` 生产代码一致、版本元数据仍为 `0.7.1` 的视觉重构与顶栏修复 Debug APK 覆盖安装到该设备并完成人工验收；`0.8.0` 只提升版本元数据和收束文档，不重复安装或清理设备数据。
 
 ## 文档入口
 

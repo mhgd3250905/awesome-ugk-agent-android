@@ -1,14 +1,15 @@
 # awesome-ugk-agent-android 项目交接文档 (Handover Document)
 
-> **Demo 0.7.1 版本**：`versionCode 9`（架构稳定化 patch）
-> **0.7.1 版本保存点**：commit `b2c14fdc091207c5aab2f00e365c6e2b0f5d7e01`（`demo-app-v0.7.1`）
+> **Demo 0.8.0 版本**：`versionCode 10`（微信式对话视觉与顶栏收束）
+> **0.8.0 版本边界**：本地标签 `demo-app-v0.8.0`（本轮不 push）
 > **架构整改实现 checkpoint**：`9268bc2`
 > **阶段 8 文档/验证 closeout**：`885c1e9`
 > **微信式对话视觉实现 checkpoint**：`af5b0b7075dd8a201dbfd857987521f7b0d3470a`
+> **首页顶栏收束 checkpoint**：`cde30bf9d12d262fce5141986a77230cbf6ff7b6`
 > **分支**：`main`  
-> **交接时间**：2026-08-29
+> **交接时间**：2026-08-30
 > **工作区**：`E:\AII\ugk-android-new`
-> **0.7.1 版本标签**：`demo-app-v0.7.1`（本地）
+> **0.8.0 版本标签**：`demo-app-v0.8.0`（本地）
 > **目标真机**：小米设备 `QSG6Q8IFDMDELVGQ`、第二台小米 `e0b93f2f`（型号 `2304FPN6DC`）
 > **注意**：设备列表中若有三星手机（`R5CRB11B2AW`），**严禁对其执行任何操作**，唯一下发与调试设备为小米手机。
 >
@@ -16,7 +17,7 @@
 
 ---
 
-## 0. 2026-08-29 架构整改收束（当前事实）
+## 0. 2026-08-29—30 架构与视觉收束（当前事实）
 
 - 快速迭代后的模块化审查已完成计划中的 7 个实现阶段，并形成 9 个本地 checkpoint：Runtime 生命周期、设置领域/UI、上下文档位、Provider profile、进程/悬浮窗 ownership、conversation runtime、Session transcript、capability assembly、Terminal/Screen host interlock 均已形成明确单一 owner。
 - 架构整改实现 checkpoint 顺序为 `1409610`、`ccc76c9`、`20b2b60`、`f20bee7`、`1003cc1`、`74dd2ff`、`47964b5`、`9956116`、`9268bc2`，阶段 8 文档/验证收束为 `885c1e9`；随后按 patch 规则保存 `0.7.1 / versionCode 9`，该保存点不代表远程 PR 或 Release。
@@ -30,6 +31,9 @@
 - 该视觉 checkpoint 不升版本：当前实际安装并启动的 Debug APK 仍为 `0.7.1 / versionCode 9`，通过 `adb install -r -d` 覆盖安装至授权小米 `QSG6Q8IFDMDELVGQ`，未卸载、未清理数据，启动进程未见 `FATAL`。
 - 当前视觉阶段验证：`:demo-app:compileDebugKotlin`、`:demo-app:assembleDebug`、`:demo-app:compileDebugAndroidTestKotlin` 通过；`:demo-app:testDebugUnitTest` XML `107/107`，0 failure/error/skipped；`git diff --check` 通过。
 - 主会话已查看并验收 Light/Dark 主聊天、Settings Dark、悬浮窗折叠/展开第二轮截图，确认用户绿、AI 中性、透明猫头鹰、无框顶栏与 composer、Markdown 和 disabled send 符合基线。截图在用户 Temp，未复制入仓库。
+- 2026-08-29 首页顶栏收束 checkpoint `cde30bf9d12d262fce5141986a77230cbf6ff7b6` 已移除首页快捷主题切换，主题选择仍保留在设置页；异常设置图标已替换为标准实心齿轮。与最终生产代码一致、元数据仍为 `0.7.1 / versionCode 9` 的 APK 已覆盖安装至 `QSG6Q8IFDMDELVGQ` 并通过真机截图与设置入口验收，未卸载、未清理数据。
+- 2026-08-30 将上述完整用户可感知视觉阶段保存为 `0.8.0 / versionCode 10`，本地标签为 `demo-app-v0.8.0`；版本元数据保存不重复安装、不 push、不创建 PR 或远程 Release。
+- `0.8.0` 收束验证：`:demo-app:compileDebugKotlin`、`:demo-app:testDebugUnitTest`、`:demo-app:assembleDebug`、`:demo-app:compileDebugAndroidTestKotlin` 通过，Demo JVM XML `107/107`，APK metadata 为 `versionCode 10 / versionName 0.8.0`，`git diff --check` 通过。
 - 本阶段未运行 `connectedDebugAndroidTest`，因其可能安装/清理测试目标包并影响现有数据/API 设置；未调用真实 Provider/API。该边界不能被描述为自动化或真实网络通过。
 - 当前文档入口与规范清单以 `docs/README.md` 为准；版本以 `docs/demo-app-version-ledger.md`，架构整改以 `docs/sdk-optimization-ledger.md`，Terminal Gate 以 `docs/terminal-runtime-baseline.md`、`docs/terminal-runtime-validation.md` 和 `docs/terminal-runtime-decisions.md` 为准。`sdk-stabilization-baseline.md` 是已 superseded 的历史快照。下文的功能和验证记录均为历史累计说明；遇到提交、测试数或路径冲突时，以本节和上述当前事实源为准。
 
@@ -146,7 +150,7 @@
 | `:demo-app` | `DemoImageUtils.kt` | 拍照/相册图片采集、降采样压缩、Exif 旋转纠偏、Base64 转换 |
 | `:demo-app` | `DemoChatViews.kt` | 消息气泡复合渲染（Text / Code / Table / Image 卡片挂载与大图查看器） |
 | `:demo-app` | `DemoMarkdownFormatter.kt` | Markwon 构建配置、流式文本预处理与行内富文本解析 |
-| `:demo-app` | `MainActivity.kt` | 聊天主界面、流式节流调度器（64ms）、附件菜单、主题切换与生命周期管理 |
+| `:demo-app` | `MainActivity.kt` | 聊天主界面、流式节流调度器（64ms）、附件菜单、主题同步与生命周期管理 |
 | `:demo-app` | `ThemeManager.kt` / `Ui.kt` | 双主题管理（米白暖灰 / 纯净深碳灰）、动态主题色彩 Token 与 UI 样式辅助 |
 | `:demo-app` | `ApiSettings.kt` | 多 API 源配置与 SharedPreferences 持久化 |
 | `:ugk-pi-android` | `AgentImageContent.kt` | 多模态图片核心数据结构（Base64 + MimeType） |
