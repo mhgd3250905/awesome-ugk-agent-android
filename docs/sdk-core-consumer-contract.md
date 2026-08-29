@@ -1,6 +1,6 @@
 # Core SDK 外部消费者契约
 
-更新时间：2026-08-14
+更新时间：2026-08-29
 
 本文记录 `:ugk-pi-android` 当前阶段的最小外部消费边界。它是可重复验收契约，不代表已经完成最终发布体系或 API 稳定承诺。
 
@@ -72,11 +72,11 @@ Core 源码当前也没有对这些模块或 Android framework API 的源码引�
 
 | 指标 | 数量 | 说明 |
 |---|---:|---|
-| `classes.jar` 中的 class 文件 | 74 | 包含 Kotlin 编译器生成的协程状态机、lambda 和辅助类 |
-| 顶层 class 文件 | 44 | 含 1 个 Kotlin 文件 facade：`AgentRuntimeKt` |
-| `javap -public` 类型声明 | 60 | 包含 `DefaultImpls` 等编译器生成类型 |
-| 面向源码消费者的 public 类型 | 57 | 排除 `AgentRuntimeKt` 与 `*DefaultImpls` 后的审查口径 |
-| `javap -public` public member signatures | 519 | 包含 data class 的 getter、`componentN`、`copy` 和默认参数桥接方法 |
+| `classes.jar` 中的 class 文件 | 122 | 包含 Kotlin 编译器生成的协程状态机、lambda 和辅助类 |
+| 顶层 class 文件 | 64 | 包含 Kotlin 文件 facade |
+| `javap -public` 类型声明 | 89 | 包含 `DefaultImpls` 等编译器生成类型 |
+| 面向源码消费者的 public 类型 | 82 | 排除 Kotlin facade 与 `*DefaultImpls` 后的审查口径 |
+| `javap -public` public member signatures | 800 | 包含 data class 的 getter、`componentN`、`copy`、默认参数和 access bridge |
 
 主要类型按职责分组如下：
 
@@ -86,16 +86,26 @@ Core 源码当前也没有对这些模块或 Android framework API 的源码引�
 - Skill/Session/时间上下文：`AndroidSkill*`、`SessionStore`、`InMemorySessionStore`、`AgentTimeContext*`。
 - 确认协议：`UserConfirmationDialog*`、`UserConfirmationRequiredTool`。
 
-这些数量是当前 artifact 的观察结果，不是 API 稳定性承诺。尤其是 519 个 binary member
+这些数量是 2026-08-29 阶段 8 当前 Release artifact 的观察结果，不是 API 稳定性承诺。尤其是 800 个 binary member
 signature 不能直接作为人工维护的稳定 API 数量；Kotlin 编译器生成的成员会随源码形态和编译器
 版本变化。
+
+阶段 5—7 新增或调整了 `AgentSession` transcript ownership、`TranscriptPreparationPolicy`、
+capability assembly 的 provider source/resolution context，以及通用 `AgentToolDecorator`/
+`AgentToolInterlock` seam。`CompositeAndroidSkillProvider` 和 `RuntimeSkillAccumulator` 虽进入
+`classes.jar`，其 JVM class declaration 为 package-private，不属于 public consumer seam。
+
+当前 Gradle 仅显式配置 JVM target 17，没有显式固定 `jvmDefault` mode；当前 `javap` 同时可见
+interface default method、`DefaultImpls` 与 `$jd` bridge。仓库没有带可信发布坐标/commit 元数据的旧
+AAR，也没有旧 consumer 升级矩阵，因此本次 inventory 只能描述当前表面，不能证明相对旧版本的
+源码或二进制兼容。D-023/D-024 中记录的 `0.x` 有意 source/semantic change 需要消费者按迁移说明处理。
 
 ### 当前 publication 与版本约束
 
 - publication 只配置 `release` variant，坐标固定为 `com.ugk.pi:ugk-pi-android:0.1.0`。
 - 版本写在 `ugk-pi-android/build.gradle.kts` 中，当前没有 API/ABI 检查插件、兼容性基线、远程发布、签名或多版本矩阵。
 - `0.1.0` 是当前开发阶段用于本地/临时 consumer 验证的坐标，不是正式发布承诺；不能据此推断 API、ABI、运行时行为或升级兼容性。
-- Core SDK 版本与 Demo `0.2.1 / versionCode 3` 分开管理，本步骤不因 inventory 结果提升任何版本。
+- Core SDK 版本与 Demo 版本分开管理；当前 Demo 为 `0.7.0 / versionCode 8`，本步骤不因 inventory 结果提升任何版本。
 
 ### 轻量版本策略（当前持续开发阶段）
 

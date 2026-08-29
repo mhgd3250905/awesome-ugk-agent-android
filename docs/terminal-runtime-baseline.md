@@ -1,8 +1,8 @@
 # Terminal Runtime 当前基线
 
-更新时间：2026-08-13
-源码基线：`main@d1061499a64e0f1b44b6afccff9401a698b165f1`
-源码工作树：包含未提交的 Terminal Runtime 实现/验证改动；本文件描述当前工作树目标和证据，不把基线 commit 当成已交付版本。
+更新时间：2026-08-29
+架构整改实现基线：`main@9268bc2789c561f121fc992031fcd29466d0705e`
+源码状态：阶段 1—7 已保存为独立本地 checkpoint；阶段 8 的完整静态、打包和 JVM 验收见 `terminal-runtime-validation.md`。该状态仍不是正式发布版本。
 
 ## 1. 产品目标
 
@@ -37,7 +37,7 @@
 
 两 ABI 的 ELF、依赖闭包、GNU_STACK、TEXTREL、PT_LOAD 16 KB 对齐、锁文件哈希、AAR/APK 内容、zipalign 和无 Node Core 映射均通过 `verify-runtime.ps1 -CheckPackages`。
 
-### Gate 2：设备矩阵——x86_64 子集已验证
+### Gate 2：设备矩阵——x86_64 子集与 arm64/API34/4KB 本地子集已验证
 
 已验证：
 
@@ -48,7 +48,7 @@
 
 每个设备均用 Demo A/B 验证双 `applicationId`：基础 Profile A `7/7`、B `5/5`，零 fail/error/skipped，HTTPS 为 HTTP 200。
 
-整体 Gate 2 仍未完成：没有 arm64 运行证据，API 34、API 35/16 KB、API 36/4 KB 也未覆盖。
+此外，真实 arm64-v8a Android 14/API34/4KB 已完成 Demo 与 Runtime 本地能力回归；两项外网 Probe 因设备当时无可用上游网络而失败，不能据此关闭网络 Gate。整体 Gate 2 仍未完成：arm64 16KB、API35/16KB、API36/4KB 及完整 Release 安装矩阵尚未覆盖。
 
 ### Gate 3：Runtime 控制与生命周期——x86_64 子集已验证
 
@@ -70,7 +70,7 @@
 
 ## 5. 当前不能说什么
 
-- 不能说 arm64 已通过：目前只有 arm64 产物静态验收，没有 arm64 设备执行证据。
+- 不能笼统说 arm64 已全部通过：当前只有 API34/4KB 真机本地能力证据，arm64 外网 Probe 和 16KB 运行证据仍未关闭。
 - 不能说“所有 Android 版本和所有 page size 都支持”。
 - 不能说 Runtime 是安全沙箱：命令与宿主共享 Android UID。
 - 不能说已经是最终发布版：Release AAB 完整矩阵、升级迁移、低磁盘、进程被杀、性能、SBOM/许可证和接入消费测试尚未关闭。

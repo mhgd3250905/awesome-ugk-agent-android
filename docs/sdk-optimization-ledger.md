@@ -1,6 +1,6 @@
 # SDK 优化推进台账
 
-更新时间：2026-08-15
+更新时间：2026-08-29
 
 ## 版本与推进规则
 
@@ -9,7 +9,7 @@
 - 未形成正式发布物前，不因内部修复擅自提升 `demo-app` 版本或 Maven Artifact 版本。
 - 每一步只修改目标范围，保留工作树中已有的用户改动。
 
-当前基线：`demo-app 0.2.1` / `versionCode 3`；SDK 当前仍处于持续开发阶段。
+当前基线：`demo-app 0.7.0` / `versionCode 8`；SDK publication 仍为开发期坐标 `0.1.0`，当前处于持续开发阶段。
 
 ## SDK-OPT-001：ToolRegistry 重复 Tool ID 治理
 
@@ -402,3 +402,32 @@ git diff --check
 兼容性影响：无 SDK/Demo 版本 bump；取消路径的转录补写发生在收集方已取消之后，不改变确认票据契约的 fail-closed 判定方向；截断与取消修复使长会话在取消/截断后可继续使用（此前为永久损坏）。
 
 遗留（不阻塞，待设备在线后验收）：`screen_perform_action` 窗口失效路径、`screen package` 活动窗口、`screen_launch_app` 取消语义三项无 JVM 回归测试（需真机无障碍联调）；IME 输入中多窗口同报 active 时 `package` 仍可能报告输入法包名；截断保留度在单组超预算的连续尾部裁剪场景（约 4%）低于预算上限，不变式始终成立。
+
+## SDK-OPT-011：快速迭代后模块化架构收敛
+
+状态：阶段 1—7 已实现并保存为独立本地 checkpoint；阶段 8 本机收束验证通过，设备/发布矩阵仍按既有 Gate 管理
+
+目标：针对 `demo-app` 快速扩展后出现的生命周期、设置、Provider、会话、Core capability assembly 与 Terminal/Screen 互斥责任交叉，恢复清晰的 ownership 和单向依赖，不做无关 UI 重写、依赖升级或产品功能扩张。
+
+实施序列：
+
+1. `1409610`：只在有效配置变化时重建 Runtime，避免无变化 `onResume()` 破坏运行中会话。
+2. `ccc76c9`：把 API 配置持久化/领域逻辑与设置 UI 分离。
+3. `20b2b60`：集中管理上下文档位、默认值、预算和压缩阈值。
+4. `f20bee7`：统一 Provider profile、协议能力和默认配置来源。
+5. `1003cc1`：明确 Application/process 级 runtime ownership 与 overlay ownership。
+6. `74dd2ff`：建立单一 conversation runtime/coordinator，统一前台会话状态与终止边界。
+7. `47964b5`：由 `AgentSession` 持有 transcript 不变式与 request 前 preparation，Demo compactor 改为纯变换策略；有意的 `0.x` source change 见 D-023。
+8. `9956116`：由 Core Builder 统一静态、动态和文件型 skill assembly，加入来源 provenance、确定性顺序及 fail-closed 校验；有意的 public seam/semantic change 见 D-024。
+9. `9268bc2`：Core 提供通用 Tool decorator/interlock，Host/Demo 持有 Terminal/Screen capability ownership；Terminal 不再知道 screen 工具名或恢复策略，见 D-025。
+
+接收结论：
+
+- 生命周期、会话、transcript、capability assembly 和 capability interlock 均已形成单一 owner；前后台复用同一 conversation/interlock seam。
+- Terminal、System、Core 和 Demo 的责任边界已恢复：底层模块不再反向依赖 Demo screen 语义，文件型 skill runtime 不再承担 plugin skill 聚合。
+- 关键边界通过可观察 JVM tests 固化，包括 unchanged resume、配置/Provider profile、conversation cancel/finally、transcript 原子性、动态 provider 每 run assembly、重复/非法 skill fail-closed、Terminal 四 Tool decorator 顺序及 exact screen matcher。
+- 不 bump SDK/Demo 版本，不改 Maven 坐标，不新增生产依赖，不执行设备、真实网络/API、push、tag 或 PR。
+
+阶段 8 验证：八模块 JVM XML `271/271`，Demo JVM `104/104`；Demo Debug、五个关键 Release AAR、两个 Probe Release APK和 Terminal Runtime `-CheckPackages` 全部通过。Core 当前 inventory 为 122 class / 82 source-facing public types / 800 public members；该统计不是兼容承诺，缺少可信旧发布 AAR和升级 consumer，不能宣称完整 ABI 兼容。一次隔离临时 Maven consumer 检查因内部仍调用被阶段约束排除的 `publishReleasePublicationToMavenLocal` task，仅记录为非 Gate 补充事实，不用于 closeout 接收。详细命令、包验收修复和限制见 `terminal-runtime-validation.md` 第 20 节。
+
+仍开放：arm64 16KB、完整 API/page-size 设备矩阵、Release AAB/split 安装、升级/低资源/性能/许可证发布检查；这些是发布 Gate，不否定本轮模块化整改的本机收束，也不能被本机收束结果替代。

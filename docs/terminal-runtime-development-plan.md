@@ -1,7 +1,7 @@
 # Terminal Runtime 开发计划（当前版）
 
-更新时间：2026-08-13
-当前阶段：Core Profile 与 `demo-app` 宿主集成已完成 x86_64 主要回归；进入 arm64/发布前验证阶段。
+更新时间：2026-08-29
+当前阶段：快速迭代后的模块化架构整改与本机静态/打包回归已收束；继续补齐 arm64 16KB、Release 安装、低资源、升级和正式发布证据。
 关联基线：[terminal-runtime-baseline.md](terminal-runtime-baseline.md)
 
 ## 1. 目标和停止条件
@@ -27,10 +27,10 @@ Node.js、Git、OpenSSH、jq 不属于 v1。Node 相关脚本只能作为未来�
 | 阶段 | 内容 | 状态 |
 |---|---|---|
 | Phase 0 | `minSdk 24`、compile/target 36、AGP/Kotlin/JDK/NDK 基线 | 已完成 |
-| Phase 1 | 原生 ELF Probe、`nativeLibraryDir` 执行、提取式打包 | x86_64 已完成；arm64 仅静态 |
+| Phase 1 | 原生 ELF Probe、`nativeLibraryDir` 执行、提取式打包 | x86_64 已完成；arm64 API34/4KB 本地子集已验证，16KB 未完成 |
 | Phase 2 | Bash、SQLite、curl、OpenSSL、CA、CPython Core | x86_64 API 24/29/35 4KB + API36 16KB 已验证 |
 | Phase 3 | Agent Tool、确认、路径/环境/输出/并发、超时/取消/process group、运行时 `AGENTS.md` 注入、`demo-app` 宿主接入、Android 原生 Intent 与跨 App 自动化基础 Tool | x86_64 API24/36 Gate3 已验证；API35 宿主集成 13/13（含 Runtime-managed 本地 HTTP 服务回归）已验证；runtime Agent contract 已打包/单测验证 |
-| Phase 4 | 两 ABI 静态 Gate、设备矩阵、双 applicationId | x86_64 子集完成；整体未完成 |
+| Phase 4 | 两 ABI 静态 Gate、设备矩阵、双 applicationId | 两 ABI 静态 Gate 完成；x86_64 子集与 arm64 API34/4KB 本地子集完成，整体未完成 |
 | Phase 5 | 发布、安全、低资源、升级、Maven 消费 | 未完成 |
 
 ## 3. 近期行动顺序

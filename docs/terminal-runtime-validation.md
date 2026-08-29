@@ -1,8 +1,8 @@
 # Terminal Runtime 验证矩阵
 
-更新时间：2026-08-15
+更新时间：2026-08-29
 验证源码：`E:\AII\ugk-android-new`
-注意：本轮最新物理设备结果绑定到 source checkpoint `28bc352622458d29e090656ae42fd32f057e9196`，验证时工作树干净；更改源码后的未提交工作树必须在发布前重新绑定到明确 commit。
+注意：最新物理设备结果仍绑定到 source checkpoint `28bc352622458d29e090656ae42fd32f057e9196`；2026-08-29 的架构整改只完成本机 JVM、构建、AAR/APK 和静态验收，没有重跑设备、网络或真实 Provider。两类证据不得互相替代。
 
 ## 1. 环境变量
 
@@ -33,13 +33,15 @@ $env:ANDROID_USER_HOME = 'C:\Users\29485\.android'
   :ugk-pi-android:testDebugUnitTest `
   :pi-file-skill-android:testDebugUnitTest `
   :pi-schedule-skill-android:testDebugUnitTest `
+  :ugk-agent-task-runtime-android:testDebugUnitTest `
   :pi-system-skill-android:testDebugUnitTest `
+  :pi-agent-skill-runtime-android:testDebugUnitTest `
   :ugk-terminal-runtime-android:testDebugUnitTest `
   :pi-terminal-skill-android:testDebugUnitTest `
   --console=plain
 ```
 
-结果：全部任务成功；`ugk-terminal-runtime-android:testDebugUnitTest` 当前为 `NO-SOURCE`。当前 XML 合计 `75` 个测试、失败 `0`；其中 `BashCommandToolTest` 为 `10/10`，`LocalHttpServerToolTest` 为 `4/4`，合计 `14/14`。
+结果（2026-08-29）：全部任务成功；`ugk-terminal-runtime-android:testDebugUnitTest` 当前为 `NO-SOURCE`。当前 XML 合计 `271` 个测试，`0` failure、`0` error、`0` skipped；分模块数量见第 20 节。Demo JVM 测试另以 `:demo-app:testDebugUnitTest` 验证 `104/104`。
 
 ```powershell
 .\scripts\terminal-runtime\verify-runtime.ps1 `
@@ -277,4 +279,37 @@ TDD 证据：
 
 结果：`BUILD SUCCESSFUL`；测试报告为 `ugk-pi-android 122/122`、`pi-terminal-skill-android 19/19`、`pi-system-skill-android 42/42`、`demo-app 104/104`，均无 failures/errors/skipped。`git diff --check` 通过；Terminal 模块及 runtime `AGENTS.md` 无 screen 专用符号，未发现 `startsWith("screen_")`，foreground/background 使用同一 Demo exact matcher/interlock seam。
 
-本轮未运行 assemble、设备/instrumentation、network/API、真实 Provider 或真实 Native Bash；不创建 commit、push、tag、PR。
+本轮未运行 assemble、设备/instrumentation、network/API、真实 Provider 或真实 Native Bash；阶段 8 已补齐 assemble、Release package 和原生静态验收，但仍未新增设备/network/API 证据。
+
+## 20. 架构整改阶段 8 全项目收束验证
+
+验证日期：2026-08-29；实现基线：`main@9268bc2789c561f121fc992031fcd29466d0705e`。本节记录阶段 1—7 架构整改完成后的本机验证；不代表正式发布或设备矩阵关闭。
+
+JVM 回归：
+
+- 八个 SDK/Runtime 模块的 `testDebugUnitTest` 全部成功，XML 合计 `271` 个测试、`0` failure、`0` error、`0` skipped；其中 `ugk-terminal-runtime-android` 当前为 `NO-SOURCE`。
+- 分模块为：Core `122`、File `9`、Schedule `9`、Task Runtime `7`、System `42`、Agent Skill Runtime `62`、Terminal Runtime `0`、Terminal Skill `20`。
+- `demo-app:testDebugUnitTest` 另有 `104/104` 通过。
+
+构建与消费：
+
+- `:demo-app:assembleDebug` 成功。
+- `:ugk-pi-android`、`:ugk-terminal-runtime-android`、`:pi-terminal-skill-android`、`:pi-system-skill-android`、`:pi-agent-skill-runtime-android` 的 Release AAR 均重新生成成功。
+- `:terminal-probe-demo-a:assembleRelease` 与 `:terminal-probe-demo-b:assembleRelease` 成功。
+- 补充检查曾运行 `scripts/sdk/verify-core-consumer.ps1`，并以 `-Dmaven.repo.local=<任务临时目录>` 隔离 publication 与 consumer 构建，没有写用户全局 Maven repository。但该脚本内部仍调用名为 `publishReleasePublicationToMavenLocal` 的 Gradle task，违反本阶段“不得调用 publishToMavenLocal”的字面约束，因此该结果只作为非 Gate 补充事实，不计入阶段 8 接收条件；阶段 8 的 Core 接收证据以 Release AAR inventory、`javap` 和 JVM tests 为准。
+
+Terminal Runtime 静态/包验收：
+
+- `verify-runtime.ps1 -CheckPackages` 验证两 ABI 的 62 个 native payload、54 个 CPython extension、613 个标准库条目、4 个 CMake bridge、Release AAR 与两个 Release Probe APK，最终输出 `Terminal Runtime payload verification passed.`。
+- 验收首次在 `zh-CN` PowerShell 暴露 extension tree 哈希误报：脚本使用文化相关 `Sort-Object Name`，而锁文件按 ordinal 名称顺序生成。验证两 ABI 以 `StringComparer.Ordinal` 排序后精确还原锁值，脚本已改为显式 ordinal 排序；二进制和 `runtime-lock.json` 未变。
+- 旧 Release AAR/APK 曾因阶段 7 后 CMake bridge 尚未重建而与当前源文件大小不符；重新生成 Runtime AAR 与两个 Probe Release APK 后包内容、SHA-256 和 `zipalign -P 16` 全部通过。旧产物不作为本轮证据。
+
+Core API/JVM 边界：
+
+- 当前 Release AAR inventory 为 `122` 个 class file、`64` 个顶层 class、`89` 个 `javap -public` type declaration、`82` 个审查口径 source-facing public type、`800` 个 public member signature。
+- `AgentSession`/transcript policy、capability assembly provenance/resolver overload、通用 Tool decorator/interlock 均在当前 AAR 可见；`CompositeAndroidSkillProvider` 与 `RuntimeSkillAccumulator` 虽存在于 bytecode，但 class declaration 为 package-private，不是公共 consumer seam。
+- 当前 Gradle 只显式固定 JVM target 17，没有显式 `jvmDefault` 配置；`javap` 同时可见 interface default method、`DefaultImpls` 与 `$jd` bridge。没有带可信版本元数据的旧发布 AAR和升级 consumer 测试，因此本轮只能报告当前表面，不能宣称对旧二进制或源码完全兼容。D-023/D-024 已记录有意的 `0.x` source/semantic change。
+
+静态边界：`git diff --check` 通过；Terminal 生产源码与 runtime `AGENTS.md` 不含 screen capability 知识，仓库没有 `startsWith("screen_")` workflow matcher，前后台复用同一 Demo exact matcher/interlock seam。
+
+未执行：设备/instrumentation、ADB、真实网络、真实 Provider/API、发布到远程仓库、tag/push/PR。物理设备与 Release AAB/升级/低资源/16KB 剩余项继续沿用本文件 Gate 总表和未覆盖矩阵，不能因本节静态通过而关闭。

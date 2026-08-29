@@ -14,6 +14,7 @@ Android Agent Runtime SDK：提供通用 Agent 工具循环、Android Skill，�
 - Runtime 无 UI，不要求安装 Termux 或第二个 App；它与宿主共享 Android UID，不是安全沙箱。
 - `pi-system-skill-android` 提供白名单 Android 原生 Intent Tool；打开网页、相机、拨号、地图、分享等动作不通过终端执行。
 - `demo-app` 当前保存版本为 `0.7.0`（`versionCode 8`），标签为 `demo-app-v0.7.0`；包含独立高级设置页、GLM-5.3/DeepSeek-V4 参数适配、70% 智能上下文压缩引擎与底部动态监控指示条。
+- 2026-08-29 已完成快速迭代后的模块化架构收敛：生命周期、配置、Provider、会话、transcript、capability assembly 与 Terminal/Screen interlock 均有单一 owner；本机 JVM、Debug/Release 构建和 Terminal 包验收通过，设备/发布矩阵仍未关闭。
 
 ## 模块
 
@@ -42,7 +43,7 @@ Windows PowerShell：
 
 完整单元测试、双宿主仪器测试和 Runtime 静态验收见 [`AGENTS.md`](AGENTS.md) 与 [`docs/terminal-runtime-validation.md`](docs/terminal-runtime-validation.md)。
 
-当前授权真机以 [`HANDOVER.md`](HANDOVER.md) 为准，仅允许操作小米设备（`QSG6Q8IFDMDELVGQ`）；最新 `0.7.0` 真机实测验证通过，版本台账与交接记录已全部更新。
+当前授权真机以 [`HANDOVER.md`](HANDOVER.md) 为准，仅允许操作小米设备（`QSG6Q8IFDMDELVGQ`）。`0.7.0` 真机结果绑定标签 `demo-app-v0.7.0`（`6a35704`）；其后的架构整改未重跑设备，不能把旧设备证据绑定到当前 `main`。
 
 ## 文档入口
 
@@ -59,6 +60,8 @@ Windows PowerShell：
 - [`docs/demo-app-version-ledger.md`](docs/demo-app-version-ledger.md)：demo-app 版本、变更和验收台账。
 - [`docs/android-scheduled-tasks.md`](docs/android-scheduled-tasks.md)：定时任务控制面、Android 运行时适配、能力边界和验收方法。
 - [`docs/android-agent-skills.md`](docs/android-agent-skills.md)：文件型 Skill、命名根嵌入、动态加载和 agent-memory 事实源。
+- [`docs/sdk-optimization-ledger.md`](docs/sdk-optimization-ledger.md)：SDK 架构整改阶段、checkpoint、验证与遗留边界。
+- [`docs/sdk-core-consumer-contract.md`](docs/sdk-core-consumer-contract.md)：当前 Core AAR 外部消费和 API/ABI 证据边界。
 
 历史过程记录保存在 [`docs/archive/`](docs/archive/) 中，不作为当前状态依据。
 

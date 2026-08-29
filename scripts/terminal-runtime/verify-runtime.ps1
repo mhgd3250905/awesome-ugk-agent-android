@@ -71,8 +71,15 @@ function Get-UgkSha256FromStream {
 function Get-UgkPythonExtensionTreeSha256 {
     param([Parameter(Mandatory)][System.IO.FileInfo[]]$Files)
 
-    $lines = $Files |
-        Sort-Object Name |
+    $orderedFiles = [System.IO.FileInfo[]]@($Files)
+    $ordinalFileNameComparer = [System.Collections.Generic.Comparer[System.IO.FileInfo]]::Create(
+        [System.Comparison[System.IO.FileInfo]] {
+            param([System.IO.FileInfo]$left, [System.IO.FileInfo]$right)
+            return [StringComparer]::Ordinal.Compare($left.Name, $right.Name)
+        }
+    )
+    [Array]::Sort($orderedFiles, $ordinalFileNameComparer)
+    $lines = $orderedFiles |
         ForEach-Object {
             $sha256 = (Get-FileHash -Algorithm SHA256 -LiteralPath $_.FullName).Hash.ToLowerInvariant()
             "$($_.Name)`t$($_.Length)`t$sha256"
