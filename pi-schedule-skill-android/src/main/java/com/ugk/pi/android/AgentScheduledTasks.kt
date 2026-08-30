@@ -1,5 +1,6 @@
 package com.ugk.pi.android
 
+import kotlinx.coroutines.CancellationException
 import kotlinx.serialization.SerialName
 import kotlinx.serialization.Serializable
 import kotlinx.serialization.json.JsonObject
@@ -280,7 +281,31 @@ class AgentTaskCreateTool(
         if (parsed is TaskParseResult.Error) return errorResult(call, name, parsed.code, parsed.message)
         val task = (parsed as TaskParseResult.Success).task
         store.upsert(task)
-        scheduler.schedule(task)
+        try {
+            scheduler.schedule(task)
+        } catch (error: CancellationException) {
+            throw error
+        } catch (error: Throwable) {
+            // A persisted task without a platform trigger behind it would
+            // hang forever as a phantom SCHEDULED entry. The store interface
+            // has no delete, so the honest rollback is a visible CANCELLED
+            // record plus an error result telling the caller nothing was
+            // actually scheduled.
+            runCatching { scheduler.cancel(task.id) }
+            store.upsert(
+                task.copy(
+                    status = AgentTaskStatus.CANCELLED,
+                    updatedAtMillis = clock.nowMillis(),
+                    nextRunAtMillis = null
+                )
+            )
+            return errorResult(
+                call,
+                name,
+                "SCHEDULER_ERROR",
+                "Failed to schedule task ${task.id}; the task was not created."
+            )
+        }
         return taskResult(call, name, task, "Created scheduled task ${task.id}.")
     }
 }
@@ -391,7 +416,24 @@ class AgentTaskUpdateTool(
             nextRunAtMillis = schedule.nextRunAtMillis(now)
         )
         store.upsert(updated)
-        scheduler.schedule(updated)
+        try {
+            scheduler.schedule(updated)
+        } catch (error: CancellationException) {
+            throw error
+        } catch (error: Throwable) {
+            // Restore the previous record: the task must not keep a new
+            // schedule that no platform trigger actually backs. schedule()
+            // may have cleared the old alarm before failing, so re-arm it on
+            // a best-effort basis.
+            store.upsert(existing)
+            runCatching { scheduler.schedule(existing) }
+            return errorResult(
+                call,
+                name,
+                "SCHEDULER_ERROR",
+                "Failed to schedule task ${updated.id}; previous settings were restored."
+            )
+        }
         return taskResult(call, name, updated, "Updated scheduled task ${updated.id}.")
     }
 }

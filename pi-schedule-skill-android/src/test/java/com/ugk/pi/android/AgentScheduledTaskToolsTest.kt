@@ -9,6 +9,7 @@ import kotlinx.serialization.json.jsonObject
 import kotlinx.serialization.json.jsonPrimitive
 import org.junit.Assert.assertEquals
 import org.junit.Assert.assertFalse
+import org.junit.Assert.assertNull
 import org.junit.Assert.assertTrue
 import org.junit.Test
 
@@ -224,6 +225,80 @@ class AgentScheduledTaskToolsTest {
     }
 
     @Test
+    fun createSchedulingFailureLeavesNoPhantomScheduledTask() = runBlocking {
+        val store = InMemoryAgentTaskStore()
+        val tools = agentScheduledTaskTools(
+            store = store,
+            scheduler = ExplodingAgentTaskScheduler(),
+            clock = FixedClock(1_000L),
+            idGenerator = SequentialTaskIdGenerator("task")
+        ).associateBy { it.name }
+
+        val result = tools["agent_task_create"]!!.execute(
+            call(
+                "agent_task_create",
+                "title" to JsonPrimitive("校准提醒"),
+                "schedule" to buildJsonObject {
+                    put("type", JsonPrimitive("ONE_SHOT"))
+                    put("startAfterSeconds", JsonPrimitive(60))
+                },
+                "action" to buildJsonObject {
+                    put("type", JsonPrimitive("NOTIFY_USER"))
+                    put("message", JsonPrimitive("该校准了"))
+                }
+            ),
+            context()
+        )
+
+        assertTrue(result.isError)
+        assertEquals("SCHEDULER_ERROR", result.metadata["code"]!!.jsonPrimitive.content)
+        val stored = store.get("task_1")
+        assertEquals(AgentTaskStatus.CANCELLED, stored?.status)
+        assertNull(stored?.nextRunAtMillis)
+    }
+
+    @Test
+    fun updateSchedulingFailureRestoresThePreviousTask() = runBlocking {
+        val store = InMemoryAgentTaskStore()
+        val create = AgentTaskCreateTool(
+            store,
+            RecordingAgentTaskScheduler(),
+            FixedClock(1_000L),
+            SequentialTaskIdGenerator("task")
+        )
+        create.execute(
+            call(
+                "agent_task_create",
+                "title" to JsonPrimitive("校准提醒"),
+                "schedule" to buildJsonObject {
+                    put("type", JsonPrimitive("ONE_SHOT"))
+                    put("startAfterSeconds", JsonPrimitive(60))
+                },
+                "action" to buildJsonObject {
+                    put("type", JsonPrimitive("NOTIFY_USER"))
+                    put("message", JsonPrimitive("该校准了"))
+                }
+            ),
+            context()
+        )
+        val original = store.get("task_1")!!
+        val update = AgentTaskUpdateTool(store, ExplodingAgentTaskScheduler(), FixedClock(2_000L))
+
+        val result = update.execute(
+            call(
+                "agent_task_update",
+                "taskId" to JsonPrimitive("task_1"),
+                "title" to JsonPrimitive("改过的标题")
+            ),
+            context()
+        )
+
+        assertTrue(result.isError)
+        assertEquals("SCHEDULER_ERROR", result.metadata["code"]!!.jsonPrimitive.content)
+        assertEquals(original, store.get("task_1"))
+    }
+
+    @Test
     fun scheduledTasksSkillAdvertisesManagementTools() {
         val skill = agentScheduledTasksSkill()
         val toolNames = skill.methods.map { it.toolName }.toSet()
@@ -309,6 +384,15 @@ class AgentScheduledTaskToolsTest {
 
         override suspend fun cancel(taskId: String) {
             cancelled += taskId
+        }
+    }
+
+    private class ExplodingAgentTaskScheduler : AgentTaskScheduler {
+        override suspend fun schedule(task: AgentTask) {
+            throw IllegalStateException("scheduler unavailable")
+        }
+
+        override suspend fun cancel(taskId: String) {
         }
     }
 }

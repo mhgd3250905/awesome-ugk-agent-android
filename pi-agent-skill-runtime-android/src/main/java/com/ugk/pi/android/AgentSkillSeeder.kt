@@ -43,19 +43,25 @@ object AgentSkillSeeder {
     }
 
     private fun copyAssetFile(source: SkillAssetSource, assetPath: String, target: File): Int {
-        if (target.exists()) return 0
         target.parentFile?.mkdirs()
+        val temporary = File(target.parentFile, "${target.name}.tmp")
+        temporary.delete()
+        if (target.exists()) return 0
         return try {
             source.open(assetPath).use { input ->
-                target.outputStream().use { output ->
+                temporary.outputStream().use { output ->
                     input.copyTo(output)
                 }
             }
+            // Rename so a partial copy can never occupy the target path:
+            // existing targets are never re-seeded, so a truncated target
+            // would survive every later run.
+            if (!temporary.renameTo(target)) {
+                throw java.io.IOException("Failed to move seeded file onto '${target.name}'.")
+            }
             1
         } catch (error: java.io.IOException) {
-            // A partially written target would be re-seeded next time; delete it
-            // so the next attempt starts clean instead of keeping a truncated file.
-            target.delete()
+            temporary.delete()
             0
         }
     }

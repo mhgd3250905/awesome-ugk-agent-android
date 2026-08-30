@@ -323,7 +323,7 @@ class MemoryWriteTool(
 
         return try {
             memoryRoot.mkdirs()
-            file.writeText(content)
+            writeTextAtomically(file, content)
             ToolResult(
                 toolCallId = call.id,
                 name = name,

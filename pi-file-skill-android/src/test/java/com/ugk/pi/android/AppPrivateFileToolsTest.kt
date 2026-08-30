@@ -1,6 +1,7 @@
 package com.ugk.pi.android
 
 import java.io.File
+import java.io.IOException
 import java.nio.file.Files
 import kotlin.io.path.createTempDirectory
 import kotlinx.coroutines.runBlocking
@@ -119,6 +120,40 @@ class AppPrivateFileToolsTest {
         assertEquals("FILE_EXISTS", rejected.metadata["code"]!!.jsonPrimitive.content)
         assertFalse(overwritten.isError)
         assertEquals("second", File(root, "note.md").readText())
+    }
+
+    @Test
+    fun writeLeavesNoTemporaryFile() = runBlocking {
+        val root = tempRoot()
+        val write = AppFileWriteTool(root)
+
+        write.execute(call("app_file_write", "path" to "notes/a.md", "content" to "one"), context())
+        write.execute(
+            call("app_file_write", "path" to "notes/a.md", "content" to "two", "overwrite" to true),
+            context()
+        )
+
+        assertEquals("two", File(root, "notes/a.md").readText())
+        assertTrue(File(root, "notes").listFiles()!!.none { it.name.endsWith(".tmp") })
+    }
+
+    @Test
+    fun atomicWriteFailureKeepsExistingFileIntact() {
+        val root = tempRoot()
+        val file = File(root, "note.md").apply { writeText("original") }
+
+        try {
+            writeTextAtomically(file, "replacement") { temporary, text ->
+                writeTemporaryText(temporary, text)
+                throw IOException("injected failure after the temporary write")
+            }
+            throw AssertionError("Expected the injected IOException to propagate.")
+        } catch (expected: IOException) {
+            // Simulated crash between the temporary write and the rename.
+        }
+
+        assertEquals("original", file.readText())
+        assertTrue(root.listFiles()!!.none { it.name.endsWith(".tmp") })
     }
 
     @Test

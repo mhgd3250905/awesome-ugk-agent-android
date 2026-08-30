@@ -88,6 +88,70 @@ class AgentSkillSeederTest {
         assertTrue(targetRoot.isDirectory || !targetRoot.exists())
     }
 
+    @Test
+    fun seedingLeavesNoTemporaryFiles() {
+        val source = FakeAssetSource(
+            mapOf(
+                "agent-skills/agent-memory/SKILL.md" to "skill".toByteArray(),
+                "agent-skills/agent-memory/rules.md" to "rules".toByteArray()
+            )
+        )
+        val targetRoot = File(tempFolder.root, "agent-skills")
+
+        val seeded = AgentSkillSeeder.seed(source, targetRoot)
+
+        assertEquals(2, seeded)
+        assertEquals("skill", File(targetRoot, "agent-memory/SKILL.md").readText())
+        assertTrue(targetRoot.walkTopDown().none { it.name.endsWith(".tmp") })
+    }
+
+    @Test
+    fun seedingClearsLeftoverTemporaryFiles() {
+        val source = FakeAssetSource(
+            mapOf("agent-skills/agent-memory/SKILL.md" to "skill".toByteArray())
+        )
+        val targetRoot = File(tempFolder.root, "agent-skills")
+        File(targetRoot, "agent-memory").mkdirs()
+        File(targetRoot, "agent-memory/SKILL.md.tmp").writeText("interrupted residue")
+
+        val seeded = AgentSkillSeeder.seed(source, targetRoot)
+
+        assertEquals(1, seeded)
+        assertEquals("skill", File(targetRoot, "agent-memory/SKILL.md").readText())
+        assertFalse(File(targetRoot, "agent-memory/SKILL.md.tmp").exists())
+    }
+
+    @Test
+    fun interruptedCopyLeavesNoTargetAndNoTemporaryFile() {
+        val source = object : SkillAssetSource {
+            override fun list(path: String): List<String> {
+                return if (path == "agent-skills") listOf("broken.md") else emptyList()
+            }
+
+            override fun open(path: String): InputStream = ExplodingInputStream()
+        }
+        val targetRoot = File(tempFolder.root, "agent-skills")
+
+        val seeded = AgentSkillSeeder.seed(source, targetRoot)
+
+        assertEquals(0, seeded)
+        assertFalse(File(targetRoot, "broken.md").exists())
+        assertTrue(targetRoot.walkTopDown().none { it.name.endsWith(".tmp") })
+    }
+
+    /** Yields three bytes, then fails like a full disk mid-copy. */
+    private class ExplodingInputStream : InputStream() {
+        private var remaining = 3
+
+        override fun read(): Int {
+            if (remaining > 0) {
+                remaining--
+                return 'a'.code
+            }
+            throw java.io.IOException("disk full")
+        }
+    }
+
     private class FakeAssetSource(private val files: Map<String, ByteArray>) : SkillAssetSource {
         override fun list(path: String): List<String> {
             val prefix = "$path/"

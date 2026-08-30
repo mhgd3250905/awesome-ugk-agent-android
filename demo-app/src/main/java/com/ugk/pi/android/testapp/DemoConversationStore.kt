@@ -38,6 +38,57 @@ internal fun keepNewestDemoConversations(
     ).take(limit)
 }
 
+// Bounded-transcript limits shared by the store's save/append paths. Kept at
+// module level (like keepNewestDemoConversations above) so the pure merge
+// helpers are unit-testable against the exact production semantics.
+internal const val MAX_CONVERSATIONS = 30
+internal const val MAX_MESSAGES = 100
+// Keep ordinary long answers intact across Activity recreation while still
+// protecting SharedPreferences from an accidental giant dump.
+internal const val MAX_MESSAGE_CHARS = 64_000
+internal const val MAX_TITLE_CHARS = 48
+internal const val DEFAULT_TITLE = "新对话"
+internal val ALLOWED_ROLES = setOf("user", "assistant", "system")
+
+internal fun normalizeStoredTitle(value: String): String = value.trim()
+    .replace(Regex("\\s+"), " ")
+    .take(MAX_TITLE_CHARS)
+    .ifBlank { DEFAULT_TITLE }
+
+internal fun normalizeStoredConversation(conversation: DemoConversation): DemoConversation {
+    val messages = conversation.messages
+        .filter { it.role in ALLOWED_ROLES && (it.content.isNotBlank() || !it.imagePath.isNullOrBlank()) }
+        .takeLast(MAX_MESSAGES)
+        .map { it.copy(content = it.content.take(MAX_MESSAGE_CHARS), imagePath = it.imagePath) }
+        .toMutableList()
+    return conversation.copy(
+        title = normalizeStoredTitle(conversation.title),
+        messages = messages
+    )
+}
+
+/**
+ * Pure append-merge shared by DemoConversationStore.appendMessages.
+ *
+ * Append semantics must not be built on save()'s whole-conversation
+ * replacement: a foreground Activity holding a stale in-memory snapshot
+ * would otherwise erase messages a background scheduled run appended in the
+ * meantime. Normalization mirrors the save() path, so an append is truncated
+ * to MAX_MESSAGES exactly like a save would be.
+ */
+internal fun appendStoredMessages(
+    existing: DemoConversation,
+    incoming: List<DemoStoredMessage>,
+    now: Long,
+    titleUpdate: String? = null
+): DemoConversation = normalizeStoredConversation(
+    existing.copy(
+        title = titleUpdate?.let(::normalizeStoredTitle) ?: existing.title,
+        updatedAt = now,
+        messages = (existing.messages + incoming).toMutableList()
+    )
+)
+
 /**
  * Small, local-only conversation store for the demo app.
  *
@@ -87,7 +138,7 @@ class DemoConversationStore(context: Context) {
         val now = System.currentTimeMillis()
         val conversation = DemoConversation(
             id = UUID.randomUUID().toString(),
-            title = normalizeTitle(title),
+            title = normalizeStoredTitle(title),
             createdAt = now,
             updatedAt = now
         )
@@ -101,7 +152,7 @@ class DemoConversationStore(context: Context) {
 
     @Synchronized
     fun save(conversation: DemoConversation) {
-        val normalized = normalize(conversation)
+        val normalized = normalizeStoredConversation(conversation)
         // Keep the caller's in-memory object bounded as well as the JSON
         // representation. Otherwise a long-lived Activity can keep every
         // tool/result message even though persistence is capped.
@@ -111,6 +162,58 @@ class DemoConversationStore(context: Context) {
         val all = readAll().filterNot { it.id == normalized.id } + normalized
         writeAll(keepNewestDemoConversations(all, MAX_CONVERSATIONS))
         setActive(normalized.id)
+    }
+
+    /**
+     * Atomically appends messages to a stored conversation instead of
+     * replacing it wholesale like save(). A foreground Activity can hold a
+     * stale snapshot while a background scheduled run appends its result;
+     * only an append-merge keeps both turns alive. Returns the updated
+     * conversation, or null when the conversation no longer exists — a
+     * background append must not resurrect a conversation the user deleted
+     * while the run was in flight.
+     */
+    @Synchronized
+    fun appendMessages(
+        conversationId: String,
+        messages: List<DemoStoredMessage>,
+        titleUpdate: String? = null
+    ): DemoConversation? {
+        val current = readAll()
+        val existing = current.firstOrNull { it.id == conversationId } ?: return null
+        val updated = appendStoredMessages(
+            existing = existing,
+            incoming = messages,
+            now = System.currentTimeMillis(),
+            titleUpdate = titleUpdate
+        )
+        val all = current.filterNot { it.id == updated.id } + updated
+        writeAll(keepNewestDemoConversations(all, MAX_CONVERSATIONS))
+        setActive(updated.id)
+        return updated
+    }
+
+    /**
+     * Flushed append for background executors. Mirrors saveAndFlush: waits
+     * behind the same single writer so a process kill cannot discard a
+     * scheduled result merely because the write was still queued.
+     */
+    @Synchronized
+    fun appendMessagesAndFlush(
+        conversationId: String,
+        messages: List<DemoStoredMessage>,
+        titleUpdate: String? = null
+    ): DemoConversation? {
+        val updated = appendMessages(conversationId, messages, titleUpdate) ?: return null
+        try {
+            writeExecutor.submit { drainPendingWrites() }.get()
+        } catch (error: InterruptedException) {
+            Thread.currentThread().interrupt()
+            throw error
+        } catch (error: ExecutionException) {
+            throw error.cause ?: error
+        }
+        return updated
     }
 
     /**
@@ -136,7 +239,7 @@ class DemoConversationStore(context: Context) {
 
     fun rename(id: String, title: String): DemoConversation? {
         val conversation = get(id) ?: return null
-        conversation.title = normalizeTitle(title)
+        conversation.title = normalizeStoredTitle(title)
         conversation.updatedAt = System.currentTimeMillis()
         save(conversation)
         return conversation
@@ -160,7 +263,7 @@ class DemoConversationStore(context: Context) {
 
     fun suggestedTitle(text: String): String {
         val compact = text.trim().replace(Regex("\\s+"), " ")
-        return normalizeTitle(compact.ifBlank { DEFAULT_TITLE })
+        return normalizeStoredTitle(compact.ifBlank { DEFAULT_TITLE })
     }
 
     private fun readAll(): List<DemoConversation> {
@@ -199,7 +302,7 @@ class DemoConversationStore(context: Context) {
                         )
                     }
                     add(
-                        normalize(
+                        normalizeStoredConversation(
                             DemoConversation(
                                 id = id,
                                 title = item.optString("title", DEFAULT_TITLE),
@@ -253,7 +356,7 @@ class DemoConversationStore(context: Context) {
         conversations.forEach { conversation ->
             val item = JSONObject()
                 .put("id", conversation.id)
-                .put("title", normalizeTitle(conversation.title))
+                .put("title", normalizeStoredTitle(conversation.title))
                 .put("createdAt", conversation.createdAt)
                 .put("updatedAt", conversation.updatedAt)
             val messages = JSONArray()
@@ -276,34 +379,9 @@ class DemoConversationStore(context: Context) {
     private fun copyConversation(conversation: DemoConversation): DemoConversation =
         conversation.copy(messages = conversation.messages.map { it.copy() }.toMutableList())
 
-    private fun normalize(conversation: DemoConversation): DemoConversation {
-        val messages = conversation.messages
-            .filter { it.role in ALLOWED_ROLES && (it.content.isNotBlank() || !it.imagePath.isNullOrBlank()) }
-            .takeLast(MAX_MESSAGES)
-            .map { it.copy(content = it.content.take(MAX_MESSAGE_CHARS), imagePath = it.imagePath) }
-            .toMutableList()
-        return conversation.copy(
-            title = normalizeTitle(conversation.title),
-            messages = messages
-        )
-    }
-
-    private fun normalizeTitle(value: String): String = value.trim()
-        .replace(Regex("\\s+"), " ")
-        .take(MAX_TITLE_CHARS)
-        .ifBlank { DEFAULT_TITLE }
-
     private companion object {
         const val PREFS_NAME = "demo_conversations"
         const val KEY_CONVERSATIONS = "conversations"
         const val KEY_ACTIVE_ID = "active_id"
-        const val DEFAULT_TITLE = "新对话"
-        const val MAX_CONVERSATIONS = 30
-        const val MAX_MESSAGES = 100
-        // Keep ordinary long answers intact across Activity recreation while
-        // still protecting SharedPreferences from an accidental giant dump.
-        const val MAX_MESSAGE_CHARS = 64_000
-        const val MAX_TITLE_CHARS = 48
-        val ALLOWED_ROLES = setOf("user", "assistant", "system")
     }
 }

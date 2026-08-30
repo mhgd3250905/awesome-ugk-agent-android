@@ -1,6 +1,7 @@
 package com.ugk.pi.android.testapp
 
 import android.content.Context
+import com.ugk.pi.android.AgentRuntime
 import com.ugk.pi.android.AgentSession
 import kotlinx.coroutines.CoroutineDispatcher
 import kotlinx.coroutines.Dispatchers
@@ -46,6 +47,15 @@ class DemoConversationRuntime private constructor(
     var session: AgentSession? = null
     var activeConversationId: String? = null
     var draft: String = ""
+
+    // Runtime ownership is process-level: an Activity recreation (config
+    // change, split screen, font scale) must never terminate an in-flight
+    // Agent run or clear its queued overlay messages. The Activity only
+    // reads and writes through these fields; the finishing Activity is the
+    // sole owner of teardown (cancelAllPlugins + close + null).
+    var agentRuntime: AgentRuntime? = null
+    internal var appliedRuntimeConfig: DemoRuntimeConfig? = null
+
     val sessions: MutableMap<String, AgentSession> = mutableMapOf()
     val transcript: MutableList<DemoTranscriptEntry> = mutableListOf()
 

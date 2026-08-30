@@ -127,7 +127,16 @@ object SkillManifestParser {
                     "Malformed frontmatter line (expected 'key: value'): '$trimmed'."
                 )
             }
-            values[trimmed.substring(0, separator).trim()] = trimmed.substring(separator + 1).trim()
+            val key = trimmed.substring(0, separator).trim()
+            // A repeated key would silently flip the effective value (for
+            // example two x-ugk-load lines), so duplicates are rejected with
+            // a diagnostic instead of last-one-wins.
+            if (values.containsKey(key)) {
+                return SkillManifestParseResult.Invalid(
+                    "Duplicate frontmatter key '$key' in SKILL.md."
+                )
+            }
+            values[key] = trimmed.substring(separator + 1).trim()
         }
 
         val name = values[KEY_NAME]

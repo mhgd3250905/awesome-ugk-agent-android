@@ -12,6 +12,7 @@ import kotlinx.serialization.json.jsonArray
 import kotlinx.serialization.json.jsonObject
 import kotlinx.serialization.json.jsonPrimitive
 import org.junit.Assert.assertEquals
+import org.junit.Assert.assertFalse
 import org.junit.Assert.assertNotNull
 import org.junit.Assert.assertTrue
 import org.junit.Test
@@ -111,8 +112,12 @@ class AnthropicMessagesProviderTest {
         assertTrue(transport.request.body.contains("\"model\":\"deepseek-v4-pro\""))
         assertTrue(transport.request.body.contains("\"max_tokens\":32768"))
         assertTrue(transport.request.body.contains("\"system\":\"Use tools when needed.\""))
-        assertTrue(transport.request.body.contains("\"type\":\"thinking\""))
-        assertTrue(transport.request.body.contains("\"thinking\":\"previous reasoning\""))
+        // Thinking blocks must not be replayed in requests: the Anthropic API
+        // requires a signature on returned thinking blocks and rejects them
+        // outright when the request does not enable thinking, and the persisted
+        // Assistant message does not keep signatures.
+        assertFalse(transport.request.body.contains("\"type\":\"thinking\""))
+        assertFalse(transport.request.body.contains("\"thinking\":\"previous reasoning\""))
         assertTrue(transport.request.body.contains("\"type\":\"tool_use\""))
         assertTrue(transport.request.body.contains("\"type\":\"tool_result\""))
         assertTrue(transport.request.body.contains("\"tools\""))
@@ -163,6 +168,148 @@ class AnthropicMessagesProviderTest {
                 .jsonArray
                 .map { it.jsonObject["tool_use_id"]?.jsonPrimitive?.content }
         )
+    }
+
+    @Test
+    fun `tool result followed by a user message stays one alternating user message`() = runBlocking {
+        val transport = RecordingHttpTransport(simpleTextResponse("done"))
+        val provider = AnthropicMessagesProvider(
+            apiKey = "test-key",
+            model = "deepseek-v4-flash",
+            baseUrl = "https://example.com/anthropic",
+            transport = transport
+        )
+
+        provider.generate(
+            ModelRequest(
+                sessionId = "s1",
+                messages = listOf(
+                    AgentMessage.User("hi"),
+                    AgentMessage.Assistant(
+                        content = "checking",
+                        toolCalls = listOf(
+                            ToolCall("call-1", "sample_action", JsonObject(emptyMap()))
+                        )
+                    ),
+                    AgentMessage.Tool(ToolResult("call-1", "sample_action", "ok")),
+                    AgentMessage.User("extra")
+                ),
+                tools = emptyList()
+            )
+        )
+
+        val messages = Json.parseToJsonElement(transport.request.body)
+            .jsonObject["messages"]!!
+            .jsonArray
+        assertEquals(
+            "Anthropic requires strictly alternating user and assistant roles",
+            listOf("user", "assistant", "user"),
+            messages.map { it.jsonObject["role"]?.jsonPrimitive?.content }
+        )
+        val mergedMessage = messages[2].jsonObject
+        assertEquals("user", mergedMessage["role"]?.jsonPrimitive?.content)
+        val blocks = mergedMessage["content"]!!.jsonArray
+        assertEquals(2, blocks.size)
+        assertEquals("tool_result", blocks[0].jsonObject["type"]?.jsonPrimitive?.content)
+        assertEquals("call-1", blocks[0].jsonObject["tool_use_id"]?.jsonPrimitive?.content)
+        assertEquals("text", blocks[1].jsonObject["type"]?.jsonPrimitive?.content)
+        assertEquals("extra", blocks[1].jsonObject["text"]?.jsonPrimitive?.content)
+    }
+
+    @Test
+    fun `tool results with image and text user attachments merge into one user message`() = runBlocking {
+        val transport = RecordingHttpTransport(simpleTextResponse("done"))
+        val provider = AnthropicMessagesProvider(
+            apiKey = "test-key",
+            model = "deepseek-v4-flash",
+            baseUrl = "https://example.com/anthropic",
+            transport = transport
+        )
+
+        provider.generate(
+            ModelRequest(
+                sessionId = "s1",
+                messages = listOf(
+                    AgentMessage.User("inspect screen"),
+                    AgentMessage.Assistant(
+                        content = "observing",
+                        toolCalls = listOf(
+                            ToolCall("call-1", "visual_tool", JsonObject(emptyMap()))
+                        )
+                    ),
+                    AgentMessage.Tool(ToolResult("call-1", "visual_tool", "metadata")),
+                    AgentMessage.User(
+                        content = "screen attached",
+                        images = listOf(AgentImageContent(base64Data = "AQID", mimeType = "image/jpeg"))
+                    ),
+                    AgentMessage.User("more")
+                ),
+                tools = emptyList()
+            )
+        )
+
+        val messages = Json.parseToJsonElement(transport.request.body)
+            .jsonObject["messages"]!!
+            .jsonArray
+        assertEquals(
+            "Tool results and the user attachments behind them must share one user message",
+            listOf("user", "assistant", "user"),
+            messages.map { it.jsonObject["role"]?.jsonPrimitive?.content }
+        )
+        val blocks = messages[2].jsonObject["content"]!!.jsonArray
+        assertEquals(
+            listOf("tool_result", "image", "text", "text"),
+            blocks.map { it.jsonObject["type"]?.jsonPrimitive?.content }
+        )
+        assertEquals("call-1", blocks[0].jsonObject["tool_use_id"]?.jsonPrimitive?.content)
+        assertEquals(
+            "image/jpeg",
+            blocks[1].jsonObject["source"]!!
+                .jsonObject["media_type"]?.jsonPrimitive?.content
+        )
+        assertEquals("screen attached", blocks[2].jsonObject["text"]?.jsonPrimitive?.content)
+        assertEquals("more", blocks[3].jsonObject["text"]?.jsonPrimitive?.content)
+    }
+
+    @Test
+    fun `assistant reasoning is not replayed as a thinking block`() = runBlocking {
+        val transport = RecordingHttpTransport(simpleTextResponse("done"))
+        val provider = AnthropicMessagesProvider(
+            apiKey = "test-key",
+            model = "deepseek-v4-flash",
+            baseUrl = "https://example.com/anthropic",
+            transport = transport
+        )
+
+        provider.generate(
+            ModelRequest(
+                sessionId = "s1",
+                messages = listOf(
+                    AgentMessage.User("hello"),
+                    AgentMessage.Assistant(
+                        content = "partial answer",
+                        reasoningContent = "hidden reasoning"
+                    ),
+                    AgentMessage.User("continue")
+                ),
+                tools = emptyList()
+            )
+        )
+
+        val messages = Json.parseToJsonElement(transport.request.body)
+            .jsonObject["messages"]!!
+            .jsonArray
+        val assistantMessage = messages[1].jsonObject
+        assertEquals("assistant", assistantMessage["role"]?.jsonPrimitive?.content)
+        val blocks = assistantMessage["content"]!!.jsonArray
+        // Thinking blocks carry no signature in AgentMessage and the request
+        // does not enable thinking, so replaying them would be rejected.
+        assertTrue(blocks.none { it.jsonObject["type"]?.jsonPrimitive?.content == "thinking" })
+        assertEquals(
+            listOf("text"),
+            blocks.map { it.jsonObject["type"]?.jsonPrimitive?.content }
+        )
+        assertEquals("partial answer", blocks[0].jsonObject["text"]?.jsonPrimitive?.content)
     }
 
     @Test

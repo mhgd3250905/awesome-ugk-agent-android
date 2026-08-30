@@ -2,6 +2,7 @@ package com.ugk.pi.android
 
 import kotlinx.serialization.json.Json
 import kotlinx.serialization.json.JsonArray
+import kotlinx.serialization.json.JsonArrayBuilder
 import kotlinx.serialization.json.JsonElement
 import kotlinx.serialization.json.JsonObject
 import kotlinx.serialization.json.JsonPrimitive
@@ -293,24 +294,48 @@ class AnthropicMessagesProvider(
 
     private fun List<AgentMessage>.toAnthropicMessages(): List<JsonObject> {
         val result = mutableListOf<JsonObject>()
-        val pendingToolResults = mutableListOf<AgentMessage.Tool>()
+        val runToolResults = mutableListOf<AgentMessage.Tool>()
+        val runUsers = mutableListOf<AgentMessage.User>()
 
-        fun flushToolResults() {
-            if (pendingToolResults.isEmpty()) return
-            result += pendingToolResults.toAnthropicToolResultMessage()
-            pendingToolResults.clear()
+        // The Messages API enforces strict user/assistant alternation, so one
+        // run of consecutive Tool and User messages must be serialized as a
+        // single user message whose content blocks are concatenated in order.
+        fun flushRun() {
+            when {
+                runToolResults.isEmpty() && runUsers.isEmpty() -> return
+                runToolResults.isEmpty() && runUsers.size == 1 -> {
+                    result += runUsers.single().toAnthropicMessage()
+                }
+
+                else -> {
+                    result += buildJsonObject {
+                        put("role", "user")
+                        putJsonArray("content") {
+                            runToolResults.forEach { message ->
+                                add(message.result.toAnthropicToolResult())
+                            }
+                            runUsers.forEach { message ->
+                                message.appendUserContentBlocksTo(this)
+                            }
+                        }
+                    }
+                }
+            }
+            runToolResults.clear()
+            runUsers.clear()
         }
 
         forEach { message ->
             when (message) {
-                is AgentMessage.Tool -> pendingToolResults += message
+                is AgentMessage.Tool -> runToolResults += message
+                is AgentMessage.User -> runUsers += message
                 else -> {
-                    flushToolResults()
+                    flushRun()
                     result += message.toAnthropicMessage()
                 }
             }
         }
-        flushToolResults()
+        flushRun()
         return result
     }
 
@@ -323,26 +348,7 @@ class AnthropicMessagesProvider(
                     put("content", content)
                 } else {
                     putJsonArray("content") {
-                        images.forEach { img ->
-                            add(
-                                buildJsonObject {
-                                    put("type", "image")
-                                    putJsonObject("source") {
-                                        put("type", "base64")
-                                        put("media_type", img.mimeType)
-                                        put("data", img.base64Data)
-                                    }
-                                }
-                            )
-                        }
-                        if (content.isNotBlank()) {
-                            add(
-                                buildJsonObject {
-                                    put("type", "text")
-                                    put("text", content)
-                                }
-                            )
-                        }
+                        appendUserContentBlocksTo(this)
                     }
                 }
             }
@@ -350,16 +356,10 @@ class AnthropicMessagesProvider(
             is AgentMessage.Assistant -> buildJsonObject {
                 put("role", "assistant")
                 putJsonArray("content") {
-                    reasoningContent
-                        ?.takeIf { it.isNotBlank() }
-                        ?.let { reasoning ->
-                            add(
-                                buildJsonObject {
-                                    put("type", "thinking")
-                                    put("thinking", reasoning)
-                                }
-                            )
-                        }
+                    // Thinking is never replayed: the Messages API requires a
+                    // signature on returned thinking blocks and rejects them
+                    // when the request does not enable thinking, while
+                    // AgentMessage.Assistant does not carry signatures.
                     if (content.isNotBlank()) {
                         add(
                             buildJsonObject {
@@ -378,14 +378,27 @@ class AnthropicMessagesProvider(
         }
     }
 
-    private fun List<AgentMessage.Tool>.toAnthropicToolResultMessage(): JsonObject {
-        return buildJsonObject {
-            put("role", "user")
-            putJsonArray("content") {
-                this@toAnthropicToolResultMessage.forEach { message ->
-                    add(message.result.toAnthropicToolResult())
+    /** Appends this user message's image and text blocks to [blocks], in order. */
+    private fun AgentMessage.User.appendUserContentBlocksTo(blocks: JsonArrayBuilder) {
+        images.forEach { img ->
+            blocks.add(
+                buildJsonObject {
+                    put("type", "image")
+                    putJsonObject("source") {
+                        put("type", "base64")
+                        put("media_type", img.mimeType)
+                        put("data", img.base64Data)
+                    }
                 }
-            }
+            )
+        }
+        if (content.isNotBlank()) {
+            blocks.add(
+                buildJsonObject {
+                    put("type", "text")
+                    put("text", this@appendUserContentBlocksTo.content)
+                }
+            )
         }
     }
 

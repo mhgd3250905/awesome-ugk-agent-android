@@ -49,38 +49,70 @@ class AndroidAgentTaskStore(context: Context) : AgentTaskStore {
         PREFERENCES_NAME,
         Context.MODE_PRIVATE
     )
-    private val lock = Any()
+    private val recordStore = TaskRecordStore(
+        readRaw = { preferences.getString(KEY_TASKS, null) },
+        writeRaw = { raw -> preferences.edit().putString(KEY_TASKS, raw).commit() },
+        writeBackup = { raw -> preferences.edit().putString(KEY_TASKS_BACKUP, raw).commit() }
+    )
 
-    override suspend fun upsert(task: AgentTask) {
-        synchronized(lock) {
-            val tasks = readLocked().toMutableList()
-            val index = tasks.indexOfFirst { it.id == task.id }
-            if (index >= 0) tasks[index] = task else tasks += task
-            writeLocked(tasks)
-        }
-    }
+    override suspend fun upsert(task: AgentTask) = recordStore.upsert(task)
 
-    override suspend fun get(taskId: String): AgentTask? = synchronized(lock) {
-        readLocked().firstOrNull { it.id == taskId }
-    }
+    override suspend fun get(taskId: String): AgentTask? = recordStore.get(taskId)
 
-    override suspend fun list(): List<AgentTask> = synchronized(lock) {
-        readLocked()
-    }
-
-    private fun readLocked(): List<AgentTask> {
-        return AgentTaskJsonCodec.decode(preferences.getString(KEY_TASKS, null))
-    }
-
-    private fun writeLocked(tasks: List<AgentTask>) {
-        preferences.edit()
-            .putString(KEY_TASKS, AgentTaskJsonCodec.encode(tasks))
-            .commit()
-    }
+    override suspend fun list(): List<AgentTask> = recordStore.list()
 
     private companion object {
         const val PREFERENCES_NAME = "ugk_agent_tasks"
         const val KEY_TASKS = "tasks"
+        const val KEY_TASKS_BACKUP = "tasks_corrupt_backup"
+    }
+}
+
+/**
+ * Persistence core shared by every [AndroidAgentTaskStore] instance.
+ *
+ * The backing record is a single raw string, so the read-modify-write in
+ * [upsert] must serialize across instances too: the alarm receiver, the job
+ * service, and the host app each build their own store instance pointing at
+ * the same SharedPreferences record, and per-instance locks would let one
+ * instance overwrite another instance's committed snapshot.
+ */
+internal class TaskRecordStore(
+    private val readRaw: () -> String?,
+    private val writeRaw: (String) -> Unit,
+    private val writeBackup: (String) -> Unit = {}
+) {
+    fun upsert(task: AgentTask) {
+        synchronized(lock) {
+            val tasks = readForWrite().toMutableList()
+            val index = tasks.indexOfFirst { it.id == task.id }
+            if (index >= 0) tasks[index] = task else tasks += task
+            writeRaw(AgentTaskJsonCodec.encode(tasks))
+        }
+    }
+
+    fun get(taskId: String): AgentTask? = synchronized(lock) {
+        AgentTaskJsonCodec.decode(readRaw()).firstOrNull { it.id == taskId }
+    }
+
+    fun list(): List<AgentTask> = synchronized(lock) {
+        AgentTaskJsonCodec.decode(readRaw())
+    }
+
+    private fun readForWrite(): List<AgentTask> {
+        val raw = readRaw()
+        if (raw.isNullOrBlank()) return emptyList()
+        return AgentTaskJsonCodec.decodeOrNull(raw) ?: run {
+            // One unreadable payload must not erase every stored task: keep
+            // the raw record under a backup key before the next write
+            // replaces it, so the data is still recoverable by hand.
+            writeBackup(raw)
+            emptyList()
+        }
+    }
+
+    private companion object {
+        val lock = Any()
     }
 }
 
@@ -95,8 +127,12 @@ internal object AgentTaskJsonCodec {
 
     fun decode(value: String?): List<AgentTask> {
         if (value.isNullOrBlank()) return emptyList()
-        return runCatching { json.decodeFromString(serializer, value) }.getOrElse { emptyList() }
+        return decodeOrNull(value) ?: emptyList()
     }
+
+    /** Returns null only when the payload exists but cannot be decoded. */
+    fun decodeOrNull(value: String): List<AgentTask>? =
+        runCatching { json.decodeFromString(serializer, value) }.getOrNull()
 }
 
 internal enum class AgentTaskTriggerRoute {
@@ -331,6 +367,38 @@ internal fun AgentTask.afterExecution(now: Long, success: Boolean): AgentTask {
 }
 
 /**
+ * State transition for delivery failures (missing notification permission,
+ * rejected post): the run itself did not fail, so a repeating task stays
+ * SCHEDULED at its next occurrence instead of dying terminally after one
+ * denied notification. A one-shot task still ends FAILED because its single
+ * reminder was lost, and the user can recreate it once permission is
+ * granted. Like [afterExecution], a full retry policy belongs to a future
+ * TaskRun/lease layer rather than this adapter.
+ */
+internal fun AgentTask.afterDeliveryFailure(now: Long): AgentTask {
+    if (schedule is com.ugk.pi.android.AgentTaskSchedule.OneShot) {
+        return copy(
+            status = AgentTaskStatus.FAILED,
+            updatedAtMillis = now,
+            nextRunAtMillis = null,
+            lastRunAtMillis = now
+        )
+    }
+
+    val nextRun = schedule.nextRunAtMillis(now + 1L)
+    return copy(
+        status = when {
+            nextRun == null -> AgentTaskStatus.EXPIRED
+            else -> AgentTaskStatus.SCHEDULED
+        },
+        updatedAtMillis = now,
+        nextRunAtMillis = nextRun,
+        lastRunAtMillis = now,
+        completedAtMillis = if (nextRun == null) now else null
+    )
+}
+
+/**
  * Host hook for Agent prompt execution. The notification action is built in;
  * prompt execution is deliberately injected so the scheduler never depends
  * on an Activity or a particular LLM provider.
@@ -356,12 +424,11 @@ class AndroidAgentTaskRuntime(
     private val clock: AgentTaskClock = SystemAgentTaskClock
 ) {
     private val appContext = context.applicationContext
-    private val executionLock = Mutex()
 
     suspend fun handle(
         taskId: String,
         reschedule: Boolean = true
-    ): AgentTaskActionExecutionResult = executionLock.withLock {
+    ): AgentTaskActionExecutionResult = PROCESS_HANDLE_LOCK.withLock {
         val task = store.get(taskId)
             ?: return@withLock AgentTaskActionExecutionResult(false, "任务不存在：$taskId")
         if (task.status != AgentTaskStatus.SCHEDULED) {
@@ -380,12 +447,14 @@ class AndroidAgentTaskRuntime(
         }
 
         var notifySuccessfulPrompt = false
+        var deliveryFailed = false
         val result = try {
             when (val action = task.action) {
                 is AgentTaskAction.NotifyUser -> {
                     if (notificationSink.publish(appContext, task, action.message)) {
                         AgentTaskActionExecutionResult(true, action.message)
                     } else {
+                        deliveryFailed = true
                         AgentTaskActionExecutionResult(
                             false,
                             "通知未发送：请授予通知权限后重试。"
@@ -413,7 +482,13 @@ class AndroidAgentTaskRuntime(
             AgentTaskActionExecutionResult(false, "定时任务执行失败，请稍后重试。")
         }
 
-        val updated = task.afterExecution(now, result.success)
+        // A denied notification is a delivery problem, not a task failure:
+        // repeating tasks must survive it and advance to the next run.
+        val updated = if (deliveryFailed) {
+            task.afterDeliveryFailure(now)
+        } else {
+            task.afterExecution(now, result.success)
+        }
         store.upsert(updated)
         if (reschedule) {
             if (updated.status == AgentTaskStatus.SCHEDULED) {
@@ -432,12 +507,22 @@ class AndroidAgentTaskRuntime(
     }
 
     suspend fun restoreScheduledTasks() {
-        store.list()
-            .filter { it.status == AgentTaskStatus.SCHEDULED && it.nextRunAtMillis != null }
-            .forEach { scheduler.schedule(it) }
+        // The boot restore may run while a firing alarm handles the same
+        // task on another runtime instance; sharing the handle lock keeps the
+        // restore from re-arming stale snapshots.
+        PROCESS_HANDLE_LOCK.withLock {
+            store.list()
+                .filter { it.status == AgentTaskStatus.SCHEDULED && it.nextRunAtMillis != null }
+                .forEach { scheduler.schedule(it) }
+        }
     }
 
     private companion object {
+        // Alarm broadcasts and JobService entries each build a fresh runtime
+        // instance (see [taskRuntime]); mutual exclusion for the
+        // check-then-act execution transition must therefore be process-wide
+        // instead of per-instance.
+        val PROCESS_HANDLE_LOCK = Mutex()
         const val EARLY_ALARM_GRACE_MILLIS = 5_000L
     }
 }
@@ -554,7 +639,7 @@ class AgentTaskAlarmReceiver : BroadcastReceiver() {
         val pendingResult = goAsync()
         CoroutineScope(Dispatchers.IO).launch {
             try {
-                block()
+                runReceiverTask(block)
             } finally {
                 pendingResult.finish()
             }
@@ -579,4 +664,22 @@ class AgentTaskAlarmReceiver : BroadcastReceiver() {
 internal fun taskRuntime(context: Context): AndroidAgentTaskRuntime {
     val owner = context.applicationContext as? AgentTaskRuntimeOwner
     return owner?.createAgentTaskRuntime(context) ?: AndroidAgentTaskRuntime(context)
+}
+
+/**
+ * Broadcast coroutines must not let an unexpected error escape to the
+ * process: an uncaught throwable inside goAsync work (for example the boot
+ * restore failing JobScheduler's RESULT_SUCCESS check) crashes the whole
+ * app. Structured cancellation still propagates so the receiver scope stays
+ * cooperative.
+ */
+internal suspend fun runReceiverTask(block: suspend () -> Unit) {
+    try {
+        block()
+    } catch (expected: CancellationException) {
+        throw expected
+    } catch (@Suppress("TooGenericExceptionCaught") error: Throwable) {
+        // Swallowed on purpose: a broadcast has no caller to report to, and
+        // losing the process is worse than losing one delivery.
+    }
 }
