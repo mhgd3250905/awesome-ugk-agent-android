@@ -2,10 +2,10 @@
 
 更新时间：2026-08-30
 验证源码：`E:\AII\ugk-android-new`
-注意：最新 Terminal instrumentation/probe 的物理设备证据绑定到 source checkpoint `28bc352622458d29e090656ae42fd32f057e9196`；第 21 节保留 0.7.1 历史版本保存，第 22 节记录当前 Demo `0.9.0 / versionCode 11` skill authoring 版本保存与最终验证。后者不关闭 Terminal 设备矩阵、网络或发布 Gate。
+注意：最新 Terminal instrumentation/probe 的物理设备证据绑定到 source checkpoint `28bc352622458d29e090656ae42fd32f057e9196`；第 21—22 节保留历史版本保存，第 23 节记录当前 Demo `0.9.1 / versionCode 12` 稳定性 patch 保存与最终验证。后者不关闭 Terminal 设备矩阵、网络或发布 Gate。
 
 > 第 6—14、18—19 节按日期保留历史验证快照；这些章节中的“当前”仅指当时的源码、APK 或设备上下文。
-> 当前 Gate 结论和版本保存证据以文首总表、第 20 节、第 21 节和第 22 节为准；第 21 节是历史版本保存，第 22 节是当前 0.9.0 阶段。
+> 当前 Gate 结论和版本保存证据以文首总表、第 20 节和第 23 节为准；第 21—22 节是历史版本保存，第 23 节是当前 0.9.1 阶段。
 
 ## 1. 环境变量
 
@@ -341,3 +341,13 @@ Core API/JVM 边界：
 - 独立 closeout review 结果为 `PASS`。
 - 前置设备事实：功能代码的 `0.8.0 / versionCode 10` APK 已以 `adb install -r -d` 覆盖安装到授权小米 `QSG6Q8IFDMDELVGQ`，未卸载、未清理数据；只核对安装与 package metadata。`0.9.0` APK 本阶段未安装。
 - 尚未运行真实 Agent 人工 create/update/delete/use end-to-end、`connectedDebugAndroidTest`、真实 Provider/API、Terminal Runtime `-CheckPackages`；这些边界不等同于真实 skill 行为或 Terminal 发布 Gate 已关闭。远端同步状态以 Git 实测为准。
+
+## 23. Demo 0.9.1 API 24 文件边界与 Intent 稳定性修复保存
+
+验证日期：2026-08-30；阶段基线：`demo-app-v0.9.0` / `38a5603`；PR #2 head 为 `5bfc44f`，merge commit 为 `771fa4e`。范围仅为 API 24 文件路径边界、symlink 根目录逃逸、Intent data/type 保留、回归测试、Demo patch 版本元数据和 canonical 文档对齐；不改变 Terminal 原生载荷、SDK publication `0.1.0`、依赖、权限、UI 基线或 Release Gate。
+
+- 版本元数据为 `0.9.1 / versionCode 12`，版本边界标签为 `demo-app-v0.9.1`。
+- 八个 SDK/Runtime 模块与 Demo JVM 共发现 `388` 个测试：`387` passed、`1` skipped、0 failure/error；跳过项是 Windows 主机无法创建 symlink 的 `AppPrivateFileToolsTest.rejectsSymlinkToSimilarPrefixSibling`。
+- `:demo-app:assembleDebug`、`:demo-app:compileDebugAndroidTestKotlin` 与 `git diff --check` 通过；APK metadata 为 `com.ugk.pi.android.testapp` / `versionCode 12` / `versionName 0.9.1`，并包含 `assets/agent-skills/android-skill-creator/SKILL.md`。
+- `pi-file-skill-android` 与 `pi-agent-skill-runtime-android` 的 `lintDebug` 为 0 error；`pi-system-skill-android` 的 8 个 Accessibility `NewApi` error 均在未改动的 `AccessibilityScreenAutomationBackend.kt`，本阶段改动的 `AndroidAppIntentTool.kt` 没有新增 lint finding。该既有 lint baseline 不作为本 patch 的新失败。
+- PR 说明记录 API 24/API 35 的文件边界、skill embed 与 Intent data/type targeted dynamic evidence；closeout 未重复操作真机、未运行真实 Provider/API、Terminal `-CheckPackages` 或 Release 矩阵，不据此改变既有设备与发布 Gate 结论。

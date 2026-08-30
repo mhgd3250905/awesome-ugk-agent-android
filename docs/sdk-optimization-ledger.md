@@ -9,9 +9,9 @@
 - 未形成正式发布物前，不因内部修复擅自提升 `demo-app` 版本或 Maven Artifact 版本。
 - 每一步只修改目标范围，保留工作树中已有的用户改动。
 
-当前基线：`demo-app 0.9.0` / `versionCode 11`；SDK publication 仍为开发期坐标 `0.1.0`，当前处于持续开发阶段。
+当前基线：`demo-app 0.9.1` / `versionCode 12`；SDK publication 仍为开发期坐标 `0.1.0`，当前处于持续开发阶段。0.9.1 仅收束 API 24 文件边界与 Intent data/type 稳定性修复，不改变本台账的架构结论。
 
-> 文首基线和末尾 `SDK-OPT-011`/`0.7.1` 保存段描述架构整改历史；本阶段文件型 skill authoring 当前状态见文末 `0.9.0` 保存段，其余按编号的已完成条目保留历史记录。
+> 文首基线描述当前 Demo patch；末尾 `SDK-OPT-011`/`0.7.1` 和 `0.9.0` 保存段保留架构整改与文件型 skill authoring 历史，其余按编号的已完成条目保留历史记录。
 > 历史条目中的“当前”仅限定为该条目记录时点，不覆盖文首或最新保存段。
 
 ## SDK-OPT-001：ToolRegistry 重复 Tool ID 治理

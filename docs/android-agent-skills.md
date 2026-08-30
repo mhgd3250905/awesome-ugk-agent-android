@@ -42,7 +42,8 @@ frontmatter 为手写解析，只支持扁平键值，不支持嵌套 YAML。
 嵌入每轮注入。规则：
 
 - 带别名条目的路径校验与 skill 目录条目一致：仅允许 `.md` 文件名、拒绝绝对路径与 `..`/分隔符，
-  canonical 结果必须落在该根内（对齐 `pi-file-skill-android` AppPrivateFileTools 的归属校验）。
+  canonical 结果必须落在该根内；解析后指向根外的 symlink 同样拒绝（对齐 `pi-file-skill-android`
+  AppPrivateFileTools 的归属校验）。`skill_read` 的 embed 可用性标注与 provider 读取使用同一边界规则。
 - 别名未注册 → 该条目按"缺文件跳过并注明"处理（`unknown embed root '别名'`），不影响其余条目与 skill 本身。
 - 16KB 截断、缺文件跳过并注明等既有语义不变。
 - **嵌入内容在每次 `skills()` 调用时实时读取**：宿主向命名根写入新内容后无需重建 Provider，
@@ -147,6 +148,7 @@ Agent run 由 provider 实时扫描并生效。
 
 ## 当前实现验证（2026-08-30）
 
-- `:pi-agent-skill-runtime-android:testDebugUnitTest` 生成 7 个 XML、`70/70` 通过；`:demo-app:testDebugUnitTest` 生成 23 个 XML、`107/107` 通过；0 failure/error/skipped。
-- `:demo-app:assembleDebug` 与 `:demo-app:compileDebugAndroidTestKotlin` 通过；Debug APK metadata 为 `com.ugk.pi.android.testapp`、`versionCode 11`、`versionName 0.9.0`，并包含 `assets/agent-skills/android-skill-creator/SKILL.md`。
-- 这些是 JVM/打包/资产证据，不替代真实 Agent 的人工 create/update/delete/use end-to-end；`0.9.0` APK 本阶段未安装到设备，也未调用真实 Provider/API。
+- 八个 SDK/Runtime 模块与 Demo JVM 共发现 `388` 个测试：`387` passed、`1` skipped、0 failure/error；跳过项是 Windows 主机无法创建 symlink 的 `AppPrivateFileToolsTest.rejectsSymlinkToSimilarPrefixSibling`。
+- `:demo-app:assembleDebug` 与 `:demo-app:compileDebugAndroidTestKotlin` 通过；Debug APK metadata 为 `com.ugk.pi.android.testapp`、`versionCode 12`、`versionName 0.9.1`，并包含 `assets/agent-skills/android-skill-creator/SKILL.md`。
+- PR #2 说明记录了 API 24/API 35 的文件边界、skill embed 与 Intent data/type targeted dynamic evidence；closeout 独立复核运行 JVM/构建门禁，但未重复操作设备。
+- 这些证据不替代真实 Agent 的人工 create/update/delete/use end-to-end；`0.9.1` APK 本阶段未安装到设备，也未调用真实 Provider/API。

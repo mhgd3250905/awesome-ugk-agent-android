@@ -1,11 +1,11 @@
 # demo-app 版本与变更台账
 
 更新时间：2026-08-30
-当前保存版本：`0.9.0`（`versionCode 11`）
+当前保存版本：`0.9.1`（`versionCode 12`）
 版本范围：仅 `:demo-app`；SDK/AAR 模块版本继续独立维护。
-当前阶段：在 `demo-app-v0.8.0` 基线上完成文件型 skill 的单文件 authoring MVP，已通过最终门禁与独立 closeout review，版本为 `0.9.0 / versionCode 11`。版本边界标签为 `demo-app-v0.9.0`；远端状态以 Git 实测为准。
+当前阶段：在 `demo-app-v0.9.0` 基线上合并 API 24 文件边界与 Intent data/type 稳定性修复，版本为 `0.9.1 / versionCode 12`。版本边界标签为 `demo-app-v0.9.1`；远端状态以 Git 实测为准。
 
-> 文首元数据、版本规则和 `0.9.0` 记录描述当前保存点；其后的版本条目是不可改写的历史记录。
+> 文首元数据、版本规则和 `0.9.1` 记录描述当前保存点；其后的版本条目是不可改写的历史记录。
 > 历史条目中的“当前”仅指该条目记录时点，不是今天的版本或验证状态。
 
 ## 版本规则
@@ -13,9 +13,25 @@
 - `versionCode` 只递增，不因重新打包或覆盖安装回退。
 - `versionName` 使用面向测试交付的 SemVer 风格；聊天、会话和悬浮窗等一组可感知能力完成后提升 minor 版本。
 - 稳定性修复、生命周期恢复和验收证据整理使用 patch 版本递增，不与新的用户可感知 UI 能力混用。
-- 本阶段版本边界标签名为 `demo-app-v0.9.0`；`demo-app-v0.8.0`、`demo-app-v0.7.1`、`demo-app-v0.7.0`、`demo-app-v0.6.0`、`demo-app-v0.5.0`、`demo-app-v0.4.0` 和 `demo-app-v0.3.0` 保留为历史 Demo 交付标签，不代表 Terminal Runtime 已达到最终发布状态。
+- 本阶段版本边界标签名为 `demo-app-v0.9.1`；`demo-app-v0.9.0`、`demo-app-v0.8.0`、`demo-app-v0.7.1`、`demo-app-v0.7.0`、`demo-app-v0.6.0`、`demo-app-v0.5.0`、`demo-app-v0.4.0` 和 `demo-app-v0.3.0` 保留为历史 Demo 交付标签，不代表 Terminal Runtime 已达到最终发布状态。
 - Debug APK 允许本机从被 Git 忽略的配置读取 API 默认值，不能作为对外分发包；API Key 不进入源码、文档或提交。
 - 真机迭代使用固定 Debug 签名和 `adb install -r -d`，不以卸载、清数据作为常规版本升级步骤；本阶段不操作设备。
+
+## 0.9.1 · 2026-08-30 · API 24 文件边界与 Intent 稳定性修复
+
+### 变更范围
+
+- PR #2（head `5bfc44f`，merge commit `771fa4e`）修复 `File.toPath()` 在 API 24 的运行时崩溃，改用 API 24 可用的 canonical `File` 边界判断；路径比较带目录分隔符边界，避免相似前缀目录误判。
+- `pi-file-skill-android`、`FileBackedSkillProvider` 与 `skill_read` 统一拒绝 canonical/symlink 越出注册根目录；文件列表不再暴露指向 workspace 外部的 symlink 条目。
+- `AndroidAppIntentSpec.toIntent()` 在 URI 与 MIME type 同时存在时使用 `setDataAndType()`，避免设置 type 时清除已有 data URI；四种 data/type 组合均有 Android 仪器回归用例。
+- Demo 版本由 `0.9.0 / versionCode 11` 提升到 `0.9.1 / versionCode 12`。不改变 SDK publication `0.1.0`、依赖、权限、Terminal v1 scope、UI 基线或 Release Gate。
+
+### 验收证据与边界
+
+- 八个 SDK/Runtime 模块与 Demo JVM 共发现 `388` 个测试：`387` passed、`1` skipped、0 failure/error；跳过项是 Windows 主机无法创建 symlink 的 `rejectsSymlinkToSimilarPrefixSibling`，同类 Android symlink 用例已编译。
+- `:demo-app:assembleDebug`、`:demo-app:compileDebugAndroidTestKotlin` 和 `git diff --check` 通过；APK metadata 为 `versionCode 12 / versionName 0.9.1`。
+- PR 说明记录了 API 24/API 35 的文件边界、skill embed 与 Intent data/type targeted dynamic evidence；本次 closeout 未重复操作真机、未调用真实 Provider/API，也不改变 Terminal 发布矩阵结论。
+- 版本边界标签为 `demo-app-v0.9.1`；远端状态以 Git 实测为准。
 
 ## 0.9.0 · 2026-08-30 · 文件型 skill 单文件 authoring MVP
 
