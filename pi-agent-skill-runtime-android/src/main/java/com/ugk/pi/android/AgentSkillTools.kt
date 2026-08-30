@@ -164,11 +164,19 @@ class SkillReadTool(
         val reference = SkillEmbedReference.parse(entry)
             ?: return " (invalid)"
         if (reference.alias == null) {
-            return if (File(scanned.directory, reference.path).isFile) "" else " (missing)"
+            return if (resolveInsideRoot(scanned.directory, reference.path)?.isFile == true) {
+                ""
+            } else {
+                " (missing)"
+            }
         }
         val root = embedRoots[reference.alias]
             ?: return " (unknown root: ${reference.alias})"
-        return if (File(root, reference.path).isFile) "" else " (missing)"
+        return if (resolveInsideRoot(root, reference.path)?.isFile == true) {
+            ""
+        } else {
+            " (missing)"
+        }
     }
 }
 

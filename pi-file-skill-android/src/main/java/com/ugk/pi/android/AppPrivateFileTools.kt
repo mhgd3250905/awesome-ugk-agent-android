@@ -162,7 +162,9 @@ class AppFileListTool(
         if (!target.exists()) return errorResult(call, "FILE_NOT_FOUND", "Directory does not exist: $path")
         if (!target.isDirectory) return errorResult(call, "NOT_DIRECTORY", "Path is not a directory: $path")
 
-        val entries = target.listFiles().orEmpty().sortedBy { it.name.lowercase() }
+        val entries = target.listFiles().orEmpty()
+            .filter { isInsideRoot(it) }
+            .sortedBy { it.name.lowercase() }
         val metadata = buildJsonObject {
             put("path", normalizedRelativePath(target))
             put("type", "directory")
@@ -365,8 +367,19 @@ abstract class AppPrivateFileTool(
     }
 
     protected fun normalizedRelativePath(file: File): String {
-        val relative = canonicalRoot.toPath().relativize(file.canonicalFile.toPath()).toString()
+        val rootPath = canonicalRoot.canonicalPath
+        val filePath = file.canonicalFile.path
+        val rootPrefix = rootPath.withTrailingSeparator()
+        val relative = if (filePath == rootPath) {
+            ""
+        } else {
+            filePath.substring(rootPrefix.length)
+        }
         return relative.replace(File.separatorChar, '/')
+    }
+
+    protected fun isInsideRoot(file: File): Boolean {
+        return file.isInside(canonicalRoot)
     }
 
     protected fun fileMetadata(file: File): JsonObject {
@@ -394,7 +407,14 @@ abstract class AppPrivateFileTool(
     }
 
     private fun File.isInside(root: File): Boolean {
-        return toPath().startsWith(root.toPath())
+        val candidatePath = canonicalFile.path
+        val rootPath = root.canonicalFile.path
+        if (candidatePath == rootPath) return true
+
+        return candidatePath.startsWith(
+            rootPath.withTrailingSeparator(),
+            ignoreCase = File.separatorChar == '\\'
+        )
     }
 
     private fun isSupportedTextPath(fileName: String): Boolean {
@@ -403,6 +423,10 @@ abstract class AppPrivateFileTool(
         if (lastDot == fileName.lastIndex) return false
         return fileName.substring(lastDot + 1).lowercase() in supportedTextExtensions
     }
+}
+
+private fun String.withTrailingSeparator(): String {
+    return if (endsWith(File.separatorChar)) this else "$this${File.separatorChar}"
 }
 
 sealed class FileResolveResult {
