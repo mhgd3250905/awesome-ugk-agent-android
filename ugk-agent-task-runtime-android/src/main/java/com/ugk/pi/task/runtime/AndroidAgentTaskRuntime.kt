@@ -425,6 +425,14 @@ class AndroidAgentTaskRuntime(
 ) {
     private val appContext = context.applicationContext
 
+    /**
+     * Runs one due task occurrence under the process-wide handle lock.
+     *
+     * [promptExecutor] runs while this lock is held and the lock is not
+     * reentrant: an executor must not (directly, or by waiting on a coroutine
+     * that does) call [handle] on any [AndroidAgentTaskRuntime] in the same
+     * process, or the two calls deadlock.
+     */
     suspend fun handle(
         taskId: String,
         reschedule: Boolean = true

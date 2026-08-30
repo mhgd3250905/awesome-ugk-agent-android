@@ -34,7 +34,7 @@
 - 九模块 JVM 单元测试合计 `427` 个：`424` passed、`3` skipped、0 failure/error；跳过项均为 Windows 主机无法创建/解析 symlink 的用例，其中 skill 扫描 symlink 边界已由新增仪器用例覆盖（下条）。
 - API 35 x86_64 模拟器（`ugk_dev_api35_smooth`，实际 page size 4096）`:demo-app:connectedDebugAndroidTest` `28/28` 通过，含新增 `MinApi24SkillScanSymlinkInstrumentedTest`（临时禁用修复时 2 个 symlink 用例如期失败，恢复后全绿——红绿闭环取证）；本轮未操作任何真机。
 - `:demo-app:assembleDebug` 通过，APK metadata 为 `versionCode 13 / versionName 0.9.2`。
-- 每个 JVM 修复项均带先红后绿的复现测试；遗留未修复项（流式主线程节流、会话重建工具证据、图片解码内存、bash 正常退出孤儿进程组、mailto/本地 HTTP 鉴权等）记录于 PR 说明与本台账边界，不宣称已解决。
+- 除 `LocalHttpServerManager.stopAll` 外的每个 JVM 修复项均带先红后绿的复现测试；`stopAll` 的记录保留行为沿用同文件 `stop()` 的既有契约（失败组保留记录、可查询可停止），该模块当前无 JVM 测试基础设施，未带新测试。遗留未修复项（流式主线程节流、会话重建工具证据、图片解码内存、bash 正常退出孤儿进程组、mailto/本地 HTTP 鉴权等）记录于 PR 说明与本台账边界，不宣称已解决。
 - 版本边界标签为 `demo-app-v0.9.2`；远端状态以 Git 实测为准。
 
 ## 0.9.1 · 2026-08-30 · API 24 文件边界与 Intent 稳定性修复
