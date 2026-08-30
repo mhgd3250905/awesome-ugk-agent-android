@@ -2,7 +2,7 @@
 
 `pi-agent-skill-runtime-android` 让宿主把"skill"做成 App 私有目录里的 SKILL.md 文件：运行时扫描、
 解析、按加载策略注入模型上下文，Agent 通过 `skill_list` / `skill_read` 工具自助发现与加载。
-第一个预制 skill 是 `agent-memory`（用户记忆捕获与回放）。`AgentRuntime.Builder` 统一组合 plugin
+预制 skills 包含 `agent-memory`（用户记忆捕获与回放）和 `android-skill-creator`（单文件 authoring SOP）。`AgentRuntime.Builder` 统一组合 plugin
 dynamic providers、可选 custom provider 和 plugin-declared skills；本阶段的公共 seam/语义变化见 D-024。
 
 ## SKILL.md 规范
@@ -93,7 +93,9 @@ memory:rules.md`，宿主注册 `memory → <filesDir>/agent-memory`（demo 的 
 | 工具 | 说明 |
 |---|---|
 | `skill_list` | 列出所有 skill 的 name/description/loadPolicy/status（invalid 附 error） |
-| `skill_read` | 按名字读 skill 全文 body + embed 清单标注；裸条目按 skill 目录、别名条目按命名根标注 `(missing)` / `(unknown root: 别名)`；未知名报 `SKILL_NOT_FOUND` |
+| `skill_read` | 按名字读 skill 的完整 manifest 与 body，并标注 embed 清单；裸条目按 skill 目录、别名条目按命名根标注 `(missing)` / `(unknown root: 别名)`；未知名报 `SKILL_NOT_FOUND` |
+| `skill_save` | 结构化创建/更新单文件 skill；只写 repository 根下 `<name>/SKILL.md`，默认 `overwrite=false`，写前/写后均按 parser/repository 校验，默认需要用户确认 |
+| `skill_delete` | 按合法 name 删除一个自定义 skill 目录；不接受路径，默认需要用户确认；`agent-memory` 与 `android-skill-creator` 受保护 |
 | `memory_list` | 列出 agent-memory 目录各分类文件的 name/bytes/lastModified |
 | `memory_read` | 读分类全文；非白名单报 `UNKNOWN_CATEGORY`，缺文件报 `NOT_FOUND` |
 | `memory_write` | 整文件覆写（默认 overwrite=false，存在即报 `FILE_EXISTS`，模型应先读后合并再覆写）；单文件 16KB 上限 |
@@ -102,7 +104,7 @@ memory:rules.md`，宿主注册 `memory → <filesDir>/agent-memory`（demo 的 
 ## 目录布局（demo-app 实例）
 
 ```
-<filesDir>/agent-skills/<skill-name>/SKILL.md        # 文件型 skills（种子 + 用户自放）
+<filesDir>/agent-skills/<skill-name>/SKILL.md        # 文件型 skills（种子 + 用户自放 + skill_save）
 <filesDir>/agent-memory/{user-profile,preferences,facts,rules}.md   # 记忆沙箱，即 "memory" 命名根
 ```
 
@@ -129,7 +131,22 @@ demo 通过 `DemoAgentRuntimeFactory` 把 `memory → <filesDir>/agent-memory` �
 空记忆以"文件不存在已跳过"注记呈现。注意：因种子绝不覆盖，从旧版（embed 指 skill 目录静态文件）
 升级的安装会保留旧 SKILL.md 与旧模板，需要清掉该 skill 目录才会切换到命名根语义。
 
-## v2 展望
+## 单文件 skill authoring MVP
 
-- `skill_save`：Agent 在运行期把新 skill 写入 agent-skills（自沉淀），含 frontmatter 校验与
-  覆盖确认，尚未实现。
+模块 assets 内置 `android-skill-creator`（`indexed`）作为 Android 专用 authoring SOP，说明
+UGK 格式以及 create/update/list/read/delete/use 的闭环。普通 `docs/*.md` 只是原料，不是已安装
+skill。Agent 必须在 `skill_save` 成功后重新调用 `skill_list` 确认 `status: valid`，再调用
+`skill_read` 核对完整 manifest 与 body，才能声称创建或更新完成。成功保存的文件会在下一次
+Agent run 由 provider 实时扫描并生效。
+
+`skill_save` 只支持单个 `SKILL.md`，不提供任意路径或 supporting resource 的写入；更新要求先
+`skill_read` 再使用 `overwrite=true`。内置 `agent-memory` 与 `android-skill-creator` 永远不能被
+覆盖或删除。`skill_delete` 只删除 canonical 校验通过的 repository 直接子目录。
+
+后续 supporting resources、脚本/资产执行和 UI 管理不属于本 MVP。
+
+## 当前实现验证（2026-08-30）
+
+- `:pi-agent-skill-runtime-android:testDebugUnitTest` 生成 7 个 XML、`70/70` 通过；`:demo-app:testDebugUnitTest` 生成 23 个 XML、`107/107` 通过；0 failure/error/skipped。
+- `:demo-app:assembleDebug` 与 `:demo-app:compileDebugAndroidTestKotlin` 通过；Debug APK metadata 为 `com.ugk.pi.android.testapp`、`versionCode 11`、`versionName 0.9.0`，并包含 `assets/agent-skills/android-skill-creator/SKILL.md`。
+- 这些是 JVM/打包/资产证据，不替代真实 Agent 的人工 create/update/delete/use end-to-end；`0.9.0` APK 本阶段未安装到设备，也未调用真实 Provider/API。

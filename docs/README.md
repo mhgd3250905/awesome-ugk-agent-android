@@ -1,6 +1,6 @@
 # 项目文档入口
 
-更新时间：2026-08-29
+更新时间：2026-08-30
 适用项目：`awesome-ugk-agent-android`
 源码目录：`E:\AII\ugk-android-new`
 
@@ -50,7 +50,7 @@
 
 | 文件 | 角色 |
 |---|---|
-| [sdk-stabilization-baseline.md](sdk-stabilization-baseline.md) | 截至 2026-08-14 的 SDK 稳定化测试期快照；已被当前 `0.8.0` 保存点 superseded |
+| [sdk-stabilization-baseline.md](sdk-stabilization-baseline.md) | 截至 2026-08-14 的 SDK 稳定化测试期快照；已被当前 `0.9.0` 保存点 superseded |
 
 ## 快速阅读顺序
 

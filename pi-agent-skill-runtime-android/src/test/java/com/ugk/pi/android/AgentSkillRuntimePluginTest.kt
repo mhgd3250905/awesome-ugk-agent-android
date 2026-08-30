@@ -23,7 +23,8 @@ class AgentSkillRuntimePluginTest {
         val plugin = AgentSkillRuntimePlugin(
             repository = SkillRepository(skillRoot()),
             memoryRoot = memoryRoot(),
-            requireDeleteConfirmation = false
+            requireDeleteConfirmation = false,
+            requireSkillMutationConfirmation = false
         )
 
         val toolNames = plugin.tools().map { it.name }
@@ -32,6 +33,8 @@ class AgentSkillRuntimePluginTest {
             listOf(
                 "skill_list",
                 "skill_read",
+                "skill_save",
+                "skill_delete",
                 "memory_list",
                 "memory_read",
                 "memory_write",
@@ -77,6 +80,49 @@ class AgentSkillRuntimePluginTest {
         assertTrue(blocked.content.contains("show_user_confirmation_dialog"))
         assertFalse(bypassed.isError)
         assertFalse(File(memoryRoot, "facts.md").exists())
+    }
+
+    @Test
+    fun wrapsSkillMutationsByDefaultAndBypassesTogether() = runBlocking {
+        val skillRoot = skillRoot()
+        val repository = SkillRepository(skillRoot)
+        val saveInput = buildJsonObject {
+            put("name", "runtime-guide")
+            put("description", "Runtime guide.")
+            put("body", "Runtime body.")
+        }
+        val normalPlugin = AgentSkillRuntimePlugin(
+            repository = repository,
+            memoryRoot = memoryRoot()
+        )
+        val normalSave = normalPlugin.tools().single { it.name == "skill_save" }.execute(
+            ToolCall("save-1", "skill_save", saveInput),
+            ToolExecutionContext(sessionId = "test")
+        )
+        assertTrue(normalSave.isError)
+        assertTrue(normalSave.content.contains("show_user_confirmation_dialog"))
+        assertFalse(File(skillRoot, "runtime-guide").exists())
+
+        val bypassingPlugin = AgentSkillRuntimePlugin(
+            repository = repository,
+            memoryRoot = memoryRoot(),
+            shouldBypassConfirmation = { true }
+        )
+        val bypassedSave = bypassingPlugin.tools().single { it.name == "skill_save" }.execute(
+            ToolCall("save-2", "skill_save", saveInput),
+            ToolExecutionContext(sessionId = "test")
+        )
+        assertFalse(bypassedSave.isError)
+        val bypassedDelete = bypassingPlugin.tools().single { it.name == "skill_delete" }.execute(
+            ToolCall(
+                "delete-1",
+                "skill_delete",
+                buildJsonObject { put("name", "runtime-guide") }
+            ),
+            ToolExecutionContext(sessionId = "test")
+        )
+        assertFalse(bypassedDelete.isError)
+        assertFalse(File(skillRoot, "runtime-guide").exists())
     }
 
     @Test
@@ -153,6 +199,8 @@ class AgentSkillRuntimePluginTest {
             listOf(
                 "skill_list",
                 "skill_read",
+                "skill_save",
+                "skill_delete",
                 "memory_list",
                 "memory_read",
                 "memory_write",

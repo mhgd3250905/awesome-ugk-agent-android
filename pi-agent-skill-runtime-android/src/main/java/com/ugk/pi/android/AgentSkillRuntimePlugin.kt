@@ -8,9 +8,11 @@ import java.io.File
  * This is the complete entry point for the file-backed skill runtime: it
  * contributes skill tools, global instructions, and the dynamic
  * [FileBackedSkillProvider]. File skills therefore remain in [skillProviders]
- * while [skills] stays empty to avoid double injection. `memory_delete` is
- * wrapped with [UserConfirmationRequiredTool] by default because it destroys
- * user data; set [requireDeleteConfirmation] to false for the raw tool set.
+ * while [skills] stays empty to avoid double injection. `skill_save`,
+ * `skill_delete`, and `memory_delete` are wrapped with
+ * [UserConfirmationRequiredTool] by default because they mutate skill or
+ * memory state; set [requireDeleteConfirmation] or
+ * [requireSkillMutationConfirmation] to false for the respective raw tools.
  * [embedRoots] are the named roots that `x-ugk-embed-files` `alias:file.md`
  * entries resolve against; the same map is used by the tool and provider.
  */
@@ -19,7 +21,8 @@ class AgentSkillRuntimePlugin(
     private val memoryRoot: File,
     private val requireDeleteConfirmation: Boolean = true,
     private val shouldBypassConfirmation: () -> Boolean = { false },
-    private val embedRoots: Map<String, File> = emptyMap()
+    private val embedRoots: Map<String, File> = emptyMap(),
+    private val requireSkillMutationConfirmation: Boolean = true
 ) : AgentCapabilityPlugin {
     override val id: String = "agent-skill-runtime"
 
@@ -27,7 +30,12 @@ class AgentSkillRuntimePlugin(
 
     override fun tools(): List<AgentTool> {
         return agentSkillRuntimeTools(repository, memoryRoot, embedRoots).map { tool ->
-            if (requireDeleteConfirmation && tool.name == "memory_delete") {
+            val requiresConfirmation = when (tool.name) {
+                "memory_delete" -> requireDeleteConfirmation
+                "skill_save", "skill_delete" -> requireSkillMutationConfirmation
+                else -> false
+            }
+            if (requiresConfirmation) {
                 UserConfirmationRequiredTool(
                     tool,
                     shouldBypassConfirmation = shouldBypassConfirmation
@@ -50,6 +58,9 @@ class AgentSkillRuntimePlugin(
             with its name to load the full instructions before relying on it. The memory
             capture protocol is defined by the injected agent-memory skill: never write
             or delete user memory without explicit user consent in the conversation.
+            The indexed android-skill-creator skill defines the create, update, query,
+            delete, and use SOP for file-backed skills. A skill is only complete after
+            skill_list reports valid and skill_read verifies the saved manifest and body.
         """.trimIndent()
     )
 }

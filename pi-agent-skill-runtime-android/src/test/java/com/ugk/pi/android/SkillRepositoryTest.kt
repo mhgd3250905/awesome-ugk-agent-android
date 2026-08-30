@@ -119,6 +119,20 @@ class SkillRepositoryTest {
         assertTrue(valid.body.toByteArray(Charsets.UTF_8).size <= 3 * 1024)
     }
 
+    @Test
+    fun packagedAndroidSkillCreatorAssetParsesAsIndexedAuthoringSkill() {
+        val assetFile = File("src/main/assets/agent-skills/android-skill-creator/SKILL.md")
+        val parsed = SkillManifestParser.parse(assetFile.readText(Charsets.UTF_8))
+
+        val valid = parsed as SkillManifestParseResult.Valid
+        assertEquals("android-skill-creator", valid.manifest.name)
+        assertEquals(SkillLoadPolicy.INDEXED, valid.manifest.loadPolicy)
+        assertTrue(valid.body.contains("skill_save"))
+        assertTrue(valid.body.contains("skill_list"))
+        assertTrue(valid.body.contains("skill_read"))
+        assertTrue(valid.body.contains("skill_delete"))
+    }
+
     private fun writeSkill(root: File, directory: String, frontmatter: String, body: String) {
         val dir = File(root, directory).apply { mkdirs() }
         File(dir, "SKILL.md").writeText(

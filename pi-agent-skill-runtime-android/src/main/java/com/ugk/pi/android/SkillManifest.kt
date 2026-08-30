@@ -90,6 +90,9 @@ object SkillManifestParser {
 
     private val skillNamePattern = Regex("^[a-z0-9-]+$")
 
+    /** Returns whether [name] is a legal file-backed skill directory name. */
+    fun isValidSkillName(name: String): Boolean = skillNamePattern.matches(name)
+
     fun parse(text: String): SkillManifestParseResult {
         val lines = text.lines()
         if (lines.firstOrNull()?.trim() != FRONTMATTER_DELIMITER) {
@@ -131,7 +134,7 @@ object SkillManifestParser {
         if (name.isNullOrBlank()) {
             return SkillManifestParseResult.Invalid("Missing required frontmatter key 'name'.")
         }
-        if (!skillNamePattern.matches(name)) {
+        if (!isValidSkillName(name)) {
             return SkillManifestParseResult.Invalid(
                 "Skill name must match [a-z0-9-]+ but was '$name'."
             )

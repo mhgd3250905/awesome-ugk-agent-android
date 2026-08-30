@@ -1,7 +1,8 @@
 # Demo App 对话体验与悬浮窗基线
 
 更新时间：2026-08-30
-当前版本：`0.8.0`（`versionCode 10`）；本文只定义聊天与悬浮窗 UI 基线，版本交付证据以 `demo-app-version-ledger.md` 为准。
+当前版本：`0.9.0`（`versionCode 11`）；本文只定义聊天与悬浮窗 UI 基线，版本交付证据以 `demo-app-version-ledger.md` 为准。
+`0.9.0` 增加文件型 skill authoring 能力但不改变本文件的聊天、过程或悬浮窗视觉契约；设备与 skill 行为边界以版本台账当前条目为准。
 适用范围：`:demo-app` 的聊天主界面、过程展示、多模态识图交互、代码与表格原生卡片组件、美学设计、输入交互、本地会话管理和悬浮窗摘要。
 
 ## 需求结论
@@ -33,7 +34,7 @@
 - 视觉实现 checkpoint：`af5b0b7075dd8a201dbfd857987521f7b0d3470a`；首页顶栏收束 checkpoint：`cde30bf9d12d262fce5141986a77230cbf6ff7b6`。
 - `:demo-app:compileDebugKotlin`、`:demo-app:assembleDebug`、`:demo-app:compileDebugAndroidTestKotlin`：通过。
 - `:demo-app:testDebugUnitTest`：测试 XML `107/107`，0 failure、0 error、0 skipped；`git diff --check`：通过。
-- 最终 Debug APK 元数据为 `0.8.0 / versionCode 10`。与其生产代码一致、版本元数据仍为 `0.7.1` 的 APK 已使用 `adb install -r -d` 覆盖安装至授权小米 `QSG6Q8IFDMDELVGQ`，未卸载、未清理数据；`0.8.0` 元数据保存不重复安装。
+- 截至本视觉阶段保存时，最终 Debug APK 元数据为 `0.8.0 / versionCode 10`；与其生产代码一致、版本元数据仍为 `0.7.1` 的 APK 已使用 `adb install -r -d` 覆盖安装至授权小米 `QSG6Q8IFDMDELVGQ`，未卸载、未清理数据，`0.8.0` 元数据保存当时未重复安装。后续实际安装事实以版本台账当前条目为准。
 - 主会话已查看并验收 Light/Dark 主聊天、Settings Dark、悬浮窗折叠/展开第二轮截图，以及顶栏修复真机截图：用户绿、AI 中性、透明猫头鹰、无框顶栏与 composer、设置页、Markdown/disabled send、标准设置齿轮和首页无主题快捷按钮均符合基线。截图保留在用户 Temp，不入库。
 - 未运行 `connectedDebugAndroidTest`：该测试可能安装/清理测试目标包并影响现有数据/API 设置；未调用真实 Provider/API。上述为本阶段明确边界，不扩大为自动化或真实网络通过。
 

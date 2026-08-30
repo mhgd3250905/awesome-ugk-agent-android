@@ -1,7 +1,8 @@
 # awesome-ugk-agent-android 项目交接文档 (Handover Document)
 
-> **Demo 0.8.0 版本**：`versionCode 10`（微信式对话视觉与顶栏收束）
-> **0.8.0 版本边界**：本地标签 `demo-app-v0.8.0`（本轮不 push）
+> **Demo 0.9.0 版本**：`versionCode 11`（文件型 skill 单文件 authoring MVP；保留 0.8.0 UI 基线）
+> **0.9.0 版本边界**：标签 `demo-app-v0.9.0`（远端状态以 Git 实测为准）
+> **上一保存版本**：`0.8.0 / versionCode 10`，本地标签 `demo-app-v0.8.0`
 > **架构整改实现 checkpoint**：`9268bc2`
 > **阶段 8 文档/验证 closeout**：`885c1e9`
 > **微信式对话视觉实现 checkpoint**：`af5b0b7075dd8a201dbfd857987521f7b0d3470a`
@@ -9,7 +10,7 @@
 > **分支**：`main`  
 > **交接时间**：2026-08-30
 > **工作区**：`E:\AII\ugk-android-new`
-> **0.8.0 版本标签**：`demo-app-v0.8.0`（本地）
+> **当前版本标签**：`demo-app-v0.9.0`（远端状态以 Git 实测为准）
 > **目标真机**：小米设备 `QSG6Q8IFDMDELVGQ`、第二台小米 `e0b93f2f`（型号 `2304FPN6DC`）
 > **注意**：设备列表中若有三星手机（`R5CRB11B2AW`），**严禁对其执行任何操作**，唯一下发与调试设备为小米手机。
 >
@@ -19,6 +20,13 @@
 
 ## 0. 2026-08-29—30 架构与视觉收束（当前事实）
 
+- 本阶段在 `demo-app-v0.8.0` / `79b0d31` 基线上完成文件型 skill 单文件 authoring MVP，版本元数据为 `0.9.0 / versionCode 11`；版本边界标签为 `demo-app-v0.9.0`，远端状态以 Git 实测为准。
+- MVP 提供结构化 `skill_save`、`skill_delete`、完整 manifest `skill_read` 和内置 indexed `android-skill-creator` SOP，形成 create/update/delete/query/use 闭环；普通 `docs/*.md` 仍只是原料。完成声明必须同时有 `skill_save` 成功、`skill_list` 为 `valid` 和 `skill_read` manifest/body 核对。
+- `skill_save` 固定写入 repository 直接子目录，默认拒绝覆盖；`skill_delete` 只接收合法 name；路径/格式/写后校验/回滚、用户确认和 `agent-memory`/`android-skill-creator` protected-skill 规则均保持 fail-closed。supporting resources、脚本/资产执行和 UI 管理不在本 MVP。
+- 审查事实：前置独立 review 发现的 frontmatter 注入 P1 已修复，精确复查为 `CLOSED / PASS`；本阶段独立 closeout review 已 `PASS`。
+- 最终门禁已通过：八个 SDK/Runtime 模块合计 `279/279`（Core 122、File 9、Schedule 9、Task Runtime 7、System 42、Agent Skill Runtime 70、Terminal Runtime 0 `NO-SOURCE`、Terminal Skill 20），Demo `107/107`，总计 `386/386`，0 failure/error/skipped；Demo assemble 与 AndroidTest Kotlin compile 通过。APK metadata 为 `versionCode 11 / versionName 0.9.0`，包含 `assets/agent-skills/android-skill-creator/SKILL.md`，`git diff --check` 通过。
+- 设备事实勘误：功能代码的 `0.8.0 / versionCode 10` Debug APK 已通过 `adb install -r -d` 覆盖安装到授权小米 `QSG6Q8IFDMDELVGQ`（未卸载、未清理数据），当时只核对安装返回和 package metadata；`0.9.0 / versionCode 11` 本阶段不安装，不把设备安装成功描述为 skill authoring 行为验收。
+- 尚未完成真实 Agent 的人工 create/update/delete/use end-to-end 场景，未调用真实 Provider/API；该边界必须随 0.9.0 版本记录保留。
 - 快速迭代后的模块化审查已完成计划中的 7 个实现阶段，并形成 9 个本地 checkpoint：Runtime 生命周期、设置领域/UI、上下文档位、Provider profile、进程/悬浮窗 ownership、conversation runtime、Session transcript、capability assembly、Terminal/Screen host interlock 均已形成明确单一 owner。
 - 架构整改实现 checkpoint 顺序为 `1409610`、`ccc76c9`、`20b2b60`、`f20bee7`、`1003cc1`、`74dd2ff`、`47964b5`、`9956116`、`9268bc2`，阶段 8 文档/验证收束为 `885c1e9`；随后按 patch 规则保存 `0.7.1 / versionCode 9`，该保存点不代表远程 PR 或 Release。
 - 2026-08-29 本机收束：八模块 JVM `271/271`、Demo JVM `104/104`；Demo Debug、五个关键 Release AAR、两个 Probe Release APK、Terminal Runtime 静态/哈希/AAR/APK/zipalign 验收均通过。

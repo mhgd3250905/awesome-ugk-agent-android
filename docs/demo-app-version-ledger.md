@@ -1,11 +1,11 @@
 # demo-app 版本与变更台账
 
 更新时间：2026-08-30
-当前保存版本：`0.8.0`（`versionCode 10`）
+当前保存版本：`0.9.0`（`versionCode 11`）
 版本范围：仅 `:demo-app`；SDK/AAR 模块版本继续独立维护。
-当前阶段：`0.7.1` 之后完成的 demo-app 微信式对话视觉重构、Light/Dark 语义 Token、设置页与悬浮窗统一，以及首页顶栏收束，现保存为 `0.8.0 / versionCode 10`。本地标签 `demo-app-v0.8.0` 不推送远端。
+当前阶段：在 `demo-app-v0.8.0` 基线上完成文件型 skill 的单文件 authoring MVP，已通过最终门禁与独立 closeout review，版本为 `0.9.0 / versionCode 11`。版本边界标签为 `demo-app-v0.9.0`；远端状态以 Git 实测为准。
 
-> 文首元数据、版本规则和 `0.8.0` 记录描述当前保存点；其后的版本条目是不可改写的历史记录。
+> 文首元数据、版本规则和 `0.9.0` 记录描述当前保存点；其后的版本条目是不可改写的历史记录。
 > 历史条目中的“当前”仅指该条目记录时点，不是今天的版本或验证状态。
 
 ## 版本规则
@@ -13,9 +13,27 @@
 - `versionCode` 只递增，不因重新打包或覆盖安装回退。
 - `versionName` 使用面向测试交付的 SemVer 风格；聊天、会话和悬浮窗等一组可感知能力完成后提升 minor 版本。
 - 稳定性修复、生命周期恢复和验收证据整理使用 patch 版本递增，不与新的用户可感知 UI 能力混用。
-- 最近已保存版本 Git 标签为 `demo-app-v0.8.0`；`demo-app-v0.7.1`、`demo-app-v0.7.0`、`demo-app-v0.6.0`、`demo-app-v0.5.0`、`demo-app-v0.4.0` 和 `demo-app-v0.3.0` 保留为历史 Demo 交付标签，不代表 Terminal Runtime 已达到最终发布状态。
+- 本阶段版本边界标签名为 `demo-app-v0.9.0`；`demo-app-v0.8.0`、`demo-app-v0.7.1`、`demo-app-v0.7.0`、`demo-app-v0.6.0`、`demo-app-v0.5.0`、`demo-app-v0.4.0` 和 `demo-app-v0.3.0` 保留为历史 Demo 交付标签，不代表 Terminal Runtime 已达到最终发布状态。
 - Debug APK 允许本机从被 Git 忽略的配置读取 API 默认值，不能作为对外分发包；API Key 不进入源码、文档或提交。
-- 真机迭代使用固定 Debug 签名和 `adb install -r -d`，不以卸载、清数据作为常规版本升级步骤。
+- 真机迭代使用固定 Debug 签名和 `adb install -r -d`，不以卸载、清数据作为常规版本升级步骤；本阶段不操作设备。
+
+## 0.9.0 · 2026-08-30 · 文件型 skill 单文件 authoring MVP
+
+### 变更范围
+
+- Demo 版本由 `0.8.0 / versionCode 10` 提升到 `0.9.0 / versionCode 11`，保留 0.8.0 的聊天/UI 基线；SDK/AAR publication 坐标继续为开发期 `0.1.0`，不改变依赖、权限、Terminal v1 scope 或 Release Gate。
+- `pi-agent-skill-runtime-android` 新增内置 `android-skill-creator`（`indexed`）SOP，以及结构化 `skill_save`、`skill_delete` 和返回完整 manifest 的 `skill_read`，形成 create/update/delete/query/use 闭环。
+- skill 只有在 `skill_save` 成功、`skill_list` 报告 `valid`、`skill_read` 核对 manifest/body 后才算创建或更新完成；普通 `docs/*.md` 仍是原料，不等于已安装 skill。
+- `skill_save` 固定写入 repository 直接子目录，默认不覆盖；`skill_delete` 仅接收合法 name；路径校验、解析/写后校验、回滚、用户确认和 `agent-memory`/`android-skill-creator` protected-skill 规则均保持 fail-closed。
+- 前置独立 review 发现的 frontmatter 注入 P1 已修复，并经精确复查为 `CLOSED / PASS`；本阶段独立 closeout review 已 `PASS`。
+
+### 验收证据与边界
+
+- 最终门禁：八个 SDK/Runtime 模块合计 `279/279`（Core 122、File 9、Schedule 9、Task Runtime 7、System 42、Agent Skill Runtime 70、Terminal Runtime 0 `NO-SOURCE`、Terminal Skill 20），Demo `107/107`，总计 `386/386`，0 failure/error/skipped；Gradle 输出 `BUILD SUCCESSFUL`，共 244 actionable tasks。
+- `:demo-app:assembleDebug`、`:demo-app:compileDebugAndroidTestKotlin` 通过；`aapt2 dump badging` 确认 `com.ugk.pi.android.testapp`、`versionCode='11'`、`versionName='0.9.0'`；APK 包含 `assets/agent-skills/android-skill-creator/SKILL.md`；`git diff --check` 通过。
+- 前置设备事实：功能代码的 `0.8.0 / versionCode 10` Debug APK 已通过 `adb install -r -d` 覆盖安装到授权小米 `QSG6Q8IFDMDELVGQ`，未卸载、未清理数据；只验证安装与 package metadata，不等同于 skill authoring 行为验收。`0.9.0 / versionCode 11` 本阶段未安装。
+- 尚未完成真实 Agent 的人工 create/update/delete/use end-to-end 场景；未调用真实 Provider/API。该版本保存不改变 supporting resources、脚本/资产执行、UI 管理或发布矩阵边界。
+- 版本边界标签为 `demo-app-v0.9.0`；远端状态以 Git 实测为准，本条目不预判 push 或远程 Release 状态。
 
 ## 0.8.0 · 2026-08-30 · 微信式对话视觉与顶栏收束
 

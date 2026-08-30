@@ -1,6 +1,6 @@
 # SDK 优化推进台账
 
-更新时间：2026-08-29
+更新时间：2026-08-30
 
 ## 版本与推进规则
 
@@ -9,9 +9,9 @@
 - 未形成正式发布物前，不因内部修复擅自提升 `demo-app` 版本或 Maven Artifact 版本。
 - 每一步只修改目标范围，保留工作树中已有的用户改动。
 
-当前基线：`demo-app 0.7.1` / `versionCode 9`；SDK publication 仍为开发期坐标 `0.1.0`，当前处于持续开发阶段。
+当前基线：`demo-app 0.9.0` / `versionCode 11`；SDK publication 仍为开发期坐标 `0.1.0`，当前处于持续开发阶段。
 
-> 文首基线和末尾 `SDK-OPT-011`/`0.7.1` 保存段描述当前状态；其余按编号的已完成条目保留历史记录。
+> 文首基线和末尾 `SDK-OPT-011`/`0.7.1` 保存段描述架构整改历史；本阶段文件型 skill authoring 当前状态见文末 `0.9.0` 保存段，其余按编号的已完成条目保留历史记录。
 > 历史条目中的“当前”仅限定为该条目记录时点，不覆盖文首或最新保存段。
 
 ## SDK-OPT-001：ToolRegistry 重复 Tool ID 治理
@@ -438,3 +438,7 @@ git diff --check
 ### 0.7.1 版本保存
 
 架构整改在 `885c1e9` 完成文档/验证收束后，按 Demo 现有版本规则保存为稳定性 patch `0.7.1 / versionCode 9`；不新增用户功能，不改变 SDK publication `0.1.0`。版本元数据更新后的全工程 JVM XML 为 `375/375`，`:demo-app:assembleDebug` 通过，APK metadata 已核对。真机体验证据来自同一代码在 `0.7.0 / 8` 元数据下的安装与用户测试；`0.7.1` 本轮不重复设备操作。详细边界见 `demo-app-version-ledger.md` 与 `terminal-runtime-validation.md` 第 21 节。
+
+### 0.9.0 文件型 skill authoring MVP
+
+在 `demo-app-v0.8.0` / `79b0d31` 基线上，文件型 skill 单文件 authoring MVP 已实现，最终门禁与独立 closeout review 已通过，版本为 `0.9.0 / versionCode 11`；SDK publication 仍为 `0.1.0`。新增内置 `android-skill-creator` indexed SOP、`skill_save`/`skill_delete` 及完整 manifest `skill_read`，并保留固定 repository、校验/回滚、确认和 protected-skill 边界。八个 SDK/Runtime 模块合计 `279/279`，Demo `107/107`，总计 `386/386`；Gradle 输出 `BUILD SUCCESSFUL`，共 244 actionable tasks；Debug APK metadata 和 SOP asset 已核对，`git diff --check` 通过。真实 Agent create/update/delete/use 场景尚未完成，`0.9.0` APK 未安装。版本边界标签为 `demo-app-v0.9.0`，远端状态以 Git 实测为准。

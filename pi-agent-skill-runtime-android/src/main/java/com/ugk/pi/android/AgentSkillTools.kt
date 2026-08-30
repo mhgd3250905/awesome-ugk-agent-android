@@ -16,8 +16,9 @@ import kotlinx.serialization.json.putJsonObject
 
 /**
  * Raw (unwrapped) tool set of the agent skill runtime. The plugin wraps
- * `memory_delete` with [UserConfirmationRequiredTool] because destroying user
- * memory is a high-impact action; hosts that want the raw tool can build it
+ * `skill_save`, `skill_delete`, and `memory_delete` with
+ * [UserConfirmationRequiredTool] by default because they change Agent
+ * behavior or destroy user data; hosts that want the raw tool set can build it
  * from this list. [embedRoots] are the named roots that `x-ugk-embed-files`
  * `alias:file.md` entries resolve against; they should match the map given to
  * `FileBackedSkillProvider` so `skill_read` reports availability correctly.
@@ -30,6 +31,8 @@ fun agentSkillRuntimeTools(
     return listOf(
         SkillListTool(repository),
         SkillReadTool(repository, embedRoots),
+        SkillSaveTool(repository),
+        SkillDeleteTool(repository),
         MemoryListTool(memoryRoot),
         MemoryReadTool(memoryRoot),
         MemoryWriteTool(memoryRoot),
@@ -112,7 +115,12 @@ class SkillReadTool(
         val manifest = scanned.manifest
         val content = buildString {
             appendLine("Skill: ${manifest.name}")
+            appendLine("Description: ${manifest.description}")
             appendLine("Load policy: ${manifest.loadPolicy.name.lowercase()}")
+            appendLine(
+                "Triggers: " +
+                    if (manifest.triggers.isEmpty()) "(none)" else manifest.triggers.joinToString(", ")
+            )
             appendLine()
             append(scanned.body.trimEnd())
             appendLine()
@@ -133,7 +141,11 @@ class SkillReadTool(
             content = content,
             metadata = buildJsonObject {
                 put("name", manifest.name)
+                put("description", manifest.description)
                 put("loadPolicy", manifest.loadPolicy.name.lowercase())
+                putJsonArray("triggers") {
+                    manifest.triggers.forEach { add(JsonPrimitive(it)) }
+                }
                 putJsonArray("embedFiles") {
                     manifest.embedFiles.forEach { add(JsonPrimitive(it)) }
                 }
@@ -354,7 +366,7 @@ class MemoryDeleteTool(
     }
 }
 
-private fun errorResult(call: ToolCall, name: String, code: String, message: String): ToolResult {
+internal fun errorResult(call: ToolCall, name: String, code: String, message: String): ToolResult {
     return ToolResult(
         toolCallId = call.id,
         name = name,

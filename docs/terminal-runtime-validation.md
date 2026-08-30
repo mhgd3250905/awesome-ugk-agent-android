@@ -1,11 +1,11 @@
 # Terminal Runtime 验证矩阵
 
-更新时间：2026-08-29
+更新时间：2026-08-30
 验证源码：`E:\AII\ugk-android-new`
-注意：最新 Terminal instrumentation/probe 的物理设备证据绑定到 source checkpoint `28bc352622458d29e090656ae42fd32f057e9196`；第 21 节另记录以 `885c1e9` 为阶段基线、Demo `0.7.0 / versionCode 8` 元数据下的后续人工 Demo 体验。后者不关闭 Terminal 设备矩阵、网络或发布 Gate。
+注意：最新 Terminal instrumentation/probe 的物理设备证据绑定到 source checkpoint `28bc352622458d29e090656ae42fd32f057e9196`；第 21 节保留 0.7.1 历史版本保存，第 22 节记录当前 Demo `0.9.0 / versionCode 11` skill authoring 版本保存与最终验证。后者不关闭 Terminal 设备矩阵、网络或发布 Gate。
 
 > 第 6—14、18—19 节按日期保留历史验证快照；这些章节中的“当前”仅指当时的源码、APK 或设备上下文。
-> 当前 Gate 结论和 2026-08-29 保存点以文首总表、第 20 节和第 21 节为准。
+> 当前 Gate 结论和版本保存证据以文首总表、第 20 节、第 21 节和第 22 节为准；第 21 节是历史版本保存，第 22 节是当前 0.9.0 阶段。
 
 ## 1. 环境变量
 
@@ -329,3 +329,15 @@ Core API/JVM 边界：
 - 设备事实：同一架构整改代码已在版本元数据仍为 `0.7.0 / 8` 时安装到授权小米 `QSG6Q8IFDMDELVGQ`（`2602BRT18C`）并启动，用户完成体验测试并反馈无明显问题。`0.7.1` 只调整版本元数据与文档，本轮不重复安装或设备测试。
 - 未运行 instrumentation、真实网络、真实 Provider/API、Terminal 原生 `-CheckPackages` 或 Release 包矩阵：本次没有触及对应代码/载荷，前四项不是 patch 元数据保存的必需 Gate；原生与 Release 证据继续使用第 20 节，但不得泛化为新设备矩阵。
 - 不 push、不创建 PR、不发布远程 Release；本地 commit/tag 是本次唯一版本边界。
+
+## 22. Demo 0.9.0 文件型 skill 单文件 authoring MVP 版本保存与最终验证
+
+验证日期：2026-08-30；阶段基线：`demo-app-v0.8.0` / `79b0d31`；最终门禁与独立 closeout review 已通过。范围仅为文件型 skill authoring MVP、Demo 版本元数据和 canonical 文档对齐，不改变 Terminal 原生载荷、SDK publication `0.1.0`、依赖、权限、UI 基线或 Release Gate。版本边界标签为 `demo-app-v0.9.0`，远端状态以 Git 实测为准。
+
+- 版本元数据为 `0.9.0 / versionCode 11`，版本边界标签为 `demo-app-v0.9.0`。
+- 最终门禁命令覆盖八个 SDK/Runtime 模块的 `testDebugUnitTest`、`:demo-app:testDebugUnitTest`、`:demo-app:assembleDebug` 和 `:demo-app:compileDebugAndroidTestKotlin`，Gradle 输出 `BUILD SUCCESSFUL`，共 244 actionable tasks。
+- XML 证据：八个 SDK/Runtime 模块合计 `279/279`（Core 122、File 9、Schedule 9、Task Runtime 7、System 42、Agent Skill Runtime 70、Terminal Runtime 0 `NO-SOURCE`、Terminal Skill 20）；Demo `107/107`；总计 `386/386`，均为 0 failure、0 error、0 skipped。
+- `aapt2 dump badging` 确认 `com.ugk.pi.android.testapp`、`versionCode='11'`、`versionName='0.9.0'`；APK 包含 `assets/agent-skills/android-skill-creator/SKILL.md`；`git diff --check` 通过。
+- 独立 closeout review 结果为 `PASS`。
+- 前置设备事实：功能代码的 `0.8.0 / versionCode 10` APK 已以 `adb install -r -d` 覆盖安装到授权小米 `QSG6Q8IFDMDELVGQ`，未卸载、未清理数据；只核对安装与 package metadata。`0.9.0` APK 本阶段未安装。
+- 尚未运行真实 Agent 人工 create/update/delete/use end-to-end、`connectedDebugAndroidTest`、真实 Provider/API、Terminal Runtime `-CheckPackages`；这些边界不等同于真实 skill 行为或 Terminal 发布 Gate 已关闭。远端同步状态以 Git 实测为准。
