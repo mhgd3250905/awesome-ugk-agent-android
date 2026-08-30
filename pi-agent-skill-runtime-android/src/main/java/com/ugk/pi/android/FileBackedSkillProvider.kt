@@ -116,24 +116,6 @@ class FileBackedSkillProvider(
         return builder.toString()
     }
 
-    /**
-     * Resolves [path] against [root] the same way `AppPrivateFileTools` guards
-     * the app-private workspace: only relative `.md` paths whose canonical
-     * form stays inside [root] are accepted; everything else returns null.
-     */
-    private fun resolveInsideRoot(root: File, path: String): File? {
-        if (File(path).isAbsolute || path.startsWith("/") || path.contains('\\')) return null
-        val segments = path.split('/').filter { it.isNotBlank() }
-        if (segments.any { it == "." || it == ".." }) return null
-        return try {
-            val canonicalRoot = root.canonicalFile
-            val file = File(canonicalRoot, segments.joinToString(File.separator)).canonicalFile
-            if (file.toPath().startsWith(canonicalRoot.toPath())) file else null
-        } catch (error: IOException) {
-            null
-        }
-    }
-
     companion object {
         const val MAX_EMBED_FILE_BYTES = 16 * 1024
 

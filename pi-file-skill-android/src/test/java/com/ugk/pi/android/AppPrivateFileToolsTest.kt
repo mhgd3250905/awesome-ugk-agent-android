@@ -1,6 +1,7 @@
 package com.ugk.pi.android
 
 import java.io.File
+import java.nio.file.Files
 import kotlin.io.path.createTempDirectory
 import kotlinx.coroutines.runBlocking
 import kotlinx.serialization.json.JsonPrimitive
@@ -9,6 +10,8 @@ import kotlinx.serialization.json.jsonPrimitive
 import org.junit.Assert.assertEquals
 import org.junit.Assert.assertFalse
 import org.junit.Assert.assertTrue
+import org.junit.Assume.assumeNoException
+import org.junit.Assume.assumeTrue
 import org.junit.Test
 
 class AppPrivateFileToolsTest {
@@ -50,6 +53,54 @@ class AppPrivateFileToolsTest {
         assertEquals("INVALID_PATH", absolute.metadata["code"]!!.jsonPrimitive.content)
         assertTrue(traversal.isError)
         assertEquals("INVALID_PATH", traversal.metadata["code"]!!.jsonPrimitive.content)
+    }
+
+    @Test
+    fun statResolvesWorkspaceRootWithoutRelativePath() = runBlocking {
+        val root = tempRoot()
+
+        val result = AppFileStatTool(root).execute(
+            call("app_file_stat", "path" to ""),
+            context()
+        )
+
+        assertFalse(result.isError)
+        assertEquals("", result.metadata["path"]!!.jsonPrimitive.content)
+        assertEquals("directory", result.metadata["type"]!!.jsonPrimitive.content)
+    }
+
+    @Test
+    fun rejectsSymlinkToSimilarPrefixSibling() = runBlocking {
+        val root = tempRoot()
+        val sibling = File(root.parentFile, "${root.name}-sibling").apply { mkdirs() }
+        val link = File(root, "sibling-link")
+        val outsideFile = File(sibling, "escape.md").apply { writeText("outside") }
+
+        try {
+            try {
+                Files.createSymbolicLink(link.toPath(), sibling.toPath())
+            } catch (error: Exception) {
+                assumeNoException("Symbolic links are not available in this test environment.", error)
+                return@runBlocking
+            }
+            assumeTrue(
+                "The test runtime does not canonicalize symbolic-link targets.",
+                File(link, "escape.md").canonicalFile == outsideFile.canonicalFile
+            )
+
+            val result = AppFileWriteTool(root).execute(
+                call("app_file_write", "path" to "sibling-link/escape.md", "content" to "x"),
+                context()
+            )
+
+            assertTrue(result.isError)
+            assertEquals("OUTSIDE_ROOT", result.metadata["code"]!!.jsonPrimitive.content)
+            assertEquals("outside", outsideFile.readText())
+        } finally {
+            link.delete()
+            sibling.deleteRecursively()
+            root.deleteRecursively()
+        }
     }
 
     @Test

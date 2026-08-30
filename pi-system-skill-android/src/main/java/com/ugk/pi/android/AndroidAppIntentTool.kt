@@ -346,13 +346,16 @@ data class AndroidAppIntentSpec(
     val extras: Map<String, String> = emptyMap()
 ) {
     fun toIntent(): Intent {
-        val intent = if (dataUri == null) {
-            Intent(action)
+        val intent = Intent(action)
+        if (dataUri != null && type != null) {
+            intent.setDataAndType(Uri.parse(dataUri), type)
         } else {
-            Intent(action, Uri.parse(dataUri))
-        }
-        if (type != null) {
-            intent.type = type
+            if (dataUri != null) {
+                intent.data = Uri.parse(dataUri)
+            }
+            if (type != null) {
+                intent.type = type
+            }
         }
         extras.forEach { (key, value) ->
             intent.putExtra(key, value)
