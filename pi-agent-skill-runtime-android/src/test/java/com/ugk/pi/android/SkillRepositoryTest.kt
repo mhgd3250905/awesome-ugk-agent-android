@@ -1,8 +1,11 @@
 package com.ugk.pi.android
 
 import java.io.File
+import java.nio.file.Files
 import org.junit.Assert.assertEquals
 import org.junit.Assert.assertTrue
+import org.junit.Assume.assumeNoException
+import org.junit.Assume.assumeTrue
 import org.junit.Rule
 import org.junit.Test
 import org.junit.rules.TemporaryFolder
@@ -95,6 +98,83 @@ class SkillRepositoryTest {
         val repository = SkillRepository(File(tempFolder.root, "does-not-exist"))
 
         assertTrue(repository.load().isEmpty())
+    }
+
+    @Test
+    fun rejectsSymlinkedSkillDirectoryEscapingRoot() {
+        val root = tempFolder.newFolder("agent-skills")
+        val outside = File(tempFolder.root, "outside").apply { mkdirs() }
+        File(outside, "SKILL.md").writeText(
+            "---\nname: evil\ndescription: Escapes the skill root.\n---\nInjected body."
+        )
+        val link = File(root, "evil")
+
+        try {
+            try {
+                Files.createSymbolicLink(link.toPath(), outside.toPath())
+            } catch (error: Exception) {
+                assumeNoException("Symbolic links are not available in this test environment.", error)
+                return
+            }
+            assumeTrue(
+                "The test runtime does not canonicalize symbolic-link targets.",
+                File(link, "SKILL.md").canonicalFile == File(outside, "SKILL.md").canonicalFile
+            )
+
+            val scanned = SkillRepository(root).load()
+
+            val evil = scanned.single { it.directoryName == "evil" }
+            assertEquals(ScannedSkillStatus.INVALID, evil.status)
+            assertTrue(evil.error!!.contains("skill repository"))
+            assertTrue(FileBackedSkillProvider(SkillRepository(root)).skills().none { it.id == "evil" })
+        } finally {
+            link.delete()
+        }
+    }
+
+    @Test
+    fun rejectsSkillMdSymlinkEscapingItsDirectory() {
+        val root = tempFolder.newFolder("agent-skills")
+        val directory = File(root, "leaky").apply { mkdirs() }
+        val outside = File(tempFolder.root, "outside").apply { mkdirs() }
+        File(outside, "SKILL.md").writeText(
+            "---\nname: leaky\ndescription: Escapes through SKILL.md.\n---\nInjected body."
+        )
+        val link = File(directory, "SKILL.md")
+
+        try {
+            try {
+                Files.createSymbolicLink(link.toPath(), File(outside, "SKILL.md").toPath())
+            } catch (error: Exception) {
+                assumeNoException("Symbolic links are not available in this test environment.", error)
+                return
+            }
+            assumeTrue(
+                "The test runtime does not canonicalize symbolic-link targets.",
+                link.canonicalFile == File(outside, "SKILL.md").canonicalFile
+            )
+
+            val scanned = SkillRepository(root).load()
+
+            val leaky = scanned.single { it.directoryName == "leaky" }
+            assertEquals(ScannedSkillStatus.INVALID, leaky.status)
+            assertTrue(leaky.error!!.contains("SKILL.md"))
+            assertTrue(FileBackedSkillProvider(SkillRepository(root)).skills().none { it.id == "leaky" })
+        } finally {
+            link.delete()
+        }
+    }
+
+    @Test
+    fun neverScansNestedDirectoriesAsSkills() {
+        val root = tempFolder.newFolder("agent-skills")
+        val inner = File(root, "nested/inner").apply { mkdirs() }
+        File(inner, "SKILL.md").writeText("---\nname: inner\ndescription: d.\n---\nBody.")
+
+        val scanned = SkillRepository(root).load()
+
+        assertEquals(listOf("nested"), scanned.map { it.directoryName })
+        assertEquals(ScannedSkillStatus.INVALID, scanned.single().status)
     }
 
     /**

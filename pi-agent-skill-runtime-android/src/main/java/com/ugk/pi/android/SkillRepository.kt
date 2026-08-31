@@ -2,7 +2,6 @@ package com.ugk.pi.android
 
 import java.io.File
 import java.io.IOException
-import java.lang.reflect.Array as ReflectArray
 
 enum class ScannedSkillStatus {
     VALID,
@@ -74,11 +73,17 @@ class SkillRepository(private val rootDir: File) {
     private val mutationLock = Any()
 
     fun load(): List<ScannedSkill> = synchronized(mutationLock) {
+        val root = try {
+            rootDir.canonicalFile
+        } catch (error: IOException) {
+            // Fail closed: without a resolvable root boundary no skill can be trusted.
+            return@synchronized emptyList()
+        }
         val skillDirectories = rootDir
             .listFiles { file -> file.isDirectory }
             .orEmpty()
             .sortedBy { it.name }
-        skillDirectories.map { directory -> scanDirectory(directory) }
+        skillDirectories.map { directory -> scanDirectory(directory, root) }
     }
 
     /**
@@ -232,7 +237,7 @@ class SkillRepository(private val rootDir: File) {
                     }
                 }
             }
-            if (!replaceFile(temporary, skillFile)) {
+            if (!replaceOnto(temporary, skillFile)) {
                 return@synchronized SkillSaveOutcome.Failed(
                     code = "IO_ERROR",
                     message = "Failed to replace SKILL.md for '${request.name}'."
@@ -315,7 +320,7 @@ class SkillRepository(private val rootDir: File) {
         SkillDeleteOutcome.Deleted(name)
     }
 
-    private fun scanDirectory(directory: File): ScannedSkill {
+    private fun scanDirectory(directory: File, root: File): ScannedSkill {
         fun invalid(reason: String): ScannedSkill = ScannedSkill(
             directoryName = directory.name,
             directory = directory,
@@ -324,6 +329,8 @@ class SkillRepository(private val rootDir: File) {
             status = ScannedSkillStatus.INVALID,
             error = reason
         )
+
+        scanBoundaryError(directory, root)?.let { return invalid(it) }
 
         val skillFile = File(directory, SKILL_FILE_NAME)
         if (!skillFile.isFile) {
@@ -360,6 +367,33 @@ class SkillRepository(private val rootDir: File) {
                     )
                 }
             }
+        }
+    }
+
+    /**
+     * Rejects scan candidates that would read skill content from outside the
+     * skill root through a link, matching the boundary checks of save and
+     * delete. An `agent-skills/<name>` directory that is itself a link, or
+     * whose SKILL.md resolves outside its directory, would otherwise be
+     * parsed and injected (always policy) on every run. Returns the invalid
+     * reason, or null when the candidate is a plain repository child.
+     */
+    private fun scanBoundaryError(directory: File, root: File): String? {
+        return try {
+            val canonical = directory.canonicalFile
+            val canonicalSkillFile = File(directory, SKILL_FILE_NAME).canonicalFile
+            when {
+                canonical.parentFile?.path != root.path ->
+                    "Skill directory '${directory.name}' is not a direct child of the skill repository."
+                canonical.name != directory.name ->
+                    "Skill directory '${directory.name}' resolves through a link " +
+                        "and is not an exact repository child."
+                canonicalSkillFile.parentFile?.path != canonical.path ->
+                    "SKILL.md in '${directory.name}' resolves outside its skill directory."
+                else -> null
+            }
+        } catch (error: IOException) {
+            "Failed to resolve skill directory '${directory.name}': ${error.message}"
         }
     }
 
@@ -438,36 +472,6 @@ class SkillRepository(private val rootDir: File) {
         }.getOrDefault(false)
     }
 
-    /**
-     * File.renameTo is atomic on Android's filesystem and keeps API 24
-     * compatibility. The reflective JVM fallback makes overwrite tests work
-     * on Windows, where renameTo cannot replace an existing file.
-     */
-    private fun replaceFile(temporary: File, target: File): Boolean {
-        if (temporary.renameTo(target)) return true
-        return runCatching {
-            val filesClass = Class.forName("java.nio.file.Files")
-            val pathMethod = File::class.java.getMethod("toPath")
-            val moveMethod = filesClass.methods.first {
-                it.name == "move" && it.parameterTypes.size == 3 && it.parameterTypes[2].isArray
-            }
-            val copyOptionClass = Class.forName("java.nio.file.CopyOption")
-            val standardCopyOption = Class.forName("java.nio.file.StandardCopyOption")
-            val constants = standardCopyOption.enumConstants ?: return@runCatching false
-            val replaceExisting = constants.firstOrNull { it.toString() == "REPLACE_EXISTING" }
-                ?: return@runCatching false
-            val options = ReflectArray.newInstance(copyOptionClass, 1)
-            ReflectArray.set(options, 0, replaceExisting)
-            moveMethod.invoke(
-                null,
-                pathMethod.invoke(temporary),
-                pathMethod.invoke(target),
-                options
-            )
-            true
-        }.getOrDefault(false)
-    }
-
     private fun restorePreviousSkillFile(skillFile: File, previousContent: ByteArray?) {
         if (previousContent == null) {
             skillFile.delete()
@@ -479,7 +483,7 @@ class SkillRepository(private val rootDir: File) {
         }.getOrNull() ?: return
         try {
             restoreFile.outputStream().use { it.write(previousContent) }
-            replaceFile(restoreFile, skillFile)
+            replaceOnto(restoreFile, skillFile)
         } catch (_: IOException) {
             // Keep the best available state; the normal path is prevalidated,
             // so this is only a defensive rollback after an unexpected race.

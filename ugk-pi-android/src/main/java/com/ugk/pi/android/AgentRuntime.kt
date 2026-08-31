@@ -4,9 +4,9 @@ import kotlinx.coroutines.CancellationException
 import kotlinx.coroutines.flow.Flow
 import kotlinx.coroutines.flow.emitAll
 import kotlinx.coroutines.flow.flow
+import kotlinx.serialization.json.JsonPrimitive
 import kotlinx.serialization.json.booleanOrNull
 import kotlinx.serialization.json.contentOrNull
-import kotlinx.serialization.json.jsonPrimitive
 import java.util.concurrent.atomic.AtomicBoolean
 
 class AgentRuntime(
@@ -394,14 +394,16 @@ class AgentRuntime(
                         return@flow
                     }
                 }
-            } catch (cancelled: CancellationException) {
-                // A cancelled run must not leave the assistant tool_use envelope
-                // without results: providers reject the whole next request when a
-                // tool_use has no tool_result, which would break the session
-                // permanently. Answer every unanswered call, then rethrow.
+            } catch (error: Throwable) {
+                // A failed or cancelled run must not leave the assistant
+                // tool_use envelope without results: providers reject the
+                // whole next request when a tool_use has no tool_result,
+                // which would break the session permanently. Answer every
+                // unanswered call, then rethrow so the run still ends with
+                // its original outcome.
                 session.completeToolBatch(response.toolCalls)
                 prepareTranscriptAfterCancellation(session)
-                throw cancelled
+                throw error
             }
             transientModelMessages = nextTransientModelMessages
 
@@ -597,14 +599,15 @@ class AgentRuntime(
     }
 
     private fun terminalCompletion(result: ToolResult): String? {
-        val terminalForTurn = result.metadata["terminalForTurn"]
-            ?.jsonPrimitive
+        // Tool metadata is produced by tools and may hold non-primitive
+        // values; treat any non-primitive shape as absent instead of
+        // throwing inside the tool loop.
+        val terminalForTurn = (result.metadata["terminalForTurn"] as? JsonPrimitive)
             ?.booleanOrNull
             ?: false
         if (!terminalForTurn) return null
 
-        return result.metadata["assistantMessage"]
-            ?.jsonPrimitive
+        return (result.metadata["assistantMessage"] as? JsonPrimitive)
             ?.contentOrNull
             ?.takeIf { it.isNotBlank() }
             ?: result.content

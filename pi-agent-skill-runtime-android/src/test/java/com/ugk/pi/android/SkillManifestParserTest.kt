@@ -214,6 +214,34 @@ class SkillManifestParserTest {
     }
 
     @Test
+    fun rejectsDuplicateFrontmatterKeys() {
+        val duplicateName = SkillManifestParser.parse(
+            "---\nname: a\nname: b\ndescription: d.\n---\nBody."
+        )
+        val duplicateLoadPolicy = SkillManifestParser.parse(
+            "---\nname: a\ndescription: d.\nx-ugk-load: always\nx-ugk-load: indexed\n---\nBody."
+        )
+        val duplicateUnknownKey = SkillManifestParser.parse(
+            "---\nname: a\ndescription: d.\nx-future-key: 1\nx-future-key: 2\n---\nBody."
+        )
+
+        assertTrue((duplicateName as SkillManifestParseResult.Invalid).reason.contains("name"))
+        assertTrue((duplicateLoadPolicy as SkillManifestParseResult.Invalid).reason.contains("x-ugk-load"))
+        assertTrue((duplicateUnknownKey as SkillManifestParseResult.Invalid).reason.contains("x-future-key"))
+    }
+
+    @Test
+    fun bodyLinesWithColonsAreNotFrontmatterDuplicates() {
+        val result = SkillManifestParser.parse(
+            "---\nname: a\ndescription: d.\n---\nkey: value\nname: shadow"
+        )
+
+        val valid = result as SkillManifestParseResult.Valid
+        assertEquals("a", valid.manifest.name)
+        assertTrue(valid.body.contains("name: shadow"))
+    }
+
+    @Test
     fun acceptsIndexedPolicyCaseInsensitively() {
         val result = SkillManifestParser.parse(
             "---\nname: a\ndescription: d.\nx-ugk-load: INDEXED\n---\nBody."

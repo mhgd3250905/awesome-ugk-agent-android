@@ -13,7 +13,7 @@ Android Agent Runtime SDK：提供通用 Agent 工具循环、Android Skill，�
 - v1 不支持、不打包、不宣称 Node.js、Git、OpenSSH、jq。
 - Runtime 无 UI，不要求安装 Termux 或第二个 App；它与宿主共享 Android UID，不是安全沙箱。
 - `pi-system-skill-android` 提供白名单 Android 原生 Intent Tool；打开网页、相机、拨号、地图、分享等动作不通过终端执行。
-- `demo-app` 当前保存版本为 `0.9.1`（`versionCode 12`），版本边界标签为 `demo-app-v0.9.1`；该 patch 在 0.9.0 文件型 skill authoring 闭环上修复 API 24 文件路径边界、symlink 逃逸和 Intent data/type 保留，聊天/UI 基线不变。
+- `demo-app` 当前保存版本为 `0.9.2`（`versionCode 13`），版本边界标签为 `demo-app-v0.9.2`；该 patch 修复 Anthropic 连续 user 消息序列化（视觉工具循环 400）、工具循环异常导致的会话永久坏档、任务运行时进程级互斥失效、通知权限缺失杀死重复任务、Activity 重建终止运行中 Agent、定时任务结果被前台保存覆盖，并补齐 skill 扫描 symlink 边界与文件原子写，聊天/UI 基线不变。
 - 2026-08-29 已完成快速迭代后的模块化架构收敛：生命周期、配置、Provider、会话、transcript、capability assembly 与 Terminal/Screen interlock 均有单一 owner；本机 JVM、Debug/Release 构建和 Terminal 包验收通过，设备/发布矩阵仍未关闭。
 
 ## 模块

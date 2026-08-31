@@ -72,8 +72,6 @@ class MainActivity : Activity() {
     private val fileImportStore by lazy { DemoFileImportStore(applicationContext) }
     private val scheduledTaskStore by lazy { AndroidAgentTaskStore(applicationContext) }
     private val scheduledTaskScheduler by lazy { AlarmManagerAgentTaskScheduler(applicationContext) }
-    private var runtime: AgentRuntime? = null
-    private var appliedRuntimeConfig: DemoRuntimeConfig? = null
     private lateinit var activeConversation: DemoConversation
     private val session: AgentSession
         get() = checkNotNull(conversationRuntime.session) {
@@ -362,8 +360,11 @@ class MainActivity : Activity() {
             runCoordinator.stop()
             runCoordinator.clearQueue()
             runCoordinator.detach(activityToken)
-            runtime?.cancelAllPlugins()
-            runtime?.close()
+            // The finishing Activity owns runtime teardown. A recreation must
+            // not reach this branch: the process-level runtime keeps running.
+            conversationRuntime.agentRuntime?.cancelAllPlugins()
+            conversationRuntime.agentRuntime?.close()
+            conversationRuntime.agentRuntime = null
             confirmationPresenter.release()
         } else {
             runCoordinator.detach(activityToken)
@@ -934,8 +935,11 @@ class MainActivity : Activity() {
         val config = apiStore.activeConfig()
         when (
             DemoRuntimeLifecyclePolicy.decide(
-                runtimeExists = runtime != null,
-                installedConfig = appliedRuntimeConfig,
+                // Read from the process-level runtime: after an Activity
+                // recreation the field is null again while the run continues
+                // on the process-owned instance, which must map to REUSE.
+                runtimeExists = conversationRuntime.agentRuntime != null,
+                installedConfig = conversationRuntime.appliedRuntimeConfig,
                 requestedConfig = DemoRuntimeConfig.from(config)
             )
         ) {
@@ -947,8 +951,8 @@ class MainActivity : Activity() {
 
     private fun rebuildRuntime(config: ApiProviderConfig?) {
         stopAgent(clearQueuedMessages = true)
-        runtime?.close()
-        runtime = DemoAgentRuntimeFactory.create(
+        conversationRuntime.agentRuntime?.close()
+        conversationRuntime.agentRuntime = DemoAgentRuntimeFactory.create(
             context = applicationContext,
             scheduleStore = scheduledTaskStore,
             scheduleScheduler = scheduledTaskScheduler,
@@ -961,7 +965,7 @@ class MainActivity : Activity() {
             // JobScheduler when RUN_AGENT_PROMPT reaches its trigger time.
             supportsBackgroundPromptExecution = true
         )
-        appliedRuntimeConfig = DemoRuntimeConfig.from(config)
+        conversationRuntime.appliedRuntimeConfig = DemoRuntimeConfig.from(config)
         refreshRuntimeState(config)
     }
 
@@ -1112,29 +1116,47 @@ class MainActivity : Activity() {
         image: ProcessedImage? = null
     ): Boolean {
         if (runState.isBusy || runCoordinator.isRunning()) return false
-        val currentRuntime = runtime ?: return false
+        val currentRuntime = conversationRuntime.agentRuntime ?: return false
         val effectiveText = if (text.isBlank() && image != null) "请分析并识别这张图片" else text
         val message = buildAgentMessage(effectiveText, attachments)
         if (message.isBlank()) return false
 
         setScreenAutomationActive(false)
 
+        var titleUpdate: String? = null
         if (activeConversation.title == "新对话") {
             val titleSeed = when {
                 effectiveText.isNotBlank() && effectiveText != "请分析并识别这张图片" -> effectiveText.trim()
                 image != null -> "图片识别分析"
                 else -> attachments.firstOrNull()?.displayName.orEmpty()
             }
-            activeConversation.title = conversationStore.suggestedTitle(titleSeed)
+            titleUpdate = conversationStore.suggestedTitle(titleSeed)
         }
         val isFirstMessage = activeConversation.messages.none { it.role == "user" || it.role == "assistant" }
-        activeConversation.messages += DemoStoredMessage(
+        val userMessage = DemoStoredMessage(
             role = "user",
             content = message,
             imagePath = image?.file?.absolutePath
         )
-        activeConversation.updatedAt = System.currentTimeMillis()
-        conversationStore.save(activeConversation)
+        // Append atomically instead of saving this Activity's snapshot: a
+        // background scheduled run may have appended messages this screen has
+        // not observed, and a whole-conversation save would erase them.
+        val stored = conversationStore.appendMessages(
+            conversationId = activeConversation.id,
+            messages = listOf(userMessage),
+            titleUpdate = titleUpdate
+        )
+        if (stored != null) {
+            activeConversation = stored
+        } else {
+            // Defensive: the conversation vanished between ensureActive and
+            // this append (deleted from another surface). Fall back to the
+            // legacy whole-save path so the current turn stays visible.
+            activeConversation.title = titleUpdate ?: activeConversation.title
+            activeConversation.messages += userMessage
+            activeConversation.updatedAt = System.currentTimeMillis()
+            conversationStore.save(activeConversation)
+        }
         syncTranscript()
         updateAppBar()
 
@@ -1350,9 +1372,21 @@ class MainActivity : Activity() {
         if (activeConversation.messages.lastOrNull()?.let { it.role == "assistant" && it.content == text } == true) {
             return
         }
-        activeConversation.messages += DemoStoredMessage("assistant", text)
-        activeConversation.updatedAt = System.currentTimeMillis()
-        conversationStore.save(activeConversation)
+        // Append atomically instead of replacing via save(): the in-memory
+        // snapshot may miss messages a background scheduled run appended.
+        val stored = conversationStore.appendMessages(
+            conversationId = activeConversation.id,
+            messages = listOf(DemoStoredMessage("assistant", text))
+        )
+        if (stored != null) {
+            activeConversation = stored
+        } else {
+            // Defensive: the conversation disappeared mid-run. Keep the
+            // current turn visible via the legacy whole-save path.
+            activeConversation.messages += DemoStoredMessage("assistant", text)
+            activeConversation.updatedAt = System.currentTimeMillis()
+            conversationStore.save(activeConversation)
+        }
         syncTranscript()
         assistantMessageView?.updateText(text)
             ?: run { assistantMessageView = addChatMessage(DemoChatMessageRole.ASSISTANT, text) }
@@ -1614,7 +1648,7 @@ class MainActivity : Activity() {
             return
         }
         if (clearQueuedMessages) runCoordinator.clearQueue()
-        runtime?.cancelAllPlugins()
+        conversationRuntime.agentRuntime?.cancelAllPlugins()
         runState = runCoordinator.stop().state
         renderRunState()
         floatingWindow.setSending(false)

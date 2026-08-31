@@ -1,6 +1,7 @@
 package com.ugk.pi.android
 
 import java.io.File
+import java.io.IOException
 import kotlinx.serialization.json.add
 import kotlinx.coroutines.runBlocking
 import kotlinx.serialization.json.buildJsonObject
@@ -484,6 +485,40 @@ class AgentSkillToolsTest {
 
         assertEquals("UNKNOWN_CATEGORY", unknownCategory.metadata["code"]!!.jsonPrimitive.content)
         assertEquals("CONTENT_TOO_LARGE", tooLarge.metadata["code"]!!.jsonPrimitive.content)
+    }
+
+    @Test
+    fun memoryWriteLeavesNoTemporaryFile() = runBlocking {
+        val memoryRoot = tempFolder.newFolder("agent-memory")
+        val tool = MemoryWriteTool(memoryRoot)
+
+        tool.execute(call("memory_write", "category" to "rules", "content" to "- first"), context())
+        tool.execute(
+            call("memory_write", "category" to "rules", "content" to "- merged", "overwrite" to true),
+            context()
+        )
+
+        assertEquals("- merged", File(memoryRoot, "rules.md").readText())
+        assertTrue(memoryRoot.listFiles()!!.none { it.name.endsWith(".tmp") })
+    }
+
+    @Test
+    fun atomicWriteFailureKeepsOriginalFileIntact() {
+        val memoryRoot = tempFolder.newFolder("agent-memory")
+        val file = File(memoryRoot, "rules.md").apply { writeText("original") }
+
+        try {
+            writeTextAtomically(file, "replacement") { temporary, text ->
+                writeTemporaryText(temporary, text)
+                throw IOException("injected failure after the temporary write")
+            }
+            throw AssertionError("Expected the injected IOException to propagate.")
+        } catch (expected: IOException) {
+            // Simulated crash between the temporary write and the rename.
+        }
+
+        assertEquals("original", file.readText())
+        assertTrue(memoryRoot.listFiles()!!.none { it.name.endsWith(".tmp") })
     }
 
     @Test

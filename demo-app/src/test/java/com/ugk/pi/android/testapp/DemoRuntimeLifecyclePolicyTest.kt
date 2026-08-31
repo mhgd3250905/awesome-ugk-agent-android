@@ -76,6 +76,35 @@ class DemoRuntimeLifecyclePolicyTest {
         assertEquals(listOf("create", "stop", "close", "create"), tracer.events)
     }
 
+    /**
+     * Activity recreation scenario. When the AgentRuntime is process-owned,
+     * a recreated Activity observes runtimeExists=true with the installed
+     * config, so an unchanged provider config must map to REUSE — the
+     * in-flight run keeps executing and queued overlay messages survive.
+     * (With an Activity-owned runtime the field would be null after
+     * recreation and decide() would return CREATE, killing the run.)
+     */
+    @Test
+    fun activityRecreationWithUnchangedConfigReusesProcessOwnedRuntimeWithoutStoppingIt() {
+        val config = config()
+        val processState = ProcessOwnedRuntimeState()
+
+        ProcessBackedActivity(processState).resume(config)
+        val runtimeFromFirstActivity = processState.agentRuntimeIdentity
+        // Simulate a config-change recreation: the second Activity instance
+        // has no fields of its own and only sees the process-level state.
+        val recreated = ProcessBackedActivity(processState)
+
+        recreated.resume(config)
+
+        assertEquals(listOf("create", "reuse"), processState.events)
+        assertEquals(runtimeFromFirstActivity, processState.agentRuntimeIdentity)
+        // A genuinely changed config on the recreated Activity still rebuilds
+        // (user edited API settings): stop + close semantics are preserved.
+        recreated.resume(config.copy(apiKey = "rotated-credential"))
+        assertEquals(listOf("create", "reuse", "stop", "close", "create"), processState.events)
+    }
+
     private fun config(
         baseUrl: String = "https://provider.example",
         apiKey: String = "test-credential",
@@ -129,6 +158,46 @@ class DemoRuntimeLifecyclePolicyTest {
             installedConfig = DemoRuntimeConfig.from(config)
             runtimeIdentity++
             events += "create"
+        }
+    }
+
+    /** Mirrors DemoConversationRuntime: the process-level state an Activity reads. */
+    private class ProcessOwnedRuntimeState {
+        var agentRuntimeExists = false
+        var appliedRuntimeConfig: DemoRuntimeConfig? = null
+        var agentRuntimeIdentity = 0
+            private set
+        val events = mutableListOf<String>()
+
+        fun createRuntime(config: ApiProviderConfig?) {
+            agentRuntimeExists = true
+            appliedRuntimeConfig = DemoRuntimeConfig.from(config)
+            agentRuntimeIdentity++
+            events += "create"
+        }
+    }
+
+    /** A MainActivity instance: owns no runtime fields, only process state. */
+    private class ProcessBackedActivity(private val process: ProcessOwnedRuntimeState) {
+        fun resume(config: ApiProviderConfig?) {
+            when (
+                DemoRuntimeLifecyclePolicy.decide(
+                    runtimeExists = process.agentRuntimeExists,
+                    installedConfig = process.appliedRuntimeConfig,
+                    requestedConfig = DemoRuntimeConfig.from(config)
+                )
+            ) {
+                DemoRuntimeRefreshAction.CREATE,
+                DemoRuntimeRefreshAction.REBUILD -> {
+                    if (process.agentRuntimeExists) {
+                        // rebuildRuntime(): stopAgent(clearQueuedMessages = true) + close()
+                        process.events += "stop"
+                        process.events += "close"
+                    }
+                    process.createRuntime(config)
+                }
+                DemoRuntimeRefreshAction.REUSE -> process.events += "reuse"
+            }
         }
     }
 }

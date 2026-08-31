@@ -1,11 +1,11 @@
 # demo-app 版本与变更台账
 
-更新时间：2026-08-30
-当前保存版本：`0.9.1`（`versionCode 12`）
+更新时间：2026-08-31
+当前保存版本：`0.9.2`（`versionCode 13`）
 版本范围：仅 `:demo-app`；SDK/AAR 模块版本继续独立维护。
-当前阶段：在 `demo-app-v0.9.0` 基线上合并 API 24 文件边界与 Intent data/type 稳定性修复，版本为 `0.9.1 / versionCode 12`。版本边界标签为 `demo-app-v0.9.1`；远端状态以 Git 实测为准。
+当前阶段：在 `demo-app-v0.9.1` 基线上合并第二轮 P0 审查修复（SDK 协议正确性、任务运行时并发、demo 生命周期与数据正确性），版本为 `0.9.2 / versionCode 13`。版本边界标签为 `demo-app-v0.9.2`；远端状态以 Git 实测为准。
 
-> 文首元数据、版本规则和 `0.9.1` 记录描述当前保存点；其后的版本条目是不可改写的历史记录。
+> 文首元数据、版本规则和 `0.9.2` 记录描述当前保存点；其后的版本条目是不可改写的历史记录。
 > 历史条目中的“当前”仅指该条目记录时点，不是今天的版本或验证状态。
 
 ## 版本规则
@@ -13,9 +13,29 @@
 - `versionCode` 只递增，不因重新打包或覆盖安装回退。
 - `versionName` 使用面向测试交付的 SemVer 风格；聊天、会话和悬浮窗等一组可感知能力完成后提升 minor 版本。
 - 稳定性修复、生命周期恢复和验收证据整理使用 patch 版本递增，不与新的用户可感知 UI 能力混用。
-- 本阶段版本边界标签名为 `demo-app-v0.9.1`；`demo-app-v0.9.0`、`demo-app-v0.8.0`、`demo-app-v0.7.1`、`demo-app-v0.7.0`、`demo-app-v0.6.0`、`demo-app-v0.5.0`、`demo-app-v0.4.0` 和 `demo-app-v0.3.0` 保留为历史 Demo 交付标签，不代表 Terminal Runtime 已达到最终发布状态。
+- 本阶段版本边界标签名为 `demo-app-v0.9.2`；`demo-app-v0.9.1`、`demo-app-v0.9.0`、`demo-app-v0.8.0`、`demo-app-v0.7.1`、`demo-app-v0.7.0`、`demo-app-v0.6.0`、`demo-app-v0.5.0`、`demo-app-v0.4.0` 和 `demo-app-v0.3.0` 保留为历史 Demo 交付标签，不代表 Terminal Runtime 已达到最终发布状态。
 - Debug APK 允许本机从被 Git 忽略的配置读取 API 默认值，不能作为对外分发包；API Key 不进入源码、文档或提交。
-- 真机迭代使用固定 Debug 签名和 `adb install -r -d`，不以卸载、清数据作为常规版本升级步骤；本阶段不操作设备。
+- 真机迭代使用固定 Debug 签名和 `adb install -r -d`，不以卸载、清数据作为常规版本升级步骤；本阶段不操作真机。
+
+## 0.9.2 · 2026-08-31 · 第二轮 P0 审查修复（SDK 协议/并发 + demo 生命周期/数据正确性）
+
+### 变更范围
+
+- `ugk-pi-android`：`AnthropicMessagesProvider` 把连续 Tool/User 消息合并为单条 user 消息，恢复 Anthropic Messages 的严格 user/assistant 交替（工具返回图片或运行中投递消息不再触发 400）；请求不再回传无 signature 的 thinking 块；`AgentRuntime` 工具循环对任意异常先补全 tool_result 信封再重抛，畸形 tool 元数据不再把会话置为永久 Failed；`InMemorySessionStore` 改为 `ConcurrentHashMap.computeIfAbsent`，并发 `getOrCreate` 不再产生双实例绕过 `runGate`。
+- `ugk-agent-task-runtime-android`：`handle()`/`restoreScheduledTasks()` 的互斥锁升级为进程级（alarm/job 每次投递新建实例导致实例锁失效）；任务存储抽出 `TaskRecordStore` 并使用进程级锁，跨实例读-改-写不再丢更新；损坏 JSON 在覆写前先备份到 `tasks_corrupt_backup`；广播协程兜底防 BOOT 崩溃；通知投递失败（权限缺失）不再把重复任务置为终态 FAILED。
+- `pi-schedule-skill-android`：create/update 调度失败时回滚任务记录并返回 `SCHEDULER_ERROR`，不再留下“已调度”虚挂任务。
+- `pi-agent-skill-runtime-android` / `pi-file-skill-android`：skill 目录扫描补齐 canonical/symlink 边界（目录链接与 SKILL.md 外链均拒绝）；frontmatter 重复 key 解析失败；memory_write/app_file_write/播种改为 temp+rename 原子写。
+- `demo-app`：`AgentRuntime` 所有权移至进程级 `DemoConversationRuntime`，Activity 重建（配置未变）不再终止运行中的 Agent 或清空排队消息；会话存储新增原子 `appendMessages`，前台保存与后台定时任务结果不再互相覆盖，已删除会话不再被后台结果复活。
+- `ugk-terminal-runtime-android`：`stopAll()` 仅在进程组真正终止后移除记录，失败组保持可查询、可停止。
+- Demo 版本由 `0.9.1 / versionCode 12` 提升到 `0.9.2 / versionCode 13`。不改变依赖、权限、Terminal v1 scope、UI 基线或 Release Gate。
+
+### 验收证据与边界
+
+- 九模块 JVM 单元测试合计 `427` 个：`424` passed、`3` skipped、0 failure/error；跳过项均为 Windows 主机无法创建/解析 symlink 的用例，其中 skill 扫描 symlink 边界已由新增仪器用例覆盖（下条）。
+- API 35 x86_64 模拟器（`ugk_dev_api35_smooth`，实际 page size 4096）`:demo-app:connectedDebugAndroidTest` `28/28` 通过，含新增 `MinApi24SkillScanSymlinkInstrumentedTest`（临时禁用修复时 2 个 symlink 用例如期失败，恢复后全绿——红绿闭环取证）；本轮未操作任何真机。
+- `:demo-app:assembleDebug` 通过，APK metadata 为 `versionCode 13 / versionName 0.9.2`。
+- 除 `LocalHttpServerManager.stopAll` 外的每个 JVM 修复项均带先红后绿的复现测试；`stopAll` 的记录保留行为沿用同文件 `stop()` 的既有契约（失败组保留记录、可查询可停止），该模块当前无 JVM 测试基础设施，未带新测试。遗留未修复项（流式主线程节流、会话重建工具证据、图片解码内存、bash 正常退出孤儿进程组、mailto/本地 HTTP 鉴权等）记录于 PR 说明与本台账边界，不宣称已解决。
+- 版本边界标签为 `demo-app-v0.9.2`；远端状态以 Git 实测为准。
 
 ## 0.9.1 · 2026-08-30 · API 24 文件边界与 Intent 稳定性修复
 

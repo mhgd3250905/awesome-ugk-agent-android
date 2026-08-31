@@ -227,8 +227,13 @@ class LocalHttpServerManager(
             val servers = records.values.toList()
             var stopped = 0
             servers.forEach { server ->
-                if (stopRecord(server)) stopped++
-                removeRecord(server)
+                // Keep the record for a group that survived the kill window:
+                // dropping it would orphan a live process group that the tool
+                // can no longer see or stop. This mirrors stop()'s contract.
+                if (stopRecord(server)) {
+                    stopped++
+                    removeRecord(server)
+                }
             }
             return stopped
         }

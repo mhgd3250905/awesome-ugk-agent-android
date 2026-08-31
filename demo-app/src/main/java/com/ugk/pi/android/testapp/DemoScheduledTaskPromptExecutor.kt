@@ -120,13 +120,21 @@ internal class DemoScheduledTaskPromptExecutor(
         val resolvedStore = requireNotNull(store) {
             "DemoScheduledTaskPromptExecutor requires a conversation store when no outcome writer is supplied"
         }
-        // Reload before writing so an Activity-side message added while the
-        // background run was in flight is not overwritten by an old snapshot.
-        val conversation = resolvedStore.get(original.id) ?: original
-        conversation.messages += DemoStoredMessage("user", prompt)
-        conversation.messages += DemoStoredMessage("assistant", result)
-        conversation.updatedAt = System.currentTimeMillis()
-        resolvedStore.saveAndFlush(conversation)
+        // Append under the store lock instead of replacing a reloaded
+        // snapshot: a foreground Activity saving its own (possibly stale)
+        // snapshot must not erase this background turn, and an append cannot
+        // overwrite concurrent UI writes either.
+        val persisted = resolvedStore.appendMessagesAndFlush(
+            conversationId = original.id,
+            messages = listOf(
+                DemoStoredMessage("user", prompt),
+                DemoStoredMessage("assistant", result)
+            )
+        )
+        // Null means the conversation was deleted while the background run
+        // was in flight; the outcome is dropped rather than resurrecting a
+        // conversation the user already deleted.
+        if (persisted == null) return
     }
 
     private fun buildScheduledPrompt(
