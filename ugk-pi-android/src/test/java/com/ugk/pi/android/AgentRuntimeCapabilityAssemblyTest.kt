@@ -147,6 +147,7 @@ class AgentRuntimeCapabilityAssemblyTest {
         val resolver = RecordingSkillResolver()
         val provider = RecordingLLMProvider()
         val dynamicProvider = MutableDynamicSkillProvider()
+        val secondCustomProvider = MutableDynamicSkillProvider(prefix = "custom")
         var skillProviderListCalls = 0
         val plugin = object : AgentCapabilityPlugin {
             override val id: String = "assembly-plugin"
@@ -169,23 +170,22 @@ class AgentRuntimeCapabilityAssemblyTest {
             .skillProvider(
                 StaticAndroidSkillProvider(listOf(skill("first-custom", "FIRST_CUSTOM")))
             )
-            .skillProvider(
-                StaticAndroidSkillProvider(listOf(skill("second-custom", "SECOND_CUSTOM")))
-            )
+            .skillProvider(secondCustomProvider)
             .build()
 
         runtime.run(AgentSession("assembly-live-1"), "assemble").toList()
         runtime.run(AgentSession("assembly-live-2"), "assemble").toList()
 
         assertEquals(
-            listOf("plugin-dynamic-v1", "second-custom", "plugin-declared"),
+            listOf("plugin-dynamic-v1", "custom-v1", "plugin-declared"),
             resolver.receivedSkills[0].map { it.id }
         )
         assertEquals(
-            listOf("plugin-dynamic-v2", "second-custom", "plugin-declared"),
+            listOf("plugin-dynamic-v2", "custom-v2", "plugin-declared"),
             resolver.receivedSkills[1].map { it.id }
         )
         assertEquals(2, dynamicProvider.calls)
+        assertEquals(2, secondCustomProvider.calls)
         assertEquals(2, skillProviderListCalls)
     }
 
@@ -844,13 +844,15 @@ class AgentRuntimeCapabilityAssemblyTest {
         }
     }
 
-    private class MutableDynamicSkillProvider : AndroidSkillProvider {
+    private class MutableDynamicSkillProvider(
+        private val prefix: String = "plugin-dynamic"
+    ) : AndroidSkillProvider {
         var calls: Int = 0
             private set
 
         override fun skills(): List<AndroidSkill> {
             calls++
-            return listOf(skill("plugin-dynamic-v$calls", "PLUGIN_DYNAMIC_V$calls"))
+            return listOf(skill("$prefix-v$calls", "${prefix.uppercase().replace('-', '_')}_V$calls"))
         }
 
         private fun skill(id: String, marker: String): AndroidSkill = AndroidSkill(

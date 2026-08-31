@@ -35,8 +35,14 @@ class BashCommandToolTest {
 
     @After
     fun cleanUpWorkspaces() {
-        createdWorkspaces.forEach { it.deleteRecursively() }
+        val failedPaths = mutableListOf<String>()
+        createdWorkspaces.forEach { workspace ->
+            if (!workspace.deleteRecursively()) {
+                failedPaths += workspace.absolutePath
+            }
+        }
         createdWorkspaces.clear()
+        assertEquals(emptyList<String>(), failedPaths)
     }
 
     @Test

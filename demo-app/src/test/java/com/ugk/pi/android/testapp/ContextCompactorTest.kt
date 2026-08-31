@@ -359,6 +359,7 @@ class ContextCompactorTest {
         )
 
         assertConversationInvariants(result.messages)
+        assertTrue(result.messages.size <= 160)
         val nonSystem = result.messages.filterNot { it is AgentMessage.System }
         assertTrue(nonSystem.size >= 150)
     }
