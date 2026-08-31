@@ -1,11 +1,11 @@
 # demo-app 版本与变更台账
 
-更新时间：2026-08-31
-当前保存版本：`0.9.2`（`versionCode 13`）
+更新时间：2026-09-01
+当前保存版本：`0.9.4`（`versionCode 15`）
 版本范围：仅 `:demo-app`；SDK/AAR 模块版本继续独立维护。
-当前阶段：在 `demo-app-v0.9.1` 基线上合并第二轮 P0 审查修复（SDK 协议正确性、任务运行时并发、demo 生命周期与数据正确性），版本为 `0.9.2 / versionCode 13`。版本边界标签为 `demo-app-v0.9.2`；远端状态以 Git 实测为准。
+当前阶段：在 `main@1170268`（未走保存流程的 `0.9.3 / versionCode 14` composer/多图功能提交，本台账由 0.9.3 条目补记）之上合并第三轮 P0 审查修复（SDK 协议完整性、任务运行时控制面竞态、原子写并发安全、终端运行时进程组契约与校验性能），版本为 `0.9.4 / versionCode 15`。版本边界标签为 `demo-app-v0.9.4`；远端状态以 Git 实测为准。
 
-> 文首元数据、版本规则和 `0.9.2` 记录描述当前保存点；其后的版本条目是不可改写的历史记录。
+> 文首元数据、版本规则和 `0.9.4` 记录描述当前保存点；其后的版本条目是不可改写的历史记录。
 > 历史条目中的“当前”仅指该条目记录时点，不是今天的版本或验证状态。
 
 ## 版本规则
@@ -13,9 +13,47 @@
 - `versionCode` 只递增，不因重新打包或覆盖安装回退。
 - `versionName` 使用面向测试交付的 SemVer 风格；聊天、会话和悬浮窗等一组可感知能力完成后提升 minor 版本。
 - 稳定性修复、生命周期恢复和验收证据整理使用 patch 版本递增，不与新的用户可感知 UI 能力混用。
-- 本阶段版本边界标签名为 `demo-app-v0.9.2`；`demo-app-v0.9.1`、`demo-app-v0.9.0`、`demo-app-v0.8.0`、`demo-app-v0.7.1`、`demo-app-v0.7.0`、`demo-app-v0.6.0`、`demo-app-v0.5.0`、`demo-app-v0.4.0` 和 `demo-app-v0.3.0` 保留为历史 Demo 交付标签，不代表 Terminal Runtime 已达到最终发布状态。
+- 本阶段版本边界标签名为 `demo-app-v0.9.4`；`demo-app-v0.9.2`、`demo-app-v0.9.1`、`demo-app-v0.9.0`、`demo-app-v0.8.0`、`demo-app-v0.7.1`、`demo-app-v0.7.0`、`demo-app-v0.6.0`、`demo-app-v0.5.0`、`demo-app-v0.4.0` 和 `demo-app-v0.3.0` 保留为历史 Demo 交付标签，不代表 Terminal Runtime 已达到最终发布状态（`0.9.3` 为未走保存流程的中间提交，无独立标签，见 0.9.3 条目补记说明）。
 - Debug APK 允许本机从被 Git 忽略的配置读取 API 默认值，不能作为对外分发包；API Key 不进入源码、文档或提交。
 - 真机迭代使用固定 Debug 签名和 `adb install -r -d`，不以卸载、清数据作为常规版本升级步骤；本阶段不操作真机。
+
+## 0.9.4 · 2026-09-01 · 第三轮 P0 审查修复（SDK 协议/并发/性能 + 终端进程组契约）
+
+### 变更范围
+
+- `ugk-pi-android`：`terminalForTurn` 工具空白完成消息不再持久化空白 Assistant（此前经 Anthropic 序列化为空 content 数组导致会话每次请求 400、永久坏档）；Anthropic 序列化对存量空白 Assistant 补占位文本块（防御层）；空白 run 输入在入口拒绝、不入档不请求；两个 Provider 对截断/损坏的 tool 参数不再静默替换为空对象执行（丢弃该调用并保留 stop reason，交由既有 incomplete-response 重试）；`JavaNetHttpTransport.postStream` 取消收集器即断开底层连接（此前阻塞 readLine 占用 socket 与 IO 线程至 180s 读超时）并新增单行 maxResponseBytes 上限。
+- `ugk-agent-task-runtime-android`：`handle()` 执行完成后写回前重读任务记录——执行期间并发的 cancel/update 不再被过期快照覆盖（取消任务复活、改期回滚两类缺陷），残余毫秒级窗口在代码注释中声明。
+- `pi-schedule-skill-android`：`nextRunAtMillis` 对敌意/损坏持久化数据的算术溢出降级为 null，任何返回非负（此前可为负值触发 AlarmManager 立即到期热循环）。
+- `pi-agent-skill-runtime-android` / `pi-file-skill-android`：`writeTextAtomically` 临时文件改唯一名（`File.createTempFile`）并删除“先删目标再拷贝”兜底（并发写者此前可把整个 memory/skill 文件删掉）；`AgentSkillSeeder` 种子临时文件唯一化、rename 前重查目标，并发 seed 不再可能留下永久损坏的种子 skill。
+- `ugk-terminal-runtime-android`：bash 调用自然退出时清扫其进程组内残余后台进程（SIGTERM→SIGKILL），SDK runtime `AGENTS.md` 的“进程组绑定单次调用”契约从劝退变为强制——后台进程不能再绕过 `local_http_server_*` 的确认门禁与数量上限、砖化默认端口；`PythonDistribution` 首次全量校验后以 `.verified` 指纹标记短路（此前每次调用全量 SHA-256 校验 613 个文件共约 10.8MB 并持锁串行）；`LocalHttpServerManager` 对无 handle 的过期不监听记录惰性清理（pgid 回收复用导致的永久 running 假象与端口砖化），且不再对可能被复用的 pgid 盲目发信号。
+- `demo-app`：`onSaveInstanceState` 不再用过期快照整会话覆盖保存（此前可抹掉后台定时任务追加的轮次，与 0.9.2 修复的不变量矛盾）；`saveAndFlush`/`appendMessagesAndFlush` 落盘改同步 `commit()`（原 `apply()` 与“进程杀死不丢结果”的声明不符）。
+- Demo 版本由 `0.9.3 / versionCode 14` 提升到 `0.9.4 / versionCode 15`。不改变依赖、权限、Terminal v1 scope、聊天 UI 基线或 Release Gate。
+
+### 验收证据与边界
+
+- 十个模块 JVM 单元测试合计 `916` 个（`138` 个测试类）：`910` passed、`6` skipped、0 failure/error；skip 均为 Windows 主机 symlink 限制的既有用例。本轮新增 8 个 JVM 测试类共 17 个用例 + 1 个仪器用例，其中 10 个为缺陷复现用例（修复前确认失败、修复后转绿，取证见 PR 说明），其余为防御边界锁定用例。
+- API 35 x86_64 模拟器（`codex_api35`）`:demo-app:connectedDebugAndroidTest` `28/28` 通过（0 failure/0 skipped），含新增 `TerminalBackgroundProcessCleanupInstrumentedTest.naturalExitTerminatesBackgroundChildrenOfTheCall`——对真实原生运行时验证后台子进程随调用结束被清扫。本轮未操作任何真机。
+- `:demo-app:assembleDebug` 通过，APK metadata 为 `versionCode 15 / versionName 0.9.4`。
+- 每个缺陷项均带先红后绿的复现测试；`LocalHttpServerManager` 惰性清理为行为加固，未带专用仪器用例（既有 `LocalHttpServerManagerInstrumentedTest` 全绿）。遗留未修复项（主线程位图解码、相册 URI 权限过期、arm64 16KB、`handle` 残余毫秒级竞态窗口等）记录于 PR 说明，不宣称已解决。
+- 版本边界标签为 `demo-app-v0.9.4`；远端状态以 Git 实测为准。
+
+## 0.9.3 · 2026-08-31 · composer 与多图流程（补记：未走保存流程的中间提交）
+
+> 本条目为补记：`1170268`（`feat(demo-app): enhance composer and multi-image flow`）把版本提升到 `0.9.3 / versionCode 14` 但未按版本规则更新本台账与验证文档，也无版本边界标签。该提交随后的第三轮 P0 审查由 0.9.4 条目记录；本条目按补记时的实际代码状态登记，不补造当时的验收证据。
+
+### 变更范围
+
+- composer 增强：附件菜单整合（拍照/相册/文档导入）、待发图片预览条与配额提示（上限 4 张）、移除单张待发图。
+- 多图流程：`DemoConversationStore` 会话 JSON 从 org.json 迁移到 kotlinx.serialization（`imagePath` 单图字段兼容解码为 `imagePaths` 列表，逐条容错隔离坏记录）；图片经 EXIF 纠偏、采样解码与 JPEG 压缩后进入多模态消息与会话持久化；选择处理引入 generation 守卫防止切换会话/重建后的脏提交。
+- `DemoImageUtils` 采样/缩放纯函数化并带单测；新增 material 1.13.0 依赖（BottomSheetDialog 历史会话列表）。
+- Demo 版本由 `0.9.2 / versionCode 13` 提升到 `0.9.3 / versionCode 14`（随功能提交一并发生）。该提交新增/扩充 demo-app 单测（`AgentOverlayPolicyTest`、`DemoConversationStoreTest`、`DemoImageSelectionTest`），全工程 JVM 测试数由 `422` 增至 `441`（`@Test` 注解口径）。
+
+### 验收证据与边界
+
+- 该提交未走保存验收流程；补记时的回归证据为 0.9.4 条目记录的第三轮审查全量门禁（JVM `916`、模拟器 `28/28`），覆盖该提交的测试与代码。
+- 第三轮审查确认该提交未回退 0.9.2 的历史 P0 修复（连续 user 消息合并、原子 append、坏档容错）；发现的问题（onSaveInstanceState 覆盖残留、flush 落盘语义等）已由 0.9.4 修复。
+- 无 `demo-app-v0.9.3` 标签；不作为版本边界。
+
 
 ## 0.9.2 · 2026-08-31 · 第二轮 P0 审查修复（SDK 协议/并发 + demo 生命周期/数据正确性）
 

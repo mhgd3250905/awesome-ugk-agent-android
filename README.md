@@ -13,7 +13,7 @@ Android Agent Runtime SDK：提供通用 Agent 工具循环、Android Skill，�
 - v1 不支持、不打包、不宣称 Node.js、Git、OpenSSH、jq。
 - Runtime 无 UI，不要求安装 Termux 或第二个 App；它与宿主共享 Android UID，不是安全沙箱。
 - `pi-system-skill-android` 提供白名单 Android 原生 Intent Tool；打开网页、相机、拨号、地图、分享等动作不通过终端执行。
-- `demo-app` 当前保存版本为 `0.9.2`（`versionCode 13`），版本边界标签为 `demo-app-v0.9.2`；该 patch 修复 Anthropic 连续 user 消息序列化（视觉工具循环 400）、工具循环异常导致的会话永久坏档、任务运行时进程级互斥失效、通知权限缺失杀死重复任务、Activity 重建终止运行中 Agent、定时任务结果被前台保存覆盖，并补齐 skill 扫描 symlink 边界与文件原子写，聊天/UI 基线不变。
+- `demo-app` 当前保存版本为 `0.9.4`（`versionCode 15`），版本边界标签为 `demo-app-v0.9.4`。`0.9.3`（composer 与多图流程）为未走保存流程的中间提交（版本台账已补记）；`0.9.4` 为第三轮 P0 审查修复：terminal 工具空白完成不再使会话永久 400、截断工具参数不再被静默执行、流式请求取消即断连并新增行长上限、任务取消/改期不再被后台执行写回复活、并发原子写不再可能删除整个 memory/skill 文件、bash 后台子进程随调用结束被清扫（进程组契约强制）、Python stdlib 校验改指纹短路、demo 前台不再覆盖后台轮次且 flush 真同步落盘。聊天/UI 基线不变。
 - 2026-08-29 已完成快速迭代后的模块化架构收敛：生命周期、配置、Provider、会话、transcript、capability assembly 与 Terminal/Screen interlock 均有单一 owner；本机 JVM、Debug/Release 构建和 Terminal 包验收通过，设备/发布矩阵仍未关闭。
 
 ## 模块
@@ -43,7 +43,7 @@ Windows PowerShell：
 
 完整单元测试、双宿主仪器测试和 Runtime 静态验收见 [`AGENTS.md`](AGENTS.md) 与 [`docs/terminal-runtime-validation.md`](docs/terminal-runtime-validation.md)。
 
-当前授权真机以 [`HANDOVER.md`](HANDOVER.md) 为准，仅允许操作小米设备（`QSG6Q8IFDMDELVGQ`）。此前与 `0.8.0` 生产代码一致的 Debug APK 已以 `0.8.0 / versionCode 10` 元数据通过 `adb install -r -d` 覆盖安装到该设备，未卸载、未清理数据；该事实仅证明安装与 package metadata，不等同于 skill authoring 行为验收。当前 `0.9.1 / versionCode 12` 不在本阶段重复设备操作。
+当前授权真机以 [`HANDOVER.md`](HANDOVER.md) 为准，仅允许操作小米设备（`QSG6Q8IFDMDELVGQ`、`2304FPN6DC`/`e0b93f2f`，以 HANDOVER 的当期清单为准）。此前与 `0.8.0` 生产代码一致的 Debug APK 已以 `0.8.0 / versionCode 10` 元数据通过 `adb install -r -d` 覆盖安装到该设备，未卸载、未清理数据；该事实仅证明安装与 package metadata，不等同于 skill authoring 行为验收。当前 `0.9.4 / versionCode 15` 未安装到真机，本阶段不进行设备操作。
 
 ## 文档入口
 

@@ -1,6 +1,6 @@
 # 项目文档入口
 
-更新时间：2026-08-30
+更新时间：2026-09-01
 适用项目：`awesome-ugk-agent-android`
 源码目录：`E:\AII\ugk-android-new`
 
@@ -44,13 +44,14 @@
 | [android-scheduled-tasks.md](android-scheduled-tasks.md) | Android Agent 定时任务控制面、持久化调度运行时、能力开关和验收边界 |
 | [android-agent-skills.md](android-agent-skills.md) | 文件型 SKILL.md 运行时、动态加载策略、命名根嵌入和 agent-memory |
 | [sdk-optimization-ledger.md](sdk-optimization-ledger.md) | SDK 架构优化步骤、验证结果和版本影响台账 |
+| [sdk-confirmation-ticket-contract.md](sdk-confirmation-ticket-contract.md) | SDK 确认票据契约：票据生成、绑定与消费的单一事实源 |
 | [sdk-core-consumer-contract.md](sdk-core-consumer-contract.md) | Core AAR 外部消费边界、版本策略和 API/ABI gate 触发条件 |
 
 ## 历史快照（保留原文件，不作为当前事实源）
 
 | 文件 | 角色 |
 |---|---|
-| [sdk-stabilization-baseline.md](sdk-stabilization-baseline.md) | 截至 2026-08-14 的 SDK 稳定化测试期快照；已被当前 `0.9.1` 保存点 superseded |
+| [sdk-stabilization-baseline.md](sdk-stabilization-baseline.md) | 截至 2026-08-14 的 SDK 稳定化测试期快照；已被后续保存点 superseded |
 
 ## 快速阅读顺序
 

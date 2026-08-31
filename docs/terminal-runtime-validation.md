@@ -1,8 +1,8 @@
 # Terminal Runtime 验证矩阵
 
-更新时间：2026-08-31
+更新时间：2026-09-01
 验证源码：`E:\AII\ugk-android-new`
-注意：最新 Terminal instrumentation/probe 的物理设备证据绑定到 source checkpoint `28bc352622458d29e090656ae42fd32f057e9196`；第 21—23 节保留历史版本保存，第 24 节记录 Demo `0.9.2 / versionCode 13` 第二轮 P0 修复保存与合并验收，第 25 节记录 PR #4 测试套件清理与防泄漏收束验收。后者不关闭 Terminal 设备矩阵、网络或发布 Gate。
+注意：最新 Terminal instrumentation/probe 的物理设备证据绑定到 source checkpoint `28bc352622458d29e090656ae42fd32f057e9196`；第 21—23 节保留历史版本保存，第 24 节记录 Demo `0.9.2 / versionCode 13` 第二轮 P0 修复保存与合并验收，第 25 节记录 PR #4 测试套件清理与防泄漏收束验收，第 26 节记录 Demo `0.9.4 / versionCode 15` 第三轮 P0 审查修复（含未走保存流程的 `0.9.3` 中间提交补记）。后两者不关闭 Terminal 设备矩阵、网络或发布 Gate。
 
 > 第 6—14、18—19 节按日期保留历史验证快照；这些章节中的“当前”仅指当时的源码、APK 或设备上下文。
 > 当前 Terminal Gate 结论以文首总表与第 20 节为准；第 21—23 节为历史版本保存；Demo 0.9.2 保存以第 24 节为准；PR #4 测试 closeout 以第 25 节为准。
@@ -388,3 +388,20 @@ Core API/JVM 边界：
   - Workspace 泄漏检查：本次门禁前后差集 `LEAKED_COUNT=0`，比对确认测试前后没有新增匹配的 `ugk-terminal-*` 临时目录（此项仅证明当次运行无新增泄漏，不代表 TEMP 目录无历史残留）。
   - `git diff --check` 通过。
 - 边界与未执行：本阶段为纯测试套件清理与防泄漏治理，未触碰生产代码；未操作真机、未运行真实 Provider/API、Terminal `-CheckPackages` 或 Release 矩阵，不改变既有设备与发布 Gate 结论。
+
+## 26. Demo 0.9.4 第三轮 P0 审查修复保存（SDK 协议/并发/性能 + 终端进程组契约）
+
+验证日期：2026-09-01；审查与修复范围：`main@1170268`（`0.9.3 / versionCode 14`，composer 与多图流程，未走保存流程——版本台账已补记）之上的第三轮 P0 审查。本轮不改变 Terminal v1 scope、原生载荷、打包方式或权限边界；Release Gate 状态不变。
+
+- 修复项（每项均有先红后绿的复现用例；本轮新增 8 个 JVM 测试类共 17 个用例 + 1 个仪器用例，其中 10 个为缺陷复现用例，修复前失败取证见 PR 说明）：
+  - `ugk-pi-android`：`terminalForTurn` 空白完成不再持久化空白 Assistant（Anthropic 空 content 数组 400 永久坏档，双层防御）；空白 run 输入入口拒绝；两 Provider 截断/损坏 tool 参数丢弃而非伪造 `{}` 执行；`postStream` 取消即断连（原阻塞至 180s 读超时）+ 单行 `maxResponseBytes` 上限。
+  - `ugk-agent-task-runtime-android`：`handle()` 写回前重读记录，执行期间并发 cancel/update 不再被过期快照覆盖（取消任务复活、改期回滚）；残余毫秒级窗口在代码注释中声明。
+  - `pi-schedule-skill-android`：`nextRunAtMillis` 溢出降级 null、返回值非负（防 AlarmManager 负值立即触发热循环，敌意持久化数据路径）。
+  - `pi-agent-skill-runtime-android` / `pi-file-skill-android`：`writeTextAtomically` 唯一临时名 + 删除“先删目标再拷贝”兜底（并发写可删除整个文件的缺陷，Windows 上确定性复现）；`AgentSkillSeeder` 种子临时文件唯一化（Linux 交错下可损坏种子 skill 的加固，本机未运行时复现）。
+  - `ugk-terminal-runtime-android`：bash 调用自然退出清扫进程组残余后台进程（SDK runtime `AGENTS.md` 契约强制，堵住绕过 `local_http_server_*` 确认门禁/数量上限与默认端口砖化）；`PythonDistribution` 全量校验后 `.verified` 指纹短路（原每次调用 SHA-256 校验 613 文件约 10.8MB 且持锁串行）；`LocalHttpServerManager` 无 handle 过期不监听记录惰性清理、不对可能被复用 pgid 盲目发信号（加固，无专用新用例，既有仪器用例全绿）。
+  - `demo-app`：`onSaveInstanceState` 移除过期快照整会话覆盖（抹后台轮次）；`saveAndFlush`/`appendMessagesAndFlush` 同步 `commit()` 落盘（原 `apply()` 与防丢声明不符）。
+- 门禁验收（2026-09-01）：
+  - `test`（全模块 JVM）：`BUILD SUCCESSFUL`，JUnit XML 汇总 `138` 个测试类、`916` tests：`910` passed、`6` skipped、0 failure/error；skip 均为 Windows symlink 限制的既有用例。基线（`main@1170268`）为 `124` 类 / `882` tests / 0 failure，本轮净增 34 个测试全部通过（含 10 个先红后绿的缺陷复现用例）。
+  - `:demo-app:connectedDebugAndroidTest`（AVD `codex_api35`，API 35 x86_64，page size 4 KB）：`28/28` 通过、0 failure、0 skipped，含新增 `TerminalBackgroundProcessCleanupInstrumentedTest.naturalExitTerminatesBackgroundChildrenOfTheCall`——真实原生运行时上验证 bash 后台子进程随调用结束被清扫。
+  - `:demo-app:assembleDebug` 通过；APK metadata `versionCode 15 / versionName 0.9.4`；`git diff --check` 通过。
+- 边界与未执行：本轮未操作真机、未调用真实 Provider/API、未跑 `-CheckPackages` 与 Release 矩阵；arm64（尤其 16 KB）Gate 状态不变。遗留项（demo 主线程位图解码、相册 URI 权限过期、Activity 重建丢失待发图片与拍照文件、`handle` 残余毫秒级竞态、`local_http_server` 跨实例元数据共享、非 SSE 后端 pretty-print JSON 容错等）记录于 PR 说明与版本台账 0.9.4 条目，不宣称已解决。

@@ -151,4 +151,4 @@ Agent run 由 provider 实时扫描并生效。
 - 八个 SDK/Runtime 模块与 Demo JVM 共发现 `388` 个测试：`387` passed、`1` skipped、0 failure/error；跳过项是 Windows 主机无法创建 symlink 的 `AppPrivateFileToolsTest.rejectsSymlinkToSimilarPrefixSibling`。
 - `:demo-app:assembleDebug` 与 `:demo-app:compileDebugAndroidTestKotlin` 通过；Debug APK metadata 为 `com.ugk.pi.android.testapp`、`versionCode 12`、`versionName 0.9.1`，并包含 `assets/agent-skills/android-skill-creator/SKILL.md`。
 - PR #2 说明记录了 API 24/API 35 的文件边界、skill embed 与 Intent data/type targeted dynamic evidence；closeout 独立复核运行 JVM/构建门禁，但未重复操作设备。
-- 这些证据不替代真实 Agent 的人工 create/update/delete/use end-to-end；`0.9.1` APK 本阶段未安装到设备，也未调用真实 Provider/API。
+- 这些证据不替代真实 Agent 的人工 create/update/delete/use end-to-end；`0.9.1` 真机 skill authoring E2E 已于 2026-08-31 完成（见 HANDOVER 与版本台账 0.9.1 条目），更新版本的设备验收以版本台账当期条目为准。

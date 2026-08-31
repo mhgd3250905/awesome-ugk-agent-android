@@ -15,7 +15,7 @@
 - [x] 两 ABI ELF/DT_NEEDED/GNU_STACK/TEXTREL/PT_LOAD/哈希静态验收。
 - [x] `nativeLibraryDir` 提取式执行路径已通过 x86_64 双宿主。
 - [x] 未压缩 `.so` 失败路径已记录，宿主配置要求已写入 README。
-- [ ] arm64 4KB 运行通过。
+- [ ] arm64 4KB 运行通过。（注：已有 arm64-v8a / Android 14 / API 34 / 4 KB 真机受限运行证据，见 `terminal-runtime-validation.md` §14 与 Gate 总表；按 README “不能宣称 arm64 完整通过”的口径，本发布项仍未关闭）
 - [ ] arm64 16KB 运行通过。
 - [ ] API34、API35/16KB、API36/4KB 等剩余组合通过。
 - [ ] Release APK/AAB split 在目标 ABI/API 安装并执行。
