@@ -2,10 +2,10 @@
 
 更新时间：2026-08-31
 验证源码：`E:\AII\ugk-android-new`
-注意：最新 Terminal instrumentation/probe 的物理设备证据绑定到 source checkpoint `28bc352622458d29e090656ae42fd32f057e9196`；第 21—23 节保留历史版本保存，第 24 节记录当前 Demo `0.9.2 / versionCode 13` 第二轮 P0 修复保存与合并验收。后者不关闭 Terminal 设备矩阵、网络或发布 Gate。
+注意：最新 Terminal instrumentation/probe 的物理设备证据绑定到 source checkpoint `28bc352622458d29e090656ae42fd32f057e9196`；第 21—23 节保留历史版本保存，第 24 节记录 Demo `0.9.2 / versionCode 13` 第二轮 P0 修复保存与合并验收，第 25 节记录 PR #4 测试套件清理与防泄漏收束验收。后者不关闭 Terminal 设备矩阵、网络或发布 Gate。
 
 > 第 6—14、18—19 节按日期保留历史验证快照；这些章节中的“当前”仅指当时的源码、APK 或设备上下文。
-> 当前 Gate 结论和版本保存证据以文首总表、第 20 节和第 24 节为准；第 21—23 节是历史版本保存，第 24 节是当前 0.9.2 阶段。
+> 当前 Terminal Gate 结论以文首总表与第 20 节为准；第 21—23 节为历史版本保存；Demo 0.9.2 保存以第 24 节为准；PR #4 测试 closeout 以第 25 节为准。
 
 ## 1. 环境变量
 
@@ -362,3 +362,29 @@ Core API/JVM 边界：
 - 独立 reviewer 六维度审查（需求完整性/逻辑正确性/边界/代码质量/测试覆盖/实际运行与文档一致性）：`PASS`，0 BLOCKING、0 MAJOR、4 MINOR、6 NOTE；33 个改动文件全部落在声明范围内，无 scope creep，未触碰 Terminal v1 scope、打包、权限边界或 Gate 退出条件。MINOR 项（前台 fallback 复活已删会话的理论路径、原子写固定 tmp 名并发交互、损坏备份单槽、catch Throwable 波及 Error）与 PR 自报遗留项一并记录，不阻塞本保存。
 - PR 声明的 API 35 x86_64 模拟器 `connectedDebugAndroidTest 28/28`（含 skill 扫描 symlink 红绿闭环取证）本机无该模拟器未复跑，以 PR 说明与版本台账记录为准；demo #12 Activity 重建端到端行为仍待真机/模拟器人工验收。
 - 本 closeout 未操作真机、未运行真实 Provider/API、Terminal `-CheckPackages` 或 Release 矩阵，不据此改变既有设备与发布 Gate 结论；`0.9.2` APK 本阶段未安装到设备。
+
+## 25. PR #4 测试套件清理与防测试 Workspace 泄漏收束验收
+
+验证日期：2026-08-31；阶段基线：`66d2abfdffd06fb9207b630b98994f2756dce1bb`；PR #4 head 为 `ac2c3f929b85df6d66244d35a306a905ae6cfa13`（含 `d14901d` 与 `ac2c3f9`），merge commit 为 `7dc1b7c17e3503a9aa528cc3088b27b518d58b8a`。范围仅为测试套件冗余清理、防测试 workspace 泄漏、被删测试契约覆盖恢复与测试编码修复；不改变生产代码行为、依赖、Gradle/Android 配置、Terminal 原生载荷、Demo 版本元数据（仍为 `0.9.2 / versionCode 13`）或 Release Gate。
+
+- 测试清理与覆盖恢复内容：
+  - `demo-app`: 删除冗余的 `MainActivityLifecyclePolicyInstrumentedTest`（JVM `AgentOverlayPolicyTest` 已有等价覆盖）；删除冗余的 `ContextCompactionBoundedTranscriptTest`，将边界裁剪关键用例合入 `ContextCompactorTest`（测试数 116→112）。
+  - `demo-app`: 修复 `AndroidAutomationAgentIntegrationInstrumentedTest` 中的 UTF-8 编码乱码（`"鎵撳紑杩欎釜搴旂敤"` -> `"打开这个应用"`）。
+  - `ugk-pi-android`: 删除与 `AgentRuntimeCapabilityAssemblyTest` 重复的 `AgentRuntimeBuilderLiveSkillProviderTest`，并在 `AgentRuntimeCapabilityAssemblyTest` 中保留多 provider 与 dynamic provider 每 run 查询验证（测试数 128→127）。
+  - `pi-terminal-skill-android`: 为 `BashCommandToolTest` 与 `TerminalAgentPluginCompositionTest` 增加 `@After cleanUpWorkspaces()`，尝试清理测试记录的所有临时 workspace，若删除失败则令测试失败以防静默泄漏。
+  - `pi-agent-skill-runtime-android`: `AgentSkillSeederTest` 解耦具体 `agent-memory` 路径，改用通用 `sample-skill` 夹具。
+- 门禁验收（2026-08-31）：
+  - 运行九模块 `testDebugUnitTest` 与 `:demo-app:assembleDebug`、`:demo-app:compileDebugAndroidTestKotlin`（`--rerun-tasks --console=plain`），Gradle 输出 `BUILD SUCCESSFUL`（244 actionable tasks: 244 executed）。
+  - JUnit XML 汇总：九模块合计 `422` 个测试：`419` passed、`3` skipped、`0` failure、`0` error。
+    - `demo-app`: 112 passed / 0 skipped / 0 failed / 0 error
+    - `pi-agent-skill-runtime-android`: 78 passed / 2 skipped（Windows symlink 限制） / 0 failed / 0 error
+    - `pi-file-skill-android`: 12 passed / 1 skipped（Windows symlink 限制） / 0 failed / 0 error
+    - `pi-schedule-skill-android`: 11 passed / 0 skipped / 0 failed / 0 error
+    - `pi-system-skill-android`: 42 passed / 0 skipped / 0 failed / 0 error
+    - `pi-terminal-skill-android`: 20 passed / 0 skipped / 0 failed / 0 error
+    - `ugk-agent-task-runtime-android`: 17 passed / 0 skipped / 0 failed / 0 error
+    - `ugk-pi-android`: 127 passed / 0 skipped / 0 failed / 0 error
+    - `ugk-terminal-runtime-android`: `NO-SOURCE`
+  - Workspace 泄漏检查：本次门禁前后差集 `LEAKED_COUNT=0`，比对确认测试前后没有新增匹配的 `ugk-terminal-*` 临时目录（此项仅证明当次运行无新增泄漏，不代表 TEMP 目录无历史残留）。
+  - `git diff --check` 通过。
+- 边界与未执行：本阶段为纯测试套件清理与防泄漏治理，未触碰生产代码；未操作真机、未运行真实 Provider/API、Terminal `-CheckPackages` 或 Release 矩阵，不改变既有设备与发布 Gate 结论。
