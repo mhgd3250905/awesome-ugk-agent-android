@@ -5,6 +5,7 @@ import com.ugk.pi.android.ToolExecutionContext
 import com.ugk.pi.terminal.runtime.BashCommandExecutor
 import com.ugk.pi.terminal.runtime.BashCommandRequest
 import com.ugk.pi.terminal.runtime.BashCommandResult
+import java.io.File
 import java.nio.file.Files
 import java.util.concurrent.CountDownLatch
 import java.util.concurrent.TimeUnit
@@ -18,6 +19,7 @@ import kotlinx.coroutines.yield
 import kotlinx.serialization.json.buildJsonObject
 import kotlinx.serialization.json.put
 import kotlinx.serialization.json.putJsonObject
+import org.junit.After
 import org.junit.Assert.assertEquals
 import org.junit.Assert.assertFalse
 import org.junit.Assert.assertNotNull
@@ -26,6 +28,23 @@ import org.junit.Test
 import kotlinx.coroutines.runBlocking
 
 class BashCommandToolTest {
+    private val createdWorkspaces = mutableListOf<File>()
+
+    private fun createWorkspace(): File =
+        Files.createTempDirectory("ugk-terminal-tool-test").toFile().also { createdWorkspaces += it }
+
+    @After
+    fun cleanUpWorkspaces() {
+        val failedPaths = mutableListOf<String>()
+        createdWorkspaces.forEach { workspace ->
+            if (!workspace.deleteRecursively()) {
+                failedPaths += workspace.absolutePath
+            }
+        }
+        createdWorkspaces.clear()
+        assertEquals(emptyList<String>(), failedPaths)
+    }
+
     @Test
     fun terminalSkillRequiresAnExactBoundConfirmationTarget() {
         val instructions = terminalBashSkill().instructions
@@ -48,7 +67,7 @@ class BashCommandToolTest {
 
     @Test
     fun executesBoundedRequestInsideRelativeWorkspace() = runBlocking {
-        val workspace = Files.createTempDirectory("ugk-terminal-tool-test").toFile()
+        val workspace = createWorkspace()
         val executor = RecordingExecutor()
         val tool = BashCommandTool(
             executor = executor,
@@ -85,7 +104,7 @@ class BashCommandToolTest {
 
     @Test
     fun rejectsEscapingWorkspaceAndReservedEnvironment() = runBlocking {
-        val workspace = Files.createTempDirectory("ugk-terminal-tool-test").toFile()
+        val workspace = createWorkspace()
         val tool = BashCommandTool(
             executor = RecordingExecutor(),
             workspaceRoot = workspace,
@@ -156,7 +175,7 @@ class BashCommandToolTest {
     @Test
     fun coroutineCancellationInterruptsBlockingExecutor() = runBlocking {
         val interrupted = AtomicBoolean(false)
-        val workspace = Files.createTempDirectory("ugk-terminal-tool-test").toFile()
+        val workspace = createWorkspace()
         val executor = object : BashCommandExecutor {
             override fun execute(request: BashCommandRequest): BashCommandResult {
                 try {
@@ -195,7 +214,7 @@ class BashCommandToolTest {
     @Test
     fun explicitCancelInterruptsActiveCallAndReturnsStructuredError() = runBlocking {
         val interrupted = AtomicBoolean(false)
-        val workspace = Files.createTempDirectory("ugk-terminal-tool-test").toFile()
+        val workspace = createWorkspace()
         val executor = object : BashCommandExecutor {
             override fun execute(request: BashCommandRequest): BashCommandResult {
                 try {
@@ -238,7 +257,7 @@ class BashCommandToolTest {
     fun rejectsDuplicateCallIdBeforeItWaitsForAnExecutionSlot() = runBlocking {
         val started = CountDownLatch(1)
         val release = CountDownLatch(1)
-        val workspace = Files.createTempDirectory("ugk-terminal-tool-test").toFile()
+        val workspace = createWorkspace()
         val executor = object : BashCommandExecutor {
             override fun execute(request: BashCommandRequest): BashCommandResult {
                 started.countDown()
@@ -284,7 +303,7 @@ class BashCommandToolTest {
         val firstStarted = CountDownLatch(1)
         val releaseFirst = CountDownLatch(1)
         val executions = AtomicInteger(0)
-        val workspace = Files.createTempDirectory("ugk-terminal-tool-test").toFile()
+        val workspace = createWorkspace()
         val executor = object : BashCommandExecutor {
             override fun execute(request: BashCommandRequest): BashCommandResult {
                 val executionNumber = executions.incrementAndGet()
@@ -331,7 +350,7 @@ class BashCommandToolTest {
         val firstStarted = CountDownLatch(1)
         val interrupted = AtomicBoolean(false)
         val executions = AtomicInteger(0)
-        val workspace = Files.createTempDirectory("ugk-terminal-tool-test").toFile()
+        val workspace = createWorkspace()
         val executor = object : BashCommandExecutor {
             override fun execute(request: BashCommandRequest): BashCommandResult {
                 executions.incrementAndGet()
@@ -381,7 +400,7 @@ class BashCommandToolTest {
         val executionCount = AtomicInteger(0)
         val inFlight = AtomicInteger(0)
         val maxInFlight = AtomicInteger(0)
-        val workspace = Files.createTempDirectory("ugk-terminal-tool-test").toFile()
+        val workspace = createWorkspace()
         val executor = object : BashCommandExecutor {
             override fun execute(request: BashCommandRequest): BashCommandResult {
                 val running = inFlight.incrementAndGet()
@@ -433,7 +452,7 @@ class BashCommandToolTest {
 
     @Test
     fun returnsStdoutStderrExitCodeDurationAndWorkingDirectorySynchronously() = runBlocking {
-        val workspace = Files.createTempDirectory("ugk-terminal-tool-test").toFile()
+        val workspace = createWorkspace()
         val executor = BashCommandExecutor { request ->
             BashCommandResult(
                 command = listOf("bash", "-c", request.script),
@@ -472,7 +491,7 @@ class BashCommandToolTest {
 
     @Test
     fun reportsStdoutAndStderrTruncationIndependently() = runBlocking {
-        val workspace = Files.createTempDirectory("ugk-terminal-tool-test").toFile()
+        val workspace = createWorkspace()
         val executor = BashCommandExecutor { request ->
             BashCommandResult(
                 command = listOf("bash", "-c", request.script),

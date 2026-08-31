@@ -298,6 +298,72 @@ class ContextCompactorTest {
         assertConversationInvariants(session.messages)
     }
 
+    @Test
+    fun `boundary trimming keeps assistant tool_use paired with tool_result`() {
+        val messages = mutableListOf<AgentMessage>(
+            AgentMessage.System("system prompt"),
+            AgentMessage.User("please run the checks")
+        )
+        repeat(120) { index ->
+            val call = ToolCall("call-$index", "cmd", emptyJson)
+            messages += AgentMessage.Assistant("step $index", toolCalls = listOf(call))
+            messages += AgentMessage.Tool(ToolResult(call.id, call.name, "result $index"))
+        }
+
+        val result = ContextCompactor.compactIfNeeded(
+            messages = messages,
+            contextWindow = "128K",
+            autoCompaction = false
+        )
+
+        assertConversationInvariants(result.messages)
+        assertTrue(result.messages.size <= 160)
+    }
+
+    @Test
+    fun `boundary trimming handles a single turn larger than the cap`() {
+        val messages = mutableListOf<AgentMessage>(
+            AgentMessage.System("system prompt"),
+            AgentMessage.User("one very long turn")
+        )
+        repeat(170) { index ->
+            val call = ToolCall("call-$index", "cmd", emptyJson)
+            messages += AgentMessage.Assistant("step $index", toolCalls = listOf(call))
+            messages += AgentMessage.Tool(ToolResult(call.id, call.name, "result $index"))
+        }
+
+        val result = ContextCompactor.compactIfNeeded(
+            messages = messages,
+            contextWindow = "128K",
+            autoCompaction = false
+        )
+
+        assertConversationInvariants(result.messages)
+    }
+
+    @Test
+    fun `boundary trimming handles interleaved user messages and stays near budget`() {
+        val messages = mutableListOf<AgentMessage>(AgentMessage.System("system prompt"))
+        repeat(80) { turn ->
+            messages += AgentMessage.User("turn $turn")
+            val call = ToolCall("call-$turn", "cmd", emptyJson)
+            messages += AgentMessage.Assistant("step $turn", toolCalls = listOf(call))
+            messages += AgentMessage.Tool(ToolResult(call.id, call.name, "result $turn"))
+        }
+        messages += AgentMessage.User("follow-up")
+
+        val result = ContextCompactor.compactIfNeeded(
+            messages = messages,
+            contextWindow = "128K",
+            autoCompaction = false
+        )
+
+        assertConversationInvariants(result.messages)
+        assertTrue(result.messages.size <= 160)
+        val nonSystem = result.messages.filterNot { it is AgentMessage.System }
+        assertTrue(nonSystem.size >= 150)
+    }
+
     private fun assertConversationInvariants(messages: List<AgentMessage>) {
         val nonSystem = messages.filterNot { it is AgentMessage.System }
         assertTrue(nonSystem.isNotEmpty())

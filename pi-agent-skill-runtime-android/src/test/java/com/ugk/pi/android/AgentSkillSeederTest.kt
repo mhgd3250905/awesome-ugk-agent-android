@@ -19,9 +19,9 @@ class AgentSkillSeederTest {
     fun seedsPackagedSkillTreeIntoTargetRoot() {
         val source = FakeAssetSource(
             mapOf(
-                "agent-skills/agent-memory/SKILL.md" to "---\nname: agent-memory\n".toByteArray(),
-                "agent-skills/agent-memory/preferences.md" to "# preferences".toByteArray(),
-                "agent-skills/agent-memory/rules.md" to "# rules".toByteArray()
+                "agent-skills/sample-skill/SKILL.md" to "---\nname: sample-skill\n".toByteArray(),
+                "agent-skills/sample-skill/templates/guide.md" to "# guide".toByteArray(),
+                "agent-skills/sample-skill/rules.md" to "# rules".toByteArray()
             )
         )
         val targetRoot = File(tempFolder.root, "agent-skills")
@@ -30,11 +30,11 @@ class AgentSkillSeederTest {
 
         assertEquals(3, seeded)
         assertEquals(
-            "---\nname: agent-memory\n",
-            File(targetRoot, "agent-memory/SKILL.md").readText()
+            "---\nname: sample-skill\n",
+            File(targetRoot, "sample-skill/SKILL.md").readText()
         )
-        assertEquals("# preferences", File(targetRoot, "agent-memory/preferences.md").readText())
-        assertEquals("# rules", File(targetRoot, "agent-memory/rules.md").readText())
+        assertEquals("# guide", File(targetRoot, "sample-skill/templates/guide.md").readText())
+        assertEquals("# rules", File(targetRoot, "sample-skill/rules.md").readText())
     }
 
     @Test

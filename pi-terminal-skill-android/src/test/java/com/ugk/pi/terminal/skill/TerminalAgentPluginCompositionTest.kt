@@ -19,18 +19,37 @@ import com.ugk.pi.terminal.runtime.BashCommandResult
 import com.ugk.pi.terminal.runtime.LocalHttpServerController
 import com.ugk.pi.terminal.runtime.LocalHttpServerRequest
 import com.ugk.pi.terminal.runtime.LocalHttpServerStatus
+import java.io.File
 import java.lang.reflect.Modifier
 import java.nio.file.Files
 import kotlinx.coroutines.runBlocking
 import kotlinx.serialization.json.JsonObject
 import kotlinx.serialization.json.buildJsonObject
 import kotlinx.serialization.json.put
+import org.junit.After
 import org.junit.Assert.assertEquals
 import org.junit.Assert.assertFalse
 import org.junit.Assert.assertTrue
 import org.junit.Test
 
 class TerminalAgentPluginCompositionTest {
+    private val createdWorkspaces = mutableListOf<File>()
+
+    private fun createWorkspace(): File =
+        Files.createTempDirectory("ugk-terminal-plugin-test").toFile().also { createdWorkspaces += it }
+
+    @After
+    fun cleanUpWorkspaces() {
+        val failedPaths = mutableListOf<String>()
+        createdWorkspaces.forEach { workspace ->
+            if (!workspace.deleteRecursively()) {
+                failedPaths += workspace.absolutePath
+            }
+        }
+        createdWorkspaces.clear()
+        assertEquals(emptyList<String>(), failedPaths)
+    }
+
     @Test
     fun publicConstructorsKeepRuntimeCollaboratorsOffTheJvmSurface() {
         val publicConstructors = TerminalAgentPlugin::class.java.constructors.toList()
@@ -137,7 +156,7 @@ class TerminalAgentPluginCompositionTest {
     ): TerminalAgentPlugin {
         val terminalTool = BashCommandTool(
             executor = executor,
-            workspaceRoot = Files.createTempDirectory("ugk-terminal-plugin-test").toFile(),
+            workspaceRoot = createWorkspace(),
             policy = TerminalToolPolicy(requireUserConfirmation = false)
         )
         val componentsClass = TerminalAgentPlugin::class.java.declaredClasses.single {
