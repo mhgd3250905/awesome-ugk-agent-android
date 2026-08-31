@@ -49,8 +49,8 @@ android {
         applicationId = "com.ugk.pi.android.testapp"
         minSdk = 24
         targetSdk = 36
-        versionCode = 13
-        versionName = "0.9.2"
+        versionCode = 14
+        versionName = "0.9.3"
         testInstrumentationRunner = "androidx.test.runner.AndroidJUnitRunner"
     }
 
@@ -102,6 +102,7 @@ dependencies {
     implementation(project(":pi-terminal-skill-android"))
     implementation("org.jetbrains.kotlinx:kotlinx-coroutines-android:1.7.3")
     implementation("androidx.core:core-ktx:1.12.0")
+    implementation("com.google.android.material:material:1.13.0")
 
     // 成熟优秀的 Android 原生 Markdown 渲染框架 (CommonMark + Spannable)
     implementation("io.noties.markwon:core:4.6.2")

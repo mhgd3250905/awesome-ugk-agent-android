@@ -12,6 +12,7 @@ import java.io.ByteArrayOutputStream
 import java.io.File
 import java.io.FileOutputStream
 import kotlin.math.max
+import kotlin.math.roundToInt
 
 /**
  * 经过采样纠偏和压缩后的多模态图片数据。
@@ -23,6 +24,189 @@ data class ProcessedImage(
     val width: Int,
     val height: Int
 )
+
+const val MAX_PENDING_IMAGES = 4
+
+/**
+ * 针对剩余配额解析待添加图片 URI 的结果。
+ */
+data class ImageSelectionQuotaResult<T>(
+    val accepted: List<T>,
+    val ignoredCount: Int,
+    val isOverQuota: Boolean
+)
+
+/**
+ * 纯函数：根据当前已有数量与上限，计算接纳列表和忽略数量。
+ */
+fun <T> resolveImageSelectionQuota(
+    currentCount: Int,
+    incoming: List<T>,
+    maxLimit: Int = MAX_PENDING_IMAGES
+): ImageSelectionQuotaResult<T> {
+    val remaining = (maxLimit - currentCount).coerceAtLeast(0)
+    if (remaining <= 0 || incoming.isEmpty()) {
+        return ImageSelectionQuotaResult(
+            accepted = emptyList(),
+            ignoredCount = incoming.size,
+            isOverQuota = incoming.isNotEmpty()
+        )
+    }
+    val accepted = incoming.take(remaining)
+    val ignoredCount = incoming.size - accepted.size
+    return ImageSelectionQuotaResult(
+        accepted = accepted,
+        ignoredCount = ignoredCount,
+        isOverQuota = ignoredCount > 0
+    )
+}
+
+/**
+ * 纯函数：无用户输入文字时根据图片张数生成默认提问。
+ */
+fun resolveDefaultImagePromptText(imageCount: Int): String = when {
+    imageCount <= 1 -> "请分析并识别这张图片"
+    else -> "请分析并识别这些图片"
+}
+
+/** 缩略图最终等比尺寸，宽高均以像素计。 */
+internal data class BitmapTargetSize(
+    val width: Int,
+    val height: Int
+)
+
+/**
+ * 计算缩略图解码使用的 2 的幂采样率。
+ *
+ * 采样依据最长边，确保宽图/高图也不会因另一条短边阻止采样而被整张
+ * 解码。最终缩放会把采样结果压到硬像素上限内。
+ */
+internal fun calculateInSampleSize(
+    sourceWidth: Int,
+    sourceHeight: Int,
+    targetWidthPx: Int,
+    targetHeightPx: Int
+): Int {
+    if (targetWidthPx <= 0 || targetHeightPx <= 0) return 1
+    return calculateInSampleSize(
+        sourceWidth = sourceWidth,
+        sourceHeight = sourceHeight,
+        targetMaxSidePx = max(targetWidthPx, targetHeightPx)
+    )
+}
+
+internal fun calculateInSampleSize(
+    sourceWidth: Int,
+    sourceHeight: Int,
+    targetMaxSidePx: Int
+): Int {
+    if (sourceWidth <= 0 || sourceHeight <= 0 || targetMaxSidePx <= 0) {
+        return 1
+    }
+    val sourceMaxSide = max(sourceWidth, sourceHeight).toLong()
+    val targetMaxSide = targetMaxSidePx.toLong()
+    var sampleSize = 1L
+    while (sourceMaxSide / (sampleSize * 2L) >= targetMaxSide) {
+        sampleSize *= 2L
+    }
+    return sampleSize.toInt()
+}
+
+/**
+ * 计算不放大且不超过最长边上限的等比目标尺寸。
+ */
+internal fun calculateBitmapTargetSize(
+    sourceWidth: Int,
+    sourceHeight: Int,
+    maxSidePx: Int
+): BitmapTargetSize {
+    if (sourceWidth <= 0 || sourceHeight <= 0 || maxSidePx <= 0) {
+        return BitmapTargetSize(0, 0)
+    }
+    val sourceMaxSide = max(sourceWidth, sourceHeight)
+    if (sourceMaxSide <= maxSidePx) {
+        return BitmapTargetSize(sourceWidth, sourceHeight)
+    }
+
+    val scale = maxSidePx.toDouble() / sourceMaxSide.toDouble()
+    return BitmapTargetSize(
+        width = (sourceWidth * scale).roundToInt().coerceIn(1, maxSidePx),
+        height = (sourceHeight * scale).roundToInt().coerceIn(1, maxSidePx)
+    )
+}
+
+/**
+ * 先读取图片 bounds，再按目标像素有界采样解码缩略图。
+ *
+ * 全屏预览需要保留原图清晰度时不应调用此方法，应使用其专用的全尺寸解码路径。
+ */
+internal fun decodeSampledBitmap(
+    file: File,
+    targetMaxSidePx: Int
+): Bitmap? {
+    if (!file.isFile || targetMaxSidePx <= 0) return null
+    return runCatching {
+        val path = file.absolutePath
+        val boundsOptions = BitmapFactory.Options().apply {
+            inJustDecodeBounds = true
+        }
+        BitmapFactory.decodeFile(path, boundsOptions)
+        if (boundsOptions.outWidth <= 0 || boundsOptions.outHeight <= 0) return@runCatching null
+
+        val decodeOptions = BitmapFactory.Options().apply {
+            inSampleSize = calculateInSampleSize(
+                sourceWidth = boundsOptions.outWidth,
+                sourceHeight = boundsOptions.outHeight,
+                targetMaxSidePx = targetMaxSidePx
+            )
+            inPreferredConfig = Bitmap.Config.RGB_565
+        }
+        val sampledBitmap = BitmapFactory.decodeFile(path, decodeOptions)
+            ?: return@runCatching null
+        val targetSize = calculateBitmapTargetSize(
+            sourceWidth = sampledBitmap.width,
+            sourceHeight = sampledBitmap.height,
+            maxSidePx = targetMaxSidePx
+        )
+        if (targetSize.width <= 0 || targetSize.height <= 0) {
+            sampledBitmap.recycle()
+            return@runCatching null
+        }
+        if (targetSize.width == sampledBitmap.width && targetSize.height == sampledBitmap.height) {
+            return@runCatching sampledBitmap
+        }
+
+        val scaledBitmap = try {
+            Bitmap.createScaledBitmap(
+                sampledBitmap,
+                targetSize.width,
+                targetSize.height,
+                true
+            )
+        } catch (_: Throwable) {
+            null
+        }
+        if (scaledBitmap == null) {
+            sampledBitmap.recycle()
+            null
+        } else {
+            if (scaledBitmap !== sampledBitmap) {
+                sampledBitmap.recycle()
+            }
+            scaledBitmap
+        }
+    }.getOrNull()
+}
+
+/** 保留上一阶段按宽高调用的本地 helper 兼容入口，实际使用最长边上限。 */
+internal fun decodeSampledBitmap(
+    file: File,
+    targetWidthPx: Int,
+    targetHeightPx: Int
+): Bitmap? {
+    if (targetWidthPx <= 0 || targetHeightPx <= 0) return null
+    return decodeSampledBitmap(file, max(targetWidthPx, targetHeightPx))
+}
 
 object DemoImageUtils {
 
@@ -149,7 +333,7 @@ object DemoImageUtils {
         val photosDir = File(context.cacheDir, "photos").apply {
             if (!exists()) mkdirs()
         }
-        val targetFile = File(photosDir, "img_${System.currentTimeMillis()}.jpg")
+        val targetFile = File.createTempFile("img_", ".jpg", photosDir)
         val byteStream = ByteArrayOutputStream()
 
         FileOutputStream(targetFile).use { fileOut ->

@@ -57,6 +57,49 @@ class AgentOverlayPolicyTest {
     }
 
     @Test
+    fun inAppNavigationSuppressesOverlayEvenWhenAuthorizedAndPaused() {
+        assertFalse(
+            AgentOverlayPolicy.shouldShowOnPause(
+                overlayPermissionGranted = true,
+                activityResumed = false,
+                inAppNavigating = true,
+            ),
+        )
+        assertFalse(
+            shouldShowFloatingWindowOnPause(
+                overlayPermissionGranted = true,
+                inAppNavigating = true,
+            ),
+        )
+    }
+
+    @Test
+    fun inAppNavigationSuppressionConsumedRestoresOverlayDisplay() {
+        // In-app navigation transition suppresses overlay
+        assertFalse(
+            AgentOverlayPolicy.shouldShowOnPause(
+                overlayPermissionGranted = true,
+                activityResumed = false,
+                inAppNavigating = true,
+            ),
+        )
+        // After suppression is consumed, subsequent background transitions show overlay normally
+        assertTrue(
+            AgentOverlayPolicy.shouldShowOnPause(
+                overlayPermissionGranted = true,
+                activityResumed = false,
+                inAppNavigating = false,
+            ),
+        )
+        assertTrue(
+            shouldShowFloatingWindowOnPause(
+                overlayPermissionGranted = true,
+                inAppNavigating = false,
+            ),
+        )
+    }
+
+    @Test
     fun permissionOfferOnlyForUnauthorizedActiveRun() {
         assertTrue(
             AgentOverlayPolicy.shouldOfferPermission(

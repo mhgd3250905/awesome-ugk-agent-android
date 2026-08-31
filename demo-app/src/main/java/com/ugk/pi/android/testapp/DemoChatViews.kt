@@ -118,23 +118,9 @@ class DemoChatMessageView @JvmOverloads constructor(
         importantForAccessibility = View.IMPORTANT_FOR_ACCESSIBILITY_NO
     }
 
-    private val userImageView = ImageView(context).apply {
-        scaleType = ImageView.ScaleType.CENTER_CROP
-        clipToOutline = true
-        outlineProvider = object : android.view.ViewOutlineProvider() {
-            override fun getOutline(view: View, outline: android.graphics.Outline) {
-                outline.setRoundRect(0, 0, view.width, view.height, context.chatDp(14).toFloat())
-            }
-        }
-        background = asymmetricRoundedBackground(
-            context = context,
-            fillColor = DemoChatPalette.userAvatarSurface,
-            strokeColor = DemoChatPalette.userStroke,
-            topLeftDp = 18,
-            topRightDp = 4,
-            bottomRightDp = 18,
-            bottomLeftDp = 18
-        )
+    private val userImagesContainer = LinearLayout(context).apply {
+        orientation = LinearLayout.VERTICAL
+        gravity = Gravity.END
         visibility = View.GONE
         importantForAccessibility = View.IMPORTANT_FOR_ACCESSIBILITY_NO
     }
@@ -214,12 +200,10 @@ class DemoChatMessageView @JvmOverloads constructor(
     private val userContentColumn = LinearLayout(context).apply {
         orientation = LinearLayout.VERTICAL
         gravity = Gravity.END
-        addView(userImageView, LinearLayout.LayoutParams(
-            context.chatDp(190),
-            context.chatDp(190)
-        ).apply {
-            bottomMargin = context.chatDp(6)
-        })
+        addView(userImagesContainer, LinearLayout.LayoutParams(
+            LinearLayout.LayoutParams.WRAP_CONTENT,
+            LinearLayout.LayoutParams.WRAP_CONTENT
+        ))
         addView(userBubble, LinearLayout.LayoutParams(
             LinearLayout.LayoutParams.WRAP_CONTENT,
             LinearLayout.LayoutParams.WRAP_CONTENT
@@ -283,30 +267,15 @@ class DemoChatMessageView @JvmOverloads constructor(
         bind(role, messageText)
     }
 
-    /** 绑定角色和消息正文，可选携带用户图片路径；不会触发任何业务回调。 */
-    @JvmOverloads
-    fun bind(role: DemoChatMessageRole, text: CharSequence, imagePath: String? = null) {
+    /** 绑定角色和消息正文，可选携带用户图片路径列表；不会触发任何业务回调。 */
+    fun bind(role: DemoChatMessageRole, text: CharSequence, imagePaths: List<String> = emptyList()) {
         this.role = role
         messageText = text.toString()
         if (role == DemoChatMessageRole.USER) {
             userContainer.visibility = View.VISIBLE
             assistantContainer.visibility = View.GONE
 
-            if (!imagePath.isNullOrBlank() && java.io.File(imagePath).exists()) {
-                val bitmap = runCatching { android.graphics.BitmapFactory.decodeFile(imagePath) }.getOrNull()
-                if (bitmap != null) {
-                    userImageView.setImageBitmap(bitmap)
-                    userImageView.visibility = View.VISIBLE
-                    userImageView.isClickable = true
-                    userImageView.setOnClickListener {
-                        showFullImageDialog(context, imagePath)
-                    }
-                } else {
-                    userImageView.visibility = View.GONE
-                }
-            } else {
-                userImageView.visibility = View.GONE
-            }
+            bindUserImages(imagePaths)
 
             if (messageText.isNotBlank()) {
                 userBubble.visibility = View.VISIBLE
@@ -329,6 +298,7 @@ class DemoChatMessageView @JvmOverloads constructor(
         } else {
             userContainer.visibility = View.GONE
             assistantContainer.visibility = View.VISIBLE
+            userImagesContainer.visibility = View.GONE
             assistantBubble.background = asymmetricRoundedBackground(
                 context = context,
                 fillColor = DemoChatPalette.assistantBubble,
@@ -338,14 +308,166 @@ class DemoChatMessageView @JvmOverloads constructor(
                 bottomRightDp = 18,
                 bottomLeftDp = 18
             )
+            renderAssistantContent(messageText)
             assistantCopyButton.background = copyButtonBackground(context)
             assistantCopyButton.setTextColor(DemoChatPalette.textSecondary)
-            renderAssistantContent(messageText)
         }
         contentDescription = buildString {
             append(role.accessibilityLabel)
             append("：")
             append(messageText.ifBlank { "空消息" })
+        }
+    }
+
+    fun bind(role: DemoChatMessageRole, text: CharSequence, imagePath: String?) {
+        bind(role, text, if (imagePath.isNullOrBlank()) emptyList() else listOf(imagePath))
+    }
+
+    private fun bindUserImages(imagePaths: List<String>) {
+        userImagesContainer.removeAllViews()
+        val validPaths = imagePaths.filter { it.isNotBlank() && java.io.File(it).exists() }
+        if (validPaths.isEmpty()) {
+            userImagesContainer.visibility = View.GONE
+            return
+        }
+        userImagesContainer.visibility = View.VISIBLE
+        when (validPaths.size) {
+            1 -> {
+                val path = validPaths[0]
+                val bitmap = decodeSampledBitmap(
+                    file = java.io.File(path),
+                    targetMaxSidePx = 384
+                )
+                if (bitmap != null) {
+                    val iv = createChatImageView(bitmap, path, 190, 190, 12)
+                    userImagesContainer.addView(iv, LinearLayout.LayoutParams(
+                        context.chatDp(190),
+                        context.chatDp(190)
+                    ).apply {
+                        bottomMargin = context.chatDp(6)
+                    })
+                } else {
+                    userImagesContainer.visibility = View.GONE
+                }
+            }
+            2 -> {
+                val row = LinearLayout(context).apply {
+                    orientation = LinearLayout.HORIZONTAL
+                    gravity = Gravity.END
+                }
+                var count = 0
+                validPaths.forEachIndexed { i, path ->
+                    val bitmap = decodeSampledBitmap(
+                        file = java.io.File(path),
+                        targetMaxSidePx = 256
+                    )
+                    if (bitmap != null) {
+                        val iv = createChatImageView(bitmap, path, 100, 100, 10)
+                        row.addView(iv, LinearLayout.LayoutParams(
+                            context.chatDp(100),
+                            context.chatDp(100)
+                        ).apply {
+                            if (i < validPaths.size - 1) marginEnd = context.chatDp(6)
+                        })
+                        count++
+                    }
+                }
+                if (count > 0) {
+                    userImagesContainer.addView(row, LinearLayout.LayoutParams(
+                        LinearLayout.LayoutParams.WRAP_CONTENT,
+                        LinearLayout.LayoutParams.WRAP_CONTENT
+                    ).apply {
+                        bottomMargin = context.chatDp(6)
+                    })
+                } else {
+                    userImagesContainer.visibility = View.GONE
+                }
+            }
+            else -> {
+                val row1 = LinearLayout(context).apply {
+                    orientation = LinearLayout.HORIZONTAL
+                    gravity = Gravity.END
+                }
+                val row2 = LinearLayout(context).apply {
+                    orientation = LinearLayout.HORIZONTAL
+                    gravity = Gravity.END
+                }
+                val itemsPerRow = 2
+                var count = 0
+                validPaths.forEachIndexed { i, path ->
+                    val bitmap = decodeSampledBitmap(
+                        file = java.io.File(path),
+                        targetMaxSidePx = 256
+                    )
+                    if (bitmap != null) {
+                        val targetRow = if (i < itemsPerRow) row1 else row2
+                        val iv = createChatImageView(bitmap, path, 100, 100, 10)
+                        targetRow.addView(iv, LinearLayout.LayoutParams(
+                            context.chatDp(100),
+                            context.chatDp(100)
+                        ).apply {
+                            if ((i % itemsPerRow) < itemsPerRow - 1) marginEnd = context.chatDp(6)
+                        })
+                        count++
+                    }
+                }
+                var addedAny = false
+                if (row1.childCount > 0) {
+                    userImagesContainer.addView(row1, LinearLayout.LayoutParams(
+                        LinearLayout.LayoutParams.WRAP_CONTENT,
+                        LinearLayout.LayoutParams.WRAP_CONTENT
+                    ).apply {
+                        bottomMargin = context.chatDp(6)
+                    })
+                    addedAny = true
+                }
+                if (row2.childCount > 0) {
+                    userImagesContainer.addView(row2, LinearLayout.LayoutParams(
+                        LinearLayout.LayoutParams.WRAP_CONTENT,
+                        LinearLayout.LayoutParams.WRAP_CONTENT
+                    ).apply {
+                        bottomMargin = context.chatDp(6)
+                    })
+                    addedAny = true
+                }
+                if (!addedAny) {
+                    userImagesContainer.visibility = View.GONE
+                }
+            }
+        }
+    }
+
+    private fun createChatImageView(
+        bitmap: android.graphics.Bitmap,
+        imagePath: String,
+        widthDp: Int,
+        heightDp: Int,
+        radiusDp: Int
+    ): ImageView {
+        return ImageView(context).apply {
+            scaleType = ImageView.ScaleType.CENTER_CROP
+            clipToOutline = true
+            outlineProvider = object : android.view.ViewOutlineProvider() {
+                override fun getOutline(view: View, outline: android.graphics.Outline) {
+                    outline.setRoundRect(0, 0, view.width, view.height, context.chatDp(radiusDp).toFloat())
+                }
+            }
+            background = asymmetricRoundedBackground(
+                context = context,
+                fillColor = DemoChatPalette.cardSurface,
+                strokeColor = DemoChatPalette.cardStroke,
+                topLeftDp = radiusDp,
+                topRightDp = if (radiusDp > 4) 4 else radiusDp,
+                bottomRightDp = radiusDp,
+                bottomLeftDp = radiusDp
+            )
+            setImageBitmap(bitmap)
+            isClickable = true
+            isFocusable = true
+            contentDescription = "已发送图片，点击全屏预览"
+            setOnClickListener {
+                showFullImageDialog(context, imagePath)
+            }
         }
     }
 
@@ -1307,7 +1429,7 @@ private fun processCardBackground(context: Context): Drawable = StateListDrawabl
     )
 }
 
-private fun showFullImageDialog(context: Context, imagePath: String) {
+internal fun showFullImageDialog(context: Context, imagePath: String) {
     val dialog = android.app.Dialog(context, android.R.style.Theme_Black_NoTitleBar_Fullscreen)
     val container = FrameLayout(context).apply {
         setBackgroundColor(Color.argb(235, 10, 11, 14))

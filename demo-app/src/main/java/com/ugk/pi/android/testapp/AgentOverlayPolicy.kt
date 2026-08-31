@@ -89,7 +89,8 @@ object AgentOverlayPolicy {
 
     /**
      * Returns true while the host activity is in the background and the
-     * system overlay permission has been granted.
+     * system overlay permission has been granted, unless overlay is
+     * suppressed for in-app navigation (e.g. jumping to SettingsActivity).
      *
      * The overlay is intentionally not tied to an active Agent run. An idle
      * capsule is still useful as a cross-app entry point for starting a new
@@ -98,7 +99,8 @@ object AgentOverlayPolicy {
     fun shouldShowOnPause(
         overlayPermissionGranted: Boolean,
         activityResumed: Boolean,
-    ): Boolean = !activityResumed && overlayPermissionGranted
+        inAppNavigating: Boolean = false,
+    ): Boolean = !activityResumed && overlayPermissionGranted && !inAppNavigating
 
     /**
      * Returns true when a running agent needs a non-blocking permission prompt.

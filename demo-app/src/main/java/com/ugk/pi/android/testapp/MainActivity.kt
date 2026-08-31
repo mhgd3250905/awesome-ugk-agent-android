@@ -24,17 +24,23 @@ import android.view.WindowInsetsAnimation
 import android.view.WindowInsetsController
 import android.view.WindowManager
 import android.widget.EditText
+import android.view.ViewGroup
 import android.widget.FrameLayout
 import android.widget.LinearLayout
 import android.widget.ScrollView
+import android.widget.HorizontalScrollView
 import android.widget.TextView
+import androidx.core.view.ViewCompat
+import androidx.core.view.WindowInsetsCompat
+import androidx.core.widget.NestedScrollView
+import com.google.android.material.bottomsheet.BottomSheetBehavior
+import com.google.android.material.bottomsheet.BottomSheetDialog
 import com.ugk.pi.android.AgentEvent
 import com.ugk.pi.android.AgentRuntime
 import com.ugk.pi.android.AgentSession
 import com.ugk.pi.android.AgentToolInterlockErrorCodes
 import android.Manifest
 import android.content.pm.PackageManager
-import android.graphics.BitmapFactory
 import android.graphics.Outline
 import android.graphics.drawable.GradientDrawable
 import android.net.Uri
@@ -100,7 +106,6 @@ class MainActivity : Activity() {
     private lateinit var historyButton: ImageButton
     private lateinit var settingsButton: ImageButton
     private lateinit var composerLayout: LinearLayout
-    private lateinit var composerDividerView: View
     private lateinit var inputShellLayout: LinearLayout
     private lateinit var appBarTitle: TextView
     private lateinit var messageContainer: LinearLayout
@@ -110,10 +115,15 @@ class MainActivity : Activity() {
     private lateinit var sendButton: SendActionButton
     private var pendingImportedFiles: List<DemoImportedFile> = emptyList()
     private var importingFile = false
-    private var pendingImage: ProcessedImage? = null
+    private var pendingImages: List<ProcessedImage> = emptyList()
+    private var processingImages = false
+    private var imageSelectionGeneration = 0L
     private var cameraPhotoFile: File? = null
     private lateinit var pendingImagePreviewContainer: LinearLayout
-    private lateinit var pendingImageView: ImageView
+    private lateinit var pendingImagesNoticeText: TextView
+    private lateinit var pendingImagesListContainer: LinearLayout
+    private lateinit var pendingFilesPreviewContainer: LinearLayout
+    private var suppressOverlayForInAppNavigation = false
     private val fileImportScope = CoroutineScope(SupervisorJob() + Dispatchers.Main.immediate)
     private lateinit var providerLabel: TextView
     private lateinit var runStatusLabel: TextView
@@ -204,12 +214,22 @@ class MainActivity : Activity() {
         if (resultCode != RESULT_OK) return
         when (requestCode) {
             REQUEST_PICK_IMAGE -> {
-                val uri = data?.data ?: return
-                handleSelectedImageUri(uri)
+                val uris = buildList {
+                    val clipData = data?.clipData
+                    if (clipData != null) {
+                        for (i in 0 until clipData.itemCount) {
+                            val itemUri = clipData.getItemAt(i).uri
+                            if (itemUri != null) add(itemUri)
+                        }
+                    } else {
+                        data?.data?.let { add(it) }
+                    }
+                }
+                handleSelectedImageUris(uris)
             }
             REQUEST_TAKE_PHOTO -> {
                 val file = cameraPhotoFile ?: return
-                handleSelectedImageUri(Uri.fromFile(file))
+                handleSelectedImageUris(listOf(Uri.fromFile(file)))
             }
             REQUEST_IMPORT_FILE -> {
                 val uri = data?.data ?: return
@@ -224,6 +244,7 @@ class MainActivity : Activity() {
                             pendingImportedFiles = (pendingImportedFiles + result.file)
                                 .takeLast(MAX_PENDING_IMPORTED_FILES)
                             showInlineNotice("已导入文件：${result.file.displayName}")
+                            updatePendingFilesPreview()
                             updateComposerState()
                         }
 
@@ -249,7 +270,7 @@ class MainActivity : Activity() {
     }
 
     private fun showAttachmentMenu() {
-        if (runState.isBusy || importingFile) return
+        if (runState.isBusy || importingFile || processingImages) return
         val options = arrayOf("拍照", "从相册选择图片", "导入文档/文件")
         AlertDialog.Builder(this, Ui.dialogTheme())
             .setTitle("附件与多模态识图")
@@ -264,16 +285,25 @@ class MainActivity : Activity() {
     }
 
     private fun openGalleryPicker() {
-        if (runState.isBusy || importingFile) return
+        if (runState.isBusy || importingFile || processingImages) return
+        if (pendingImages.size >= MAX_PENDING_IMAGES) {
+            showInlineNotice("最多支持添加 $MAX_PENDING_IMAGES 张图片")
+            return
+        }
         val intent = Intent(Intent.ACTION_GET_CONTENT).apply {
             type = "image/*"
+            putExtra(Intent.EXTRA_ALLOW_MULTIPLE, true)
             addCategory(Intent.CATEGORY_OPENABLE)
         }
         startActivityForResult(intent, REQUEST_PICK_IMAGE)
     }
 
     private fun openCamera() {
-        if (runState.isBusy || importingFile) return
+        if (runState.isBusy || importingFile || processingImages) return
+        if (pendingImages.size >= MAX_PENDING_IMAGES) {
+            showInlineNotice("最多支持添加 $MAX_PENDING_IMAGES 张图片")
+            return
+        }
         if (ContextCompat.checkSelfPermission(this, Manifest.permission.CAMERA) != PackageManager.PERMISSION_GRANTED) {
             ActivityCompat.requestPermissions(this, arrayOf(Manifest.permission.CAMERA), REQUEST_CAMERA_PERMISSION)
             return
@@ -288,25 +318,78 @@ class MainActivity : Activity() {
         startActivityForResult(intent, REQUEST_TAKE_PHOTO)
     }
 
-    private fun handleSelectedImageUri(uri: Uri) {
+    private fun handleSelectedImageUris(uris: List<Uri>) {
+        if (processingImages || runState.isBusy) return
+        if (uris.isEmpty()) return
+        val quotaResult = resolveImageSelectionQuota(pendingImages.size, uris, MAX_PENDING_IMAGES)
+        if (quotaResult.accepted.isEmpty()) {
+            showInlineNotice("最多支持添加 $MAX_PENDING_IMAGES 张图片")
+            return
+        }
+
+        val selectionConversationId = activeConversation.id
+        val selectionGeneration = ++imageSelectionGeneration
+        processingImages = true
+        updateComposerState()
         fileImportScope.launch {
-            val processed = withContext(Dispatchers.IO) {
-                DemoImageUtils.processImageUri(this@MainActivity, uri)
-            }
-            if (processed != null) {
-                pendingImage = processed
-                val bitmap = BitmapFactory.decodeFile(processed.file.absolutePath)
-                if (bitmap != null) {
-                    pendingImageView.setImageBitmap(bitmap)
+            try {
+                val newProcessed = mutableListOf<ProcessedImage>()
+                var failureCount = 0
+                for (uri in quotaResult.accepted) {
+                    val processed = withContext(Dispatchers.IO) {
+                        DemoImageUtils.processImageUri(this@MainActivity, uri)
+                    }
+                    if (processed != null) {
+                        newProcessed.add(processed)
+                    } else {
+                        failureCount++
+                    }
                 }
-                pendingImagePreviewContainer.visibility = View.VISIBLE
-                updateComposerState()
-                showInlineNotice("已选定图片，可直接发送或补充提问")
-            } else {
-                showInlineNotice("无法解析该图片，请重试")
+                if (!canCommitImageSelection(selectionConversationId, selectionGeneration)) {
+                    // Do not attach a stale picker result to a new conversation
+                    // or alter pending images that belong to the current turn.
+                    return@launch
+                }
+                if (newProcessed.isNotEmpty()) {
+                    pendingImages = (pendingImages + newProcessed).take(MAX_PENDING_IMAGES)
+                    updatePendingImagesPreview()
+                    updateComposerState()
+                    if (quotaResult.isOverQuota) {
+                        showInlineNotice("已添加 ${newProcessed.size} 张图片，超出上限（最多 $MAX_PENDING_IMAGES 张）的图片已忽略")
+                    } else if (failureCount > 0) {
+                        showInlineNotice("已添加 ${newProcessed.size} 张图片，有 $failureCount 张图片无法解析")
+                    } else {
+                        showInlineNotice("已选定图片，可直接发送或补充提问")
+                    }
+                } else {
+                    showInlineNotice("无法解析所选图片，请重试")
+                }
+            } finally {
+                if (imageSelectionGeneration == selectionGeneration) {
+                    processingImages = false
+                    updateComposerState()
+                }
             }
         }
     }
+
+    private fun invalidateImageSelection() {
+        imageSelectionGeneration++
+        if (processingImages) {
+            processingImages = false
+            updateComposerState()
+        }
+    }
+
+    private fun canCommitImageSelection(
+        conversationId: String,
+        generation: Long
+    ): Boolean = !isFinishing &&
+        !isDestroyed &&
+        ::activeConversation.isInitialized &&
+        activeConversation.id == conversationId &&
+        imageSelectionGeneration == generation &&
+        processingImages
 
     private fun openFilePicker() {
         if (runState.isBusy || importingFile) return
@@ -330,6 +413,7 @@ class MainActivity : Activity() {
     override fun onResume() {
         super.onResume()
         activityResumed = true
+        suppressOverlayForInAppNavigation = false
         applyTheme()
         refreshRuntime()
         confirmationPresenter.onActivityResumed()
@@ -350,6 +434,7 @@ class MainActivity : Activity() {
         activityResumed = false
         super.onPause()
         showFloatingWindowIfNeeded()
+        suppressOverlayForInAppNavigation = false
         confirmationPresenter.onActivityPaused()
     }
 
@@ -372,6 +457,7 @@ class MainActivity : Activity() {
         }
         conversationRuntime.rememberSession(activeConversation.id, session)
         ThemeManager.removeListener(themeListener)
+        invalidateImageSelection()
         fileImportScope.cancel()
         super.onDestroy()
         if (finishing) hideFloatingWindow()
@@ -387,7 +473,8 @@ class MainActivity : Activity() {
         // active. Without permission, the Activity remains the safe fallback.
         if (AgentOverlayPolicy.shouldShowOnPause(
                 overlayPermissionGranted = Settings.canDrawOverlays(this),
-                activityResumed = false
+                activityResumed = false,
+                inAppNavigating = suppressOverlayForInAppNavigation
             )
         ) {
             floatingWindow.show()
@@ -586,6 +673,8 @@ class MainActivity : Activity() {
             setSingleLine(false)
             maxLines = 5
             minLines = 1
+            minimumHeight = dp(48)
+            includeFontPadding = false
             gravity = Gravity.CENTER_VERTICAL or Gravity.START
             background = null
             setPadding(dp(12), dp(8), dp(8), dp(8))
@@ -693,66 +782,57 @@ class MainActivity : Activity() {
             LinearLayout.LayoutParams.MATCH_PARENT, LinearLayout.LayoutParams.WRAP_CONTENT
         ))
 
-        pendingImageView = ImageView(this).apply {
-            scaleType = ImageView.ScaleType.CENTER_CROP
-            clipToOutline = true
-            outlineProvider = object : ViewOutlineProvider() {
-                override fun getOutline(view: View, outline: Outline) {
-                    outline.setRoundRect(0, 0, view.width, view.height, dp(10).toFloat())
-                }
-            }
-            background = Ui.rounded(this@MainActivity, Ui.SurfaceElevated, 10, Ui.OutlineSubtle, 1)
-        }
-        val removeImageBtn = TextView(this).apply {
-            text = "✕"
-            textSize = 11f
-            gravity = Gravity.CENTER
-            setTextColor(Color.WHITE)
-            background = GradientDrawable().apply {
-                shape = GradientDrawable.OVAL
-                setColor(Color.argb(190, 40, 42, 48))
-            }
-            setOnClickListener {
-                pendingImage = null
-                pendingImagePreviewContainer.visibility = View.GONE
-                updateComposerState()
-            }
-        }
-        val imageBadgeLayout = FrameLayout(this).apply {
-            addView(pendingImageView, FrameLayout.LayoutParams(dp(54), dp(54)))
-            addView(removeImageBtn, FrameLayout.LayoutParams(dp(20), dp(20)).apply {
-                gravity = Gravity.TOP or Gravity.END
-                topMargin = dp(-4)
-                marginEnd = dp(-4)
-            })
-            clipChildren = false
-        }
-        val imageNoticeText = TextView(this).apply {
-            text = "已选定待发送图片（可直接点击发送或输入提问）"
+        pendingImagesNoticeText = TextView(this).apply {
             textSize = 12f
             setTextColor(Ui.TextSecondary)
-            setPadding(dp(10), 0, 0, 0)
+            setPadding(dp(2), 0, dp(2), dp(4))
         }
-        pendingImagePreviewContainer = LinearLayout(this).apply {
+        pendingImagesListContainer = LinearLayout(this).apply {
             orientation = LinearLayout.HORIZONTAL
             gravity = Gravity.CENTER_VERTICAL
             clipChildren = false
+            clipToPadding = false
+        }
+        val pendingImagesScrollView = HorizontalScrollView(this).apply {
+            isFillViewport = false
+            isHorizontalScrollBarEnabled = false
+            clipChildren = false
+            clipToPadding = false
+            addView(pendingImagesListContainer, ViewGroup.LayoutParams(
+                ViewGroup.LayoutParams.WRAP_CONTENT,
+                ViewGroup.LayoutParams.WRAP_CONTENT
+            ))
+        }
+        pendingImagePreviewContainer = LinearLayout(this).apply {
+            orientation = LinearLayout.VERTICAL
+            clipChildren = false
             visibility = View.GONE
             setPadding(dp(4), dp(2), dp(4), dp(6))
-            addView(imageBadgeLayout)
-            addView(imageNoticeText)
+            addView(pendingImagesNoticeText, LinearLayout.LayoutParams(
+                LinearLayout.LayoutParams.MATCH_PARENT,
+                LinearLayout.LayoutParams.WRAP_CONTENT
+            ))
+            addView(pendingImagesScrollView, LinearLayout.LayoutParams(
+                LinearLayout.LayoutParams.MATCH_PARENT,
+                LinearLayout.LayoutParams.WRAP_CONTENT
+            ))
+        }
+
+        pendingFilesPreviewContainer = LinearLayout(this).apply {
+            orientation = LinearLayout.VERTICAL
+            visibility = View.GONE
+            setPadding(0, 0, 0, dp(2))
         }
 
         composerLayout = LinearLayout(this).apply {
             orientation = LinearLayout.VERTICAL
             setPadding(dp(12), dp(6), dp(12), dp(8))
             background = Ui.rounded(this@MainActivity, Ui.SurfaceSubtle, 0)
-            composerDividerView = View(this@MainActivity).apply { setBackgroundColor(Ui.Divider) }
-            addView(composerDividerView, LinearLayout.LayoutParams(
-                LinearLayout.LayoutParams.MATCH_PARENT,
-                dp(1)
-            ))
             addView(pendingImagePreviewContainer, LinearLayout.LayoutParams(
+                LinearLayout.LayoutParams.MATCH_PARENT,
+                LinearLayout.LayoutParams.WRAP_CONTENT
+            ))
+            addView(pendingFilesPreviewContainer, LinearLayout.LayoutParams(
                 LinearLayout.LayoutParams.MATCH_PARENT,
                 LinearLayout.LayoutParams.WRAP_CONTENT
             ))
@@ -788,7 +868,6 @@ class MainActivity : Activity() {
         appBarTitle.setTextColor(Ui.TextPrimary)
         providerLabel.setTextColor(Ui.TextSecondary)
         composerLayout.background = Ui.rounded(this, Ui.SurfaceSubtle, 0)
-        composerDividerView.setBackgroundColor(Ui.Divider)
         inputShellLayout.background = Ui.rounded(
             this,
             Ui.SurfaceElevated,
@@ -848,6 +927,7 @@ class MainActivity : Activity() {
             importButton.invalidate()
         }
 
+        updatePendingFilesPreview()
         updateContextUsageIndicator()
 
         updateAppBar()
@@ -928,6 +1008,8 @@ class MainActivity : Activity() {
     )
 
     private fun openSettings() {
+        hideFloatingWindow()
+        suppressOverlayForInAppNavigation = true
         startActivity(Intent(this, SettingsActivity::class.java))
     }
 
@@ -999,21 +1081,27 @@ class MainActivity : Activity() {
             stopAgent()
             return
         }
+        if (processingImages) {
+            showInlineNotice("正在处理图片，请稍候...")
+            return
+        }
         val text = inputField.text.toString().trim()
         val attachments = pendingImportedFiles.toList()
-        val image = pendingImage
-        if (text.isBlank() && attachments.isEmpty() && image == null) return
+        val images = pendingImages.toList()
+        if (text.isBlank() && attachments.isEmpty() && images.isEmpty()) return
         if (runCoordinator.isRunning()) {
-            val effectiveText = if (text.isBlank() && image != null) "请分析并识别这张图片" else text
-            val queuedMessage = buildAgentMessage(effectiveText, attachments)
+            if (images.isNotEmpty()) {
+                showInlineNotice("当前任务正在运行中，图片消息暂不支持排队，请稍后发送")
+                return
+            }
+            val queuedMessage = buildAgentMessage(text, attachments)
             if (runCoordinator.enqueue(queuedMessage)) {
                 inputField.setText("")
                 conversationRuntime.draft = ""
                 pendingImportedFiles = emptyList()
-                pendingImage = null
-                pendingImagePreviewContainer.visibility = View.GONE
+                updatePendingFilesPreview()
                 updateCapabilityBanner()
-                floatingWindow.addLog("已排队：${effectiveText.take(48)}")
+                floatingWindow.addLog("已排队：${queuedMessage.take(48)}")
                 renderRunState()
             } else {
                 showInlineNotice("消息队列已满，请稍后再试")
@@ -1026,13 +1114,87 @@ class MainActivity : Activity() {
         if (apiStore.activeConfig() != null) {
             maybeOfferOverlayPermission()
         }
-        if (runAgent(text, attachments, image)) {
+        if (runAgent(text, attachments, images)) {
             conversationRuntime.draft = ""
             inputField.setText("")
             pendingImportedFiles = emptyList()
-            pendingImage = null
-            pendingImagePreviewContainer.visibility = View.GONE
+            pendingImages = emptyList()
+            updatePendingImagesPreview()
+            updatePendingFilesPreview()
             updateCapabilityBanner()
+        }
+    }
+
+    private fun removePendingImage(image: ProcessedImage) {
+        pendingImages = pendingImages.filterNot { it === image || it.file.absolutePath == image.file.absolutePath }
+        updatePendingImagesPreview()
+        updateComposerState()
+    }
+
+    private fun updatePendingImagesPreview() {
+        if (!::pendingImagePreviewContainer.isInitialized) return
+        if (pendingImages.isEmpty()) {
+            pendingImagePreviewContainer.visibility = View.GONE
+            pendingImagesListContainer.removeAllViews()
+            return
+        }
+        pendingImagePreviewContainer.visibility = View.VISIBLE
+        pendingImagesNoticeText.text = "已选 ${pendingImages.size}/$MAX_PENDING_IMAGES 张图片（需当前模型支持视觉输入）"
+        pendingImagesListContainer.removeAllViews()
+
+        pendingImages.forEach { image ->
+            val itemLayout = FrameLayout(this).apply {
+                clipChildren = false
+            }
+            val thumbnail = ImageView(this).apply {
+                scaleType = ImageView.ScaleType.CENTER_CROP
+                clipToOutline = true
+                outlineProvider = object : ViewOutlineProvider() {
+                    override fun getOutline(view: View, outline: Outline) {
+                        outline.setRoundRect(0, 0, view.width, view.height, dp(8).toFloat())
+                    }
+                }
+                background = Ui.rounded(this@MainActivity, Ui.SurfaceElevated, 8, Ui.OutlineSubtle, 1)
+                val bitmap = decodeSampledBitmap(image.file, targetMaxSidePx = 256)
+                if (bitmap != null) {
+                    setImageBitmap(bitmap)
+                }
+                isClickable = true
+                isFocusable = true
+                contentDescription = "待发送图片缩略图，点击全屏预览"
+                setOnClickListener {
+                    showFullImageDialog(this@MainActivity, image.file.absolutePath)
+                }
+            }
+            val removeBtn = TextView(this).apply {
+                text = "✕"
+                textSize = 10f
+                gravity = Gravity.CENTER
+                setTextColor(Color.WHITE)
+                background = GradientDrawable().apply {
+                    shape = GradientDrawable.OVAL
+                    setColor(Color.argb(200, 30, 32, 36))
+                }
+                isClickable = true
+                isFocusable = true
+                contentDescription = "删除该图片"
+                setOnClickListener {
+                    removePendingImage(image)
+                }
+            }
+            itemLayout.addView(thumbnail, FrameLayout.LayoutParams(dp(54), dp(54)))
+            itemLayout.addView(removeBtn, FrameLayout.LayoutParams(dp(18), dp(18)).apply {
+                gravity = Gravity.TOP or Gravity.END
+                topMargin = dp(3)
+                marginEnd = dp(3)
+            })
+
+            pendingImagesListContainer.addView(itemLayout, LinearLayout.LayoutParams(
+                dp(54),
+                dp(54)
+            ).apply {
+                marginEnd = dp(8)
+            })
         }
     }
 
@@ -1113,11 +1275,15 @@ class MainActivity : Activity() {
     private fun runAgent(
         text: String,
         attachments: List<DemoImportedFile> = emptyList(),
-        image: ProcessedImage? = null
+        images: List<ProcessedImage> = emptyList()
     ): Boolean {
         if (runState.isBusy || runCoordinator.isRunning()) return false
         val currentRuntime = conversationRuntime.agentRuntime ?: return false
-        val effectiveText = if (text.isBlank() && image != null) "请分析并识别这张图片" else text
+        val effectiveText = if (text.isBlank() && images.isNotEmpty()) {
+            resolveDefaultImagePromptText(images.size)
+        } else {
+            text
+        }
         val message = buildAgentMessage(effectiveText, attachments)
         if (message.isBlank()) return false
 
@@ -1126,17 +1292,20 @@ class MainActivity : Activity() {
         var titleUpdate: String? = null
         if (activeConversation.title == "新对话") {
             val titleSeed = when {
-                effectiveText.isNotBlank() && effectiveText != "请分析并识别这张图片" -> effectiveText.trim()
-                image != null -> "图片识别分析"
+                effectiveText.isNotBlank() &&
+                    effectiveText != "请分析并识别这张图片" &&
+                    effectiveText != "请分析并识别这些图片" -> effectiveText.trim()
+                images.isNotEmpty() -> "图片识别分析"
                 else -> attachments.firstOrNull()?.displayName.orEmpty()
             }
             titleUpdate = conversationStore.suggestedTitle(titleSeed)
         }
         val isFirstMessage = activeConversation.messages.none { it.role == "user" || it.role == "assistant" }
+        val imagePaths = images.map { it.file.absolutePath }
         val userMessage = DemoStoredMessage(
             role = "user",
             content = message,
-            imagePath = image?.file?.absolutePath
+            imagePaths = imagePaths
         )
         // Append atomically instead of saving this Activity's snapshot: a
         // background scheduled run may have appended messages this screen has
@@ -1165,7 +1334,7 @@ class MainActivity : Activity() {
         if (isFirstMessage) {
             messageContainer.removeAllViews()
         }
-        addChatMessage(DemoChatMessageRole.USER, message, image?.file?.absolutePath)
+        addChatMessage(DemoChatMessageRole.USER, message, imagePaths)
         addProcessCard()
         conversationRuntime.activeConversationId = activeConversation.id
 
@@ -1179,10 +1348,8 @@ class MainActivity : Activity() {
             sessionId = session.id
         )
 
-        val imageContents = if (image != null) {
-            listOf(AgentImageContent(image.base64Data, image.mimeType))
-        } else {
-            emptyList()
+        val imageContents = images.map {
+            AgentImageContent(it.base64Data, it.mimeType)
         }
 
         runCoordinator.start(
@@ -1395,10 +1562,10 @@ class MainActivity : Activity() {
     private fun addChatMessage(
         role: DemoChatMessageRole,
         text: String,
-        imagePath: String? = null
+        imagePaths: List<String> = emptyList()
     ): DemoChatMessageView {
         val view = DemoChatMessageView(this).apply {
-            bind(role, text, imagePath)
+            bind(role, text, imagePaths)
         }
         messageContainer.addView(view, LinearLayout.LayoutParams(
             LinearLayout.LayoutParams.MATCH_PARENT,
@@ -1411,6 +1578,16 @@ class MainActivity : Activity() {
         scrollToEnd()
         return view
     }
+
+    private fun addChatMessage(
+        role: DemoChatMessageRole,
+        text: String,
+        imagePath: String?
+    ): DemoChatMessageView = addChatMessage(
+        role,
+        text,
+        if (imagePath.isNullOrBlank()) emptyList() else listOf(imagePath)
+    )
 
     private fun trimVisibleChatMessages() {
         val messageViews = (0 until messageContainer.childCount)
@@ -1550,22 +1727,25 @@ class MainActivity : Activity() {
     }
 
     private fun updateComposerState() {
+        if (::historyButton.isInitialized) {
+            historyButton.isEnabled = !processingImages
+            historyButton.alpha = if (processingImages) 0.45f else 1f
+        }
         if (!::sendButton.isInitialized) return
         val busy = runState.isBusy
-        inputField.isEnabled = !busy
+        inputField.isEnabled = !busy && !processingImages
         val hasText = !inputField.text.isNullOrBlank()
         val hasAttachments = pendingImportedFiles.isNotEmpty()
-        val hasImage = pendingImage != null
-        val actionable = busy || hasText || hasAttachments || hasImage
+        val hasImages = pendingImages.isNotEmpty()
+        val actionable = (busy || hasText || hasAttachments || hasImages) && !processingImages
         if (::importButton.isInitialized) {
-            importButton.isEnabled = !busy && !importingFile
-            importButton.alpha = if (busy || importingFile) 0.45f else 1f
-            importButton.hasAttachments = hasAttachments || hasImage
+            importButton.isEnabled = !busy && !importingFile && !processingImages
+            importButton.alpha = if (busy || importingFile || processingImages) 0.45f else 1f
+            importButton.hasAttachments = hasAttachments || hasImages
         }
         if (::contextHintRightText.isInitialized) {
             when {
-                hasAttachments -> contextHintRightText.text = "附件：" + pendingImportedFiles.joinToString("、") { it.displayName }
-                hasImage -> contextHintRightText.text = "已选图片"
+                hasImages -> contextHintRightText.text = "已选 ${pendingImages.size} 图"
                 else -> contextHintRightText.text = "点击调整"
             }
         }
@@ -1575,10 +1755,84 @@ class MainActivity : Activity() {
         )
         sendButton.buttonState = when {
             busy -> SendActionButton.State.BUSY
-            hasText || hasAttachments || hasImage -> SendActionButton.State.ACTIVE
+            actionable -> SendActionButton.State.ACTIVE
             else -> SendActionButton.State.DISABLED
         }
         sendButton.isEnabled = actionable
+    }
+
+    private fun removePendingFile(file: DemoImportedFile) {
+        val updatedFiles = pendingImportedFiles.filterNot { it.relativePath == file.relativePath }
+        if (updatedFiles.size == pendingImportedFiles.size) return
+        pendingImportedFiles = updatedFiles
+        showInlineNotice("已移除附件：${file.displayName}")
+        updatePendingFilesPreview()
+        updateComposerState()
+    }
+
+    private fun updatePendingFilesPreview() {
+        if (!::pendingFilesPreviewContainer.isInitialized) return
+        pendingFilesPreviewContainer.removeAllViews()
+        if (pendingImportedFiles.isEmpty()) {
+            pendingFilesPreviewContainer.visibility = View.GONE
+            return
+        }
+        pendingFilesPreviewContainer.visibility = View.VISIBLE
+        pendingImportedFiles.forEach { file ->
+            pendingFilesPreviewContainer.addView(
+                buildPendingFileCard(file),
+                LinearLayout.LayoutParams(
+                    LinearLayout.LayoutParams.MATCH_PARENT,
+                    LinearLayout.LayoutParams.WRAP_CONTENT
+                ).apply {
+                    bottomMargin = dp(4)
+                }
+            )
+        }
+    }
+
+    private fun buildPendingFileCard(file: DemoImportedFile): View {
+        val card = LinearLayout(this).apply {
+            orientation = LinearLayout.HORIZONTAL
+            gravity = Gravity.CENTER_VERTICAL
+            background = Ui.rounded(this@MainActivity, Ui.SurfaceElevated, 10, Ui.OutlineSubtle, 1)
+            setPadding(dp(10), dp(2), dp(4), dp(2))
+        }
+        val fileInfoText = TextView(this).apply {
+            text = "${file.displayName} (${formatFileSize(file.sizeBytes)})"
+            textSize = 13f
+            setTextColor(Ui.TextPrimary)
+            isSingleLine = true
+            maxLines = 1
+            ellipsize = android.text.TextUtils.TruncateAt.END
+            setPadding(0, 0, dp(6), 0)
+        }
+        val removeButton = TextView(this).apply {
+            text = "移除"
+            textSize = 13f
+            setTypeface(null, Typeface.BOLD)
+            setTextColor(Ui.TextSecondary)
+            gravity = Gravity.CENTER
+            minimumWidth = dp(48)
+            minimumHeight = dp(48)
+            contentDescription = "移除附件 ${file.displayName}"
+            background = Ui.clickableRounded(this@MainActivity, Color.TRANSPARENT, Ui.SurfaceSoft, 8)
+            isClickable = true
+            isFocusable = true
+            setOnClickListener { removePendingFile(file) }
+        }
+        card.addView(fileInfoText, LinearLayout.LayoutParams(0, LinearLayout.LayoutParams.WRAP_CONTENT, 1f))
+        card.addView(removeButton, LinearLayout.LayoutParams(LinearLayout.LayoutParams.WRAP_CONTENT, dp(48)))
+        return card
+    }
+
+    private fun formatFileSize(sizeBytes: Long): String {
+        if (sizeBytes < 0) return "0 B"
+        if (sizeBytes < 1024) return "$sizeBytes B"
+        val kb = sizeBytes / 1024.0
+        if (kb < 1024) return String.format(java.util.Locale.US, "%.1f KB", kb)
+        val mb = kb / 1024.0
+        return String.format(java.util.Locale.US, "%.1f MB", mb)
     }
 
     /**
@@ -1669,7 +1923,7 @@ class MainActivity : Activity() {
             val hasProcess = runState.isBusy || runState.steps.isNotEmpty()
             activeConversation.messages.forEachIndexed { index, message ->
                 when (message.role) {
-                    "user" -> addChatMessage(DemoChatMessageRole.USER, message.content, message.imagePath)
+                    "user" -> addChatMessage(DemoChatMessageRole.USER, message.content, message.imagePaths)
                     "assistant" -> addChatMessage(DemoChatMessageRole.ASSISTANT, message.content)
                 }
                 if (hasProcess && index == processIndex) addProcessCard()
@@ -1868,8 +2122,15 @@ class MainActivity : Activity() {
     }
 
     private fun selectConversation(id: String) {
-        if (runState.isBusy || runCoordinator.isRunning()) stopAgent()
+        if (processingImages) {
+            showInlineNotice("正在处理图片，请稍候...")
+            return
+        }
         val conversation = conversationStore.get(id) ?: return
+        if (!::activeConversation.isInitialized || conversation.id != activeConversation.id) {
+            invalidateImageSelection()
+        }
+        if (runState.isBusy || runCoordinator.isRunning()) stopAgent()
         activeConversation = conversation
         conversationStore.setActive(conversation.id)
         conversationRuntime.activeConversationId = conversation.id
@@ -1886,6 +2147,11 @@ class MainActivity : Activity() {
     }
 
     private fun createNewConversation() {
+        if (processingImages) {
+            showInlineNotice("正在处理图片，请稍候...")
+            return
+        }
+        invalidateImageSelection()
         if (runState.isBusy || runCoordinator.isRunning()) stopAgent()
         val conversation = conversationStore.create()
         activeConversation = conversation
@@ -1900,11 +2166,63 @@ class MainActivity : Activity() {
     }
 
     private fun showConversationHistory() {
+        if (processingImages) {
+            showInlineNotice("正在处理图片，请稍候...")
+            return
+        }
+        if (isFinishing || isDestroyed) return
+        val dialog = BottomSheetDialog(this)
+        val targetHeight = (resources.displayMetrics.heightPixels * 0.78f).toInt()
+
         val root = LinearLayout(this).apply {
             orientation = LinearLayout.VERTICAL
-            setPadding(dp(18), dp(12), dp(18), dp(8))
-            background = Ui.rounded(this@MainActivity, Ui.Surface, 18)
+            background = Ui.asymmetricRounded(this@MainActivity, Ui.Surface, 20, 20, 0, 0)
         }
+
+        val dragHandle = View(this).apply {
+            background = Ui.rounded(this@MainActivity, Ui.OutlineSubtle, 2)
+            importantForAccessibility = View.IMPORTANT_FOR_ACCESSIBILITY_NO
+        }
+        root.addView(dragHandle, LinearLayout.LayoutParams(dp(36), dp(4)).apply {
+            gravity = Gravity.CENTER_HORIZONTAL
+            topMargin = dp(10)
+            bottomMargin = dp(6)
+        })
+
+        val headerRow = LinearLayout(this).apply {
+            orientation = LinearLayout.HORIZONTAL
+            gravity = Gravity.CENTER_VERTICAL
+            setPadding(dp(20), dp(4), dp(16), dp(10))
+        }
+        val titleView = TextView(this).apply {
+            text = "会话历史"
+            textSize = 17f
+            setTypeface(Typeface.create("sans-serif-medium", Typeface.NORMAL))
+            setTextColor(Ui.TextPrimary)
+        }
+        val closeButton = TextView(this).apply {
+            text = "关闭"
+            textSize = 15f
+            setTypeface(Typeface.create("sans-serif-medium", Typeface.NORMAL))
+            setTextColor(Ui.TextSecondary)
+            gravity = Gravity.CENTER
+            setPadding(dp(12), dp(6), dp(12), dp(6))
+            background = Ui.clickableRounded(this@MainActivity, Color.TRANSPARENT, Ui.SurfaceSoft, 8)
+            isClickable = true
+            isFocusable = true
+            contentDescription = "关闭"
+            setOnClickListener { dialog.dismiss() }
+        }
+        headerRow.addView(titleView, LinearLayout.LayoutParams(0, LinearLayout.LayoutParams.WRAP_CONTENT, 1f))
+        headerRow.addView(closeButton, LinearLayout.LayoutParams(
+            LinearLayout.LayoutParams.WRAP_CONTENT,
+            LinearLayout.LayoutParams.WRAP_CONTENT
+        ))
+        root.addView(headerRow, LinearLayout.LayoutParams(
+            LinearLayout.LayoutParams.MATCH_PARENT,
+            LinearLayout.LayoutParams.WRAP_CONTENT
+        ))
+
         val newButton = TextView(this).apply {
             text = "+ 新建会话"
             textSize = 14.5f
@@ -1915,24 +2233,45 @@ class MainActivity : Activity() {
             background = Ui.clickableRounded(this@MainActivity, Ui.PrimaryContainer, Ui.SurfaceSubtle, 12, Ui.OutlineFocus)
             isClickable = true
             isFocusable = true
-        }
-        val listContainer = LinearLayout(this).apply {
-            orientation = LinearLayout.VERTICAL
-            setPadding(0, dp(10), 0, 0)
-        }
-        val listScroll = ScrollView(this).apply {
-            addView(listContainer)
+            contentDescription = "新建会话"
+            setOnClickListener {
+                createNewConversation()
+                dialog.dismiss()
+            }
         }
         root.addView(newButton, LinearLayout.LayoutParams(
             LinearLayout.LayoutParams.MATCH_PARENT,
             LinearLayout.LayoutParams.WRAP_CONTENT
-        ))
+        ).apply {
+            leftMargin = dp(20)
+            rightMargin = dp(20)
+            bottomMargin = dp(10)
+        })
+
+        val listContainer = LinearLayout(this).apply {
+            orientation = LinearLayout.VERTICAL
+        }
+        val listScroll = NestedScrollView(this).apply {
+            isFillViewport = true
+            clipToPadding = false
+            setPadding(dp(20), 0, dp(20), dp(16))
+            addView(listContainer, ViewGroup.LayoutParams(
+                ViewGroup.LayoutParams.MATCH_PARENT,
+                ViewGroup.LayoutParams.WRAP_CONTENT
+            ))
+        }
         root.addView(listScroll, LinearLayout.LayoutParams(
             LinearLayout.LayoutParams.MATCH_PARENT,
-            dp(400)
+            0,
+            1f
         ))
 
-        lateinit var dialog: AlertDialog
+        ViewCompat.setOnApplyWindowInsetsListener(root) { _, insets ->
+            val navBarInsets = insets.getInsets(WindowInsetsCompat.Type.navigationBars())
+            listScroll.setPadding(dp(20), 0, dp(20), dp(16) + navBarInsets.bottom)
+            insets
+        }
+
         fun populate() {
             listContainer.removeAllViews()
             conversationStore.list().forEach { conversation ->
@@ -1943,10 +2282,10 @@ class MainActivity : Activity() {
                     setPadding(dp(14), dp(10), dp(8), dp(10))
                     background = Ui.clickableRounded(
                         this@MainActivity,
-                         if (isActive) Ui.PrimaryContainer else Ui.SurfaceElevated,
-                         Ui.SurfaceSubtle,
-                         12,
-                         if (isActive) Ui.FocusRing else Ui.OutlineSubtle
+                        if (isActive) Ui.PrimaryContainer else Ui.SurfaceElevated,
+                        Ui.SurfaceSubtle,
+                        12,
+                        if (isActive) Ui.FocusRing else Ui.OutlineSubtle
                     )
                     isClickable = true
                     isFocusable = true
@@ -2000,17 +2339,27 @@ class MainActivity : Activity() {
                 ).apply { bottomMargin = dp(8) })
             }
         }
-        newButton.setOnClickListener {
-            createNewConversation()
-            dialog.dismiss()
-        }
-        dialog = AlertDialog.Builder(this, Ui.dialogTheme())
-            .setTitle("会话历史")
-            .setView(root)
-            .setNegativeButton("关闭", null)
-            .create()
+
+        dialog.setContentView(root, ViewGroup.LayoutParams(
+            ViewGroup.LayoutParams.MATCH_PARENT,
+            targetHeight
+        ))
+
         dialog.setOnShowListener {
-            dialog.getButton(AlertDialog.BUTTON_NEGATIVE)?.setTextColor(Ui.TextSecondary)
+            val bottomSheet = dialog.findViewById<FrameLayout>(com.google.android.material.R.id.design_bottom_sheet)
+            if (bottomSheet != null) {
+                bottomSheet.setBackgroundColor(Color.TRANSPARENT)
+                val behavior = BottomSheetBehavior.from(bottomSheet)
+                behavior.peekHeight = targetHeight
+                behavior.maxHeight = targetHeight
+                behavior.state = BottomSheetBehavior.STATE_EXPANDED
+                behavior.skipCollapsed = true
+                behavior.isHideable = true
+                behavior.isDraggable = true
+                val layoutParams = bottomSheet.layoutParams
+                layoutParams.height = targetHeight
+                bottomSheet.layoutParams = layoutParams
+            }
             populate()
         }
         dialog.show()
@@ -2089,10 +2438,12 @@ class MainActivity : Activity() {
 }
 
 internal fun shouldShowFloatingWindowOnPause(
-    overlayPermissionGranted: Boolean
+    overlayPermissionGranted: Boolean,
+    inAppNavigating: Boolean = false,
 ): Boolean = AgentOverlayPolicy.shouldShowOnPause(
     overlayPermissionGranted = overlayPermissionGranted,
-    activityResumed = false
+    activityResumed = false,
+    inAppNavigating = inAppNavigating,
 )
 
 private class SendActionButton(context: android.content.Context) : View(context) {

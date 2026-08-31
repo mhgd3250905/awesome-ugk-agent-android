@@ -1,8 +1,16 @@
 package com.ugk.pi.android.testapp
 
 import android.content.Context
-import org.json.JSONArray
-import org.json.JSONObject
+import kotlinx.serialization.json.Json
+import kotlinx.serialization.json.JsonArray
+import kotlinx.serialization.json.JsonElement
+import kotlinx.serialization.json.JsonObject
+import kotlinx.serialization.json.JsonPrimitive
+import kotlinx.serialization.json.buildJsonArray
+import kotlinx.serialization.json.buildJsonObject
+import kotlinx.serialization.json.contentOrNull
+import kotlinx.serialization.json.put
+import kotlinx.serialization.json.putJsonArray
 import java.util.concurrent.Executors
 import java.util.concurrent.ExecutionException
 import java.util.UUID
@@ -11,8 +19,23 @@ data class DemoStoredMessage(
     val role: String,
     val content: String,
     val createdAt: Long = System.currentTimeMillis(),
-    val imagePath: String? = null
-)
+    val imagePaths: List<String> = emptyList()
+) {
+    val imagePath: String?
+        get() = imagePaths.firstOrNull()
+
+    constructor(
+        role: String,
+        content: String,
+        createdAt: Long = System.currentTimeMillis(),
+        imagePath: String?
+    ) : this(
+        role = role,
+        content = content,
+        createdAt = createdAt,
+        imagePaths = if (imagePath.isNullOrBlank()) emptyList() else listOf(imagePath)
+    )
+}
 
 enum class DemoMessageRole {
     USER,
@@ -43,6 +66,7 @@ internal fun keepNewestDemoConversations(
 // helpers are unit-testable against the exact production semantics.
 internal const val MAX_CONVERSATIONS = 30
 internal const val MAX_MESSAGES = 100
+internal const val MAX_STORED_IMAGES_PER_MESSAGE = 4
 // Keep ordinary long answers intact across Activity recreation while still
 // protecting SharedPreferences from an accidental giant dump.
 internal const val MAX_MESSAGE_CHARS = 64_000
@@ -55,11 +79,23 @@ internal fun normalizeStoredTitle(value: String): String = value.trim()
     .take(MAX_TITLE_CHARS)
     .ifBlank { DEFAULT_TITLE }
 
+internal fun normalizeStoredMessage(message: DemoStoredMessage): DemoStoredMessage {
+    val cleanPaths = message.imagePaths
+        .map { it.trim() }
+        .filter { it.isNotBlank() }
+        .take(MAX_STORED_IMAGES_PER_MESSAGE)
+    return message.copy(
+        role = message.role.trim(),
+        content = message.content.take(MAX_MESSAGE_CHARS),
+        imagePaths = cleanPaths
+    )
+}
+
 internal fun normalizeStoredConversation(conversation: DemoConversation): DemoConversation {
     val messages = conversation.messages
-        .filter { it.role in ALLOWED_ROLES && (it.content.isNotBlank() || !it.imagePath.isNullOrBlank()) }
+        .filter { it.role in ALLOWED_ROLES && (it.content.isNotBlank() || it.imagePaths.any { path -> path.isNotBlank() }) }
         .takeLast(MAX_MESSAGES)
-        .map { it.copy(content = it.content.take(MAX_MESSAGE_CHARS), imagePath = it.imagePath) }
+        .map { normalizeStoredMessage(it) }
         .toMutableList()
     return conversation.copy(
         title = normalizeStoredTitle(conversation.title),
@@ -276,46 +312,8 @@ class DemoConversationStore(context: Context) {
         }
     }
 
-    private fun readAllFromPreferences(): List<DemoConversation> {
-        val raw = prefs.getString(KEY_CONVERSATIONS, null).orEmpty()
-        if (raw.isBlank()) return emptyList()
-        return runCatching {
-            val root = JSONArray(raw)
-            buildList {
-                for (index in 0 until root.length()) {
-                    val item = root.optJSONObject(index) ?: continue
-                    val id = item.optString("id").trim()
-                    if (id.isBlank()) continue
-                    val messages = mutableListOf<DemoStoredMessage>()
-                    val encodedMessages = item.optJSONArray("messages") ?: JSONArray()
-                    for (messageIndex in 0 until encodedMessages.length()) {
-                        val encoded = encodedMessages.optJSONObject(messageIndex) ?: continue
-                        val role = encoded.optString("role").trim()
-                        val content = encoded.optString("content")
-                        val imagePath = encoded.optString("imagePath").takeIf { it.isNotBlank() }
-                        if (role !in ALLOWED_ROLES || (content.isBlank() && imagePath.isNullOrBlank())) continue
-                        messages += DemoStoredMessage(
-                            role = role,
-                            content = content.take(MAX_MESSAGE_CHARS),
-                            createdAt = encoded.optLong("createdAt", System.currentTimeMillis()),
-                            imagePath = imagePath
-                        )
-                    }
-                    add(
-                        normalizeStoredConversation(
-                            DemoConversation(
-                                id = id,
-                                title = item.optString("title", DEFAULT_TITLE),
-                                createdAt = item.optLong("createdAt", System.currentTimeMillis()),
-                                updatedAt = item.optLong("updatedAt", System.currentTimeMillis()),
-                                messages = messages
-                            )
-                        )
-                    )
-                }
-            }
-        }.getOrElse { emptyList() }
-    }
+    private fun readAllFromPreferences(): List<DemoConversation> =
+        decodeStoredConversations(prefs.getString(KEY_CONVERSATIONS, null).orEmpty())
 
     private fun writeAll(conversations: List<DemoConversation>) {
         val snapshot = conversations
@@ -351,30 +349,8 @@ class DemoConversationStore(context: Context) {
         }
     }
 
-    private fun encode(conversations: List<DemoConversation>): String {
-        val root = JSONArray()
-        conversations.forEach { conversation ->
-            val item = JSONObject()
-                .put("id", conversation.id)
-                .put("title", normalizeStoredTitle(conversation.title))
-                .put("createdAt", conversation.createdAt)
-                .put("updatedAt", conversation.updatedAt)
-            val messages = JSONArray()
-            conversation.messages.takeLast(MAX_MESSAGES).forEach { message ->
-                val msgObj = JSONObject()
-                    .put("role", message.role)
-                    .put("content", message.content.take(MAX_MESSAGE_CHARS))
-                    .put("createdAt", message.createdAt)
-                if (!message.imagePath.isNullOrBlank()) {
-                    msgObj.put("imagePath", message.imagePath)
-                }
-                messages.put(msgObj)
-            }
-            item.put("messages", messages)
-            root.put(item)
-        }
-        return root.toString()
-    }
+    private fun encode(conversations: List<DemoConversation>): String =
+        encodeStoredConversations(conversations)
 
     private fun copyConversation(conversation: DemoConversation): DemoConversation =
         conversation.copy(messages = conversation.messages.map { it.copy() }.toMutableList())
@@ -384,4 +360,128 @@ class DemoConversationStore(context: Context) {
         const val KEY_CONVERSATIONS = "conversations"
         const val KEY_ACTIVE_ID = "active_id"
     }
+}
+
+internal fun encodeStoredConversations(conversations: List<DemoConversation>): String {
+    val array = buildJsonArray {
+        conversations.forEach { conversation ->
+            add(
+                buildJsonObject {
+                    put("id", conversation.id)
+                    put("title", normalizeStoredTitle(conversation.title))
+                    put("createdAt", conversation.createdAt)
+                    put("updatedAt", conversation.updatedAt)
+                    putJsonArray("messages") {
+                        conversation.messages.takeLast(MAX_MESSAGES).forEach { message ->
+                            add(
+                                buildJsonObject {
+                                    put("role", message.role)
+                                    put("content", message.content.take(MAX_MESSAGE_CHARS))
+                                    put("createdAt", message.createdAt)
+                                    val cleanPaths = message.imagePaths
+                                        .map { it.trim() }
+                                        .filter { it.isNotBlank() }
+                                        .take(MAX_STORED_IMAGES_PER_MESSAGE)
+                                    if (cleanPaths.isNotEmpty()) {
+                                        putJsonArray("imagePaths") {
+                                            cleanPaths.forEach { add(JsonPrimitive(it)) }
+                                        }
+                                    }
+                                }
+                            )
+                        }
+                    }
+                }
+            )
+        }
+    }
+    return array.toString()
+}
+
+internal fun decodeStoredConversations(raw: String): List<DemoConversation> {
+    if (raw.isBlank()) return emptyList()
+    val root = runCatching { Json.parseToJsonElement(raw) as? JsonArray }.getOrNull()
+        ?: return emptyList()
+
+    return buildList {
+        // A malformed record is isolated to that record. One bad element must
+        // not discard otherwise valid conversations in the same preference.
+        for (element in root) {
+            val conversation = runCatching { decodeStoredConversation(element) }.getOrNull()
+            if (conversation != null) add(conversation)
+        }
+    }
+}
+
+private fun JsonElement?.storedStringOrNull(): String? {
+    val primitive = this as? JsonPrimitive ?: return null
+    if (!primitive.isString) return null
+    return primitive.contentOrNull
+}
+
+private fun JsonElement?.storedLongOrNull(): Long? {
+    val primitive = this as? JsonPrimitive ?: return null
+    return primitive.contentOrNull?.toLongOrNull()
+}
+
+private fun decodeStoredConversation(element: JsonElement): DemoConversation? {
+    val item = element as? JsonObject ?: return null
+    // id is the only required conversation field; wrong JSON types are not
+    // coerced into an id because that could merge unrelated records.
+    val id = item["id"].storedStringOrNull()?.trim().orEmpty()
+    if (id.isBlank()) return null
+
+    val now = System.currentTimeMillis()
+    val messages = mutableListOf<DemoStoredMessage>()
+    val encodedMessages = item["messages"] as? JsonArray
+    if (encodedMessages != null) {
+        for (messageElement in encodedMessages) {
+            val message = runCatching { decodeStoredMessage(messageElement) }.getOrNull()
+            if (message != null) messages += message
+        }
+    }
+
+    return normalizeStoredConversation(
+        DemoConversation(
+            id = id,
+            title = item["title"].storedStringOrNull() ?: DEFAULT_TITLE,
+            createdAt = item["createdAt"].storedLongOrNull() ?: now,
+            updatedAt = item["updatedAt"].storedLongOrNull() ?: now,
+            messages = messages
+        )
+    )
+}
+
+private fun decodeStoredMessage(element: JsonElement): DemoStoredMessage? {
+    val encoded = element as? JsonObject ?: return null
+    val role = encoded["role"].storedStringOrNull()?.trim().orEmpty()
+    if (role !in ALLOWED_ROLES) return null
+
+    val content = encoded["content"].storedStringOrNull().orEmpty()
+    val imagePaths = decodeStoredImagePaths(encoded)
+    if (content.isBlank() && imagePaths.isEmpty()) return null
+
+    return DemoStoredMessage(
+        role = role,
+        content = content.take(MAX_MESSAGE_CHARS),
+        createdAt = encoded["createdAt"].storedLongOrNull() ?: System.currentTimeMillis(),
+        imagePaths = imagePaths
+    )
+}
+
+private fun decodeStoredImagePaths(message: JsonObject): List<String> {
+    // Salvage valid string entries from a valid array. If the field is absent,
+    // the wrong JSON type, or contains no usable path, use the legacy field.
+    val paths = (message["imagePaths"] as? JsonArray)
+        ?.mapNotNull { element ->
+            element.storedStringOrNull()?.trim()?.takeIf { it.isNotBlank() }
+        }
+        ?.take(MAX_STORED_IMAGES_PER_MESSAGE)
+        .orEmpty()
+    if (paths.isNotEmpty()) return paths
+
+    val legacyPath = message["imagePath"].storedStringOrNull()
+        ?.trim()
+        ?.takeIf { it.isNotBlank() }
+    return if (legacyPath == null) emptyList() else listOf(legacyPath)
 }
