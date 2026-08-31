@@ -116,7 +116,7 @@ class AndroidAutomationAgentIntegrationInstrumentedTest {
 
         val events = runtime.run(
             AgentSession("android-automation-full-authorization"),
-            "鎵撳紑杩欎釜搴旂敤"
+            "打开这个应用"
         ).toList()
         val finishedTools = events
             .filterIsInstance<AgentEvent.ToolFinished>()
