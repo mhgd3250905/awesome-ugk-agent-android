@@ -231,8 +231,9 @@ class DemoConversationStore(context: Context) {
 
     /**
      * Flushed append for background executors. Mirrors saveAndFlush: waits
-     * behind the same single writer so a process kill cannot discard a
-     * scheduled result merely because the write was still queued.
+     * behind the same single writer and commits synchronously to disk so a
+     * process kill cannot discard a scheduled result merely because the write
+     * was still queued behind an asynchronous apply().
      */
     @Synchronized
     fun appendMessagesAndFlush(
@@ -242,7 +243,7 @@ class DemoConversationStore(context: Context) {
     ): DemoConversation? {
         val updated = appendMessages(conversationId, messages, titleUpdate) ?: return null
         try {
-            writeExecutor.submit { drainPendingWrites() }.get()
+            writeExecutor.submit { drainPendingWrites(syncToDisk = true) }.get()
         } catch (error: InterruptedException) {
             Thread.currentThread().interrupt()
             throw error
@@ -255,14 +256,15 @@ class DemoConversationStore(context: Context) {
     /**
      * Persists a background-run result before its JobService is allowed to
      * finish. The ordinary UI path remains asynchronous; this method waits
-     * behind the same single writer so a process kill cannot discard the last
-     * scheduled result merely because the write was queued.
+     * behind the same single writer and commits synchronously to disk so a
+     * process kill cannot discard the last scheduled result merely because
+     * the write was queued behind an asynchronous apply().
      */
     @Synchronized
     fun saveAndFlush(conversation: DemoConversation) {
         save(conversation)
         try {
-            writeExecutor.submit { drainPendingWrites() }.get()
+            writeExecutor.submit { drainPendingWrites(syncToDisk = true) }.get()
         } catch (error: InterruptedException) {
             Thread.currentThread().interrupt()
             throw error
@@ -334,7 +336,7 @@ class DemoConversationStore(context: Context) {
         }
     }
 
-    private fun drainPendingWrites() {
+    private fun drainPendingWrites(syncToDisk: Boolean = false) {
         while (true) {
             val snapshot = synchronized(writeLock) {
                 val next = pendingWrite
@@ -343,9 +345,58 @@ class DemoConversationStore(context: Context) {
                     writeDrainScheduled = false
                 }
                 next
-            } ?: return
+            } ?: break
 
-            prefs.edit().putString(KEY_CONVERSATIONS, encode(snapshot)).apply()
+            try {
+                persistSnapshot(snapshot, syncToDisk)
+            } catch (error: Exception) {
+                // persistSnapshot consumed this snapshot above; if the failure
+                // left writeDrainScheduled == true, every later writeAll()
+                // would see the flag set and skip scheduling, so the snapshot
+                // would never reach disk until some future flush. Put the
+                // failed snapshot back (unless a newer snapshot already
+                // arrived while we were persisting — keep the newer one) and
+                // clear the flag inside the lock, so any subsequent writeAll()
+                // reschedules the drain and retries it. The exception is then
+                // rethrown so flush callers still observe the failure.
+                synchronized(writeLock) {
+                    if (pendingWrite == null) {
+                        pendingWrite = snapshot
+                    }
+                    writeDrainScheduled = false
+                }
+                throw error
+            }
+        }
+        if (!syncToDisk) return
+        // A plain async drain queued ahead of this task may already have
+        // consumed the pending write with apply(), which only updates the
+        // in-memory layer. The newest accepted snapshot still lives in the
+        // cache, so commit it as well: a flush must leave disk in sync with
+        // memory even when its own write was drained by an earlier task.
+        val latest = synchronized(cacheLock) { cachedConversations } ?: return
+        persistSnapshot(latest, syncToDisk = true)
+    }
+
+    private fun persistSnapshot(snapshot: List<DemoConversation>, syncToDisk: Boolean) {
+        val encoded = encode(snapshot)
+        if (!syncToDisk) {
+            // Ordinary UI writes stay asynchronous so the main thread never
+            // blocks on disk I/O.
+            prefs.edit().putString(KEY_CONVERSATIONS, encoded).apply()
+            return
+        }
+        // apply() only updates the in-memory layer and defers the disk write;
+        // a process kill right after a flush returns could still discard it.
+        // commit() blocks until the bytes reach disk. It runs on the store's
+        // single writer thread only — flush callers are background executors
+        // that wait via Future.get(), so the main thread never performs this
+        // write.
+        if (!prefs.edit().putString(KEY_CONVERSATIONS, encoded).commit()) {
+            throw IllegalStateException(
+                "Committing demo conversations to SharedPreferences failed; " +
+                    "the flushed write is not durable on disk."
+            )
         }
     }
 

@@ -1,17 +1,18 @@
 package com.ugk.pi.android
 
+import kotlinx.coroutines.CancellationException
 import kotlinx.coroutines.Dispatchers
-import kotlinx.coroutines.currentCoroutineContext
+import kotlinx.coroutines.channels.awaitClose
 import kotlinx.coroutines.flow.Flow
+import kotlinx.coroutines.flow.channelFlow
 import kotlinx.coroutines.flow.flow
 import kotlinx.coroutines.flow.flowOn
-import kotlinx.coroutines.isActive
+import kotlinx.coroutines.launch
 import kotlinx.coroutines.withContext
-import java.io.BufferedReader
+import java.io.BufferedInputStream
 import java.io.ByteArrayOutputStream
 import java.io.IOException
 import java.io.InputStream
-import java.io.InputStreamReader
 import java.net.HttpURLConnection
 import java.net.URL
 
@@ -53,31 +54,48 @@ class JavaNetHttpTransport(
         require(maxResponseBytes > 0) { "maxResponseBytes must be greater than 0" }
     }
 
-    override fun postStream(request: HttpRequest): Flow<String> = flow {
+    override fun postStream(request: HttpRequest): Flow<String> = channelFlow {
         val connection = URL(request.url).openConnection() as HttpURLConnection
+        // This body must never block: coroutine cancellation only resumes
+        // suspended code, so a blocking read here would pin the socket and
+        // its IO thread until readTimeout even after the collector is gone.
+        // All blocking work runs in a child coroutine while this body stays
+        // suspended in awaitClose, where collector cancellation immediately
+        // disconnects the connection — and disconnect() unblocks the child.
+        launch {
+            try {
+                connection.requestMethod = "POST"
+                connection.connectTimeout = connectTimeoutMillis
+                connection.readTimeout = readTimeoutMillis
+                connection.doOutput = true
+                request.headers.forEach { (name, value) ->
+                    connection.setRequestProperty(name, value)
+                }
+                connection.outputStream.use { output ->
+                    output.write(request.body.toByteArray(Charsets.UTF_8))
+                }
+
+                val responseCode = connection.responseCode
+                if (responseCode !in 200..299) {
+                    val errorBody = connection.errorStream?.use { it.readUtf8(maxResponseBytes) } ?: ""
+                    throw IllegalStateException("HTTP request failed: $responseCode $errorBody")
+                }
+
+                BufferedInputStream(connection.inputStream, 8 * 1024).use { input ->
+                    while (true) {
+                        val line = input.readUtf8Line(maxResponseBytes) ?: break
+                        send(line)
+                    }
+                }
+                close()
+            } catch (error: CancellationException) {
+                throw error
+            } catch (error: Throwable) {
+                close(error)
+            }
+        }
         try {
-            connection.requestMethod = "POST"
-            connection.connectTimeout = connectTimeoutMillis
-            connection.readTimeout = readTimeoutMillis
-            connection.doOutput = true
-            request.headers.forEach { (name, value) ->
-                connection.setRequestProperty(name, value)
-            }
-            connection.outputStream.use { output ->
-                output.write(request.body.toByteArray(Charsets.UTF_8))
-            }
-
-            val responseCode = connection.responseCode
-            if (responseCode !in 200..299) {
-                val errorBody = connection.errorStream?.use { it.readUtf8(maxResponseBytes) } ?: ""
-                throw IllegalStateException("HTTP request failed: $responseCode $errorBody")
-            }
-
-            val reader = BufferedReader(InputStreamReader(connection.inputStream, Charsets.UTF_8))
-            while (currentCoroutineContext().isActive) {
-                val line = reader.readLine() ?: break
-                emit(line)
-            }
+            awaitClose { connection.disconnect() }
         } finally {
             connection.disconnect()
         }
@@ -123,5 +141,35 @@ class JavaNetHttpTransport(
             totalBytes += count
         }
         return output.toString(Charsets.UTF_8.name())
+    }
+
+    /**
+     * Reads a single line with a hard byte cap. Bytes are counted before
+     * UTF-8 decoding so the bound holds for multi-byte characters too, and a
+     * line that would exceed it fails instead of buffering unbounded data.
+     * The stream must support mark/reset for the CRLF lookahead
+     * (see [BufferedInputStream]).
+     */
+    private fun InputStream.readUtf8Line(maxBytes: Int): String? {
+        val line = ByteArrayOutputStream(minOf(maxBytes, 8 * 1024))
+        while (true) {
+            val byte = read()
+            if (byte < 0) {
+                return if (line.size() == 0) null else line.toString(Charsets.UTF_8.name())
+            }
+            if (byte == '\n'.code || byte == '\r'.code) {
+                if (byte == '\r'.code) {
+                    // Mirror BufferedReader.readLine(): CR, LF, and CRLF all
+                    // terminate a line; swallow the LF of a CRLF pair.
+                    mark(1)
+                    if (read() != '\n'.code) reset()
+                }
+                return line.toString(Charsets.UTF_8.name())
+            }
+            if (line.size() >= maxBytes) {
+                throw IOException("HTTP response line exceeds maxResponseBytes=$maxBytes")
+            }
+            line.write(byte)
+        }
     }
 }

@@ -89,6 +89,11 @@ internal object NativeExecutableProcess {
             val finalExitCode = if (timedOut) {
                 stop(process, sessionReport)
             } else {
+                // The documented contract ties the whole process group to one
+                // call. A non-interactive Bash exits without waiting for its
+                // background jobs, so any residual child would otherwise be
+                // reparented to init and survive the call.
+                sweepResidualProcessGroup(sessionReport)
                 exitCode
             }
 
@@ -108,12 +113,45 @@ internal object NativeExecutableProcess {
                 stderrTruncated = stderr.truncated
             )
         } catch (interrupted: InterruptedException) {
-            process?.takeIf(::isAlive)?.let { runningProcess ->
+            val runningProcess = process?.takeIf(::isAlive)
+            if (runningProcess != null) {
                 stop(runningProcess, sessionReport)
+            } else {
+                // The direct child already exited, so the timeout path's
+                // group-wide stop never ran; the sweep still covers children
+                // that outlived it.
+                sweepResidualProcessGroup(sessionReport)
             }
             throw interrupted
         } finally {
             if (sessionReport.exists()) sessionReport.delete()
+        }
+    }
+
+    /**
+     * Terminates background children that outlived an already-exited script.
+     *
+     * The session leader (the direct child) is gone at this point, so signals
+     * only reach residual members of its process group. Host processes are in
+     * a different session: session_launcher calls setsid before exec, and the
+     * local HTTP server manager launches its servers through the same launcher
+     * into their own dedicated groups, so neither can be hit from here. This
+     * is best effort: a failure must never turn an already-successful call
+     * into a failure, and there is no logging surface in this runtime module,
+     * so misses are silently absorbed here.
+     */
+    private fun sweepResidualProcessGroup(sessionReport: File) {
+        try {
+            val processGroupId = readSessionGroupId(sessionReport) ?: return
+            if (!NativeProcessGroupControl.processGroupExists(processGroupId)) return
+            NativeProcessGroupControl.signalProcessGroup(processGroupId, SIGNAL_TERMINATE)
+            if (waitForProcessGroupExit(processGroupId, SWEEP_GRACE_PERIOD_MILLIS)) return
+            NativeProcessGroupControl.signalProcessGroup(processGroupId, SIGNAL_KILL)
+            waitForProcessGroupExit(processGroupId, STOP_KILL_WAIT_MILLIS)
+        } catch (interrupted: InterruptedException) {
+            Thread.currentThread().interrupt()
+        } catch (_: RuntimeException) {
+            // Best effort only; the caller's exit code stays authoritative.
         }
     }
 
@@ -244,6 +282,7 @@ internal object NativeExecutableProcess {
     private const val POLL_INTERVAL_MILLIS = 10L
     private const val STOP_GRACE_PERIOD_MILLIS = 500L
     private const val STOP_KILL_WAIT_MILLIS = 1_000L
+    private const val SWEEP_GRACE_PERIOD_MILLIS = 1_500L
     private const val SESSION_REPORT_WAIT_MILLIS = 250L
     private const val SESSION_REPORT_DIRECTORY = "ugk-terminal-session-reports"
     private const val SESSION_REPORT_ENVIRONMENT_VARIABLE = "UGK_TERMINAL_SESSION_REPORT_FILE"

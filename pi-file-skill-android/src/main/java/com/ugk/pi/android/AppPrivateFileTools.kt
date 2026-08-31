@@ -437,8 +437,8 @@ private fun String.withTrailingSeparator(): String {
  * injectable so tests can simulate a crash between the temporary write and
  * the rename. File.renameTo is atomic on Android's filesystem and keeps API
  * 24 compatibility; the reflective Files.move fallback replaces existing
- * targets on JVMs/Windows where renameTo cannot, with copy+delete as the
- * non-atomic last resort.
+ * targets on JVMs/Windows where renameTo cannot, and if both moves fail the
+ * failure is surfaced with the target left untouched.
  */
 internal fun writeTextAtomically(
     target: File,
@@ -447,15 +447,28 @@ internal fun writeTextAtomically(
 ) {
     val parent = target.parentFile
         ?: throw IOException("Target file has no parent directory: '${target.name}'.")
-    val temporary = File(parent, "${target.name}.tmp")
+    // Every writer stages into its own uniquely named file: a fixed
+    // "<name>.tmp" made concurrent writers share one staging path, so one
+    // writer's rename could move away the very file another writer was
+    // still filling. createTempFile pre-creates the empty file, which the
+    // default writeText step (and test injections) simply overwrite.
+    val temporary = File.createTempFile(temporaryPrefixFor(target), ".tmp", parent)
     try {
         performWrite(temporary, text)
         if (!replaceOnto(temporary, target)) {
             throw IOException("Failed to move temporary file onto '${target.name}'.")
         }
     } finally {
+        // Only this writer's unique staging file is ever touched here; after
+        // a successful move it no longer exists and the delete is a no-op.
         if (temporary.exists()) temporary.delete()
     }
+}
+
+/** createTempFile rejects prefixes shorter than three characters. */
+private fun temporaryPrefixFor(target: File): String {
+    val prefix = "${target.name}."
+    return if (prefix.length < 3) prefix.padEnd(3, '_') else prefix
 }
 
 /** Default write step; internal so failure-injection tests can reuse it. */
@@ -463,13 +476,15 @@ internal fun writeTemporaryText(temporary: File, text: String) {
     temporary.writeText(text, Charsets.UTF_8)
 }
 
+/**
+ * No delete-then-copy last resort on purpose: when both moves fail we
+ * surface the failure and leave the target untouched, because deleting the
+ * target first could destroy a file another concurrent writer had just
+ * landed (and the copy would then fail anyway, losing the target outright).
+ */
 private fun replaceOnto(temporary: File, target: File): Boolean {
     if (temporary.renameTo(target)) return true
-    if (moveReflectively(temporary, target)) return true
-    return runCatching {
-        target.delete()
-        temporary.copyTo(target)
-    }.isSuccess
+    return moveReflectively(temporary, target)
 }
 
 private fun moveReflectively(temporary: File, target: File): Boolean {

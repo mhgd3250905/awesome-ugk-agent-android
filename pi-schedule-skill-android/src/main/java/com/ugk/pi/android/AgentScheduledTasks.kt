@@ -585,15 +585,29 @@ private fun offsetMillis(nowMillis: Long, offsetSeconds: Long): Long? {
     }.getOrNull()
 }
 
+/**
+ * Next occurrence at or after [nowMillis], or null when the window has
+ * passed. Besides parse-validated tool input this also consumes records
+ * restored from persisted JSON, where a hostile or corrupted schedule can
+ * carry extreme values. All arithmetic is therefore overflow-checked and any
+ * overflow degrades to null: a negative timestamp would be treated by the
+ * platform scheduler as immediately due, turning a repeating task into an
+ * instant refiring loop.
+ */
 fun AgentTaskSchedule.nextRunAtMillis(nowMillis: Long): Long? {
     return when (this) {
-        is AgentTaskSchedule.OneShot -> runAtMillis.takeIf { it >= nowMillis }
+        is AgentTaskSchedule.OneShot -> runAtMillis.takeIf { it >= nowMillis && it >= 0L }
         is AgentTaskSchedule.RepeatingUntil -> {
             if (nowMillis > endAtMillis) return null
-            if (nowMillis <= startAtMillis) return startAtMillis
-            val elapsed = nowMillis - startAtMillis
-            val intervals = (elapsed + intervalMillis - 1) / intervalMillis
-            (startAtMillis + intervals * intervalMillis).takeIf { it <= endAtMillis }
+            if (nowMillis <= startAtMillis) return startAtMillis.takeIf { it >= 0L }
+            runCatching {
+                val elapsed = Math.subtractExact(nowMillis, startAtMillis)
+                val intervals = Math.addExact(elapsed, Math.subtractExact(intervalMillis, 1L)) /
+                    intervalMillis
+                Math.addExact(startAtMillis, Math.multiplyExact(intervals, intervalMillis))
+            }
+                .getOrNull()
+                ?.takeIf { it >= 0L && it <= endAtMillis }
         }
     }
 }

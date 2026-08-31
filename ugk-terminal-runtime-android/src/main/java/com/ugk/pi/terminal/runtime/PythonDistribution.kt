@@ -13,13 +13,22 @@ import java.util.zip.ZipInputStream
  *
  * Native code is intentionally excluded: libpython and its native dependencies
  * stay in nativeLibraryDir, where Android permits them to be loaded. The asset
- * manifest is part of the APK and is checked before every terminal launch, so a
- * stale or tampered standard-library tree is rebuilt on the next invocation.
+ * manifest is part of the APK and gates the first launch after any change, so
+ * a stale or tampered standard-library tree is rebuilt on the next invocation.
+ * Repeated launches skip the full hash walk through a fingerprint marker that
+ * is only written after a complete verification pass.
  */
 internal class PythonDistribution(context: Context) {
     private val appContext = context.applicationContext
     private val manifestEntries by lazy(LazyThreadSafetyMode.SYNCHRONIZED) {
         loadManifest()
+    }
+    private val manifestFingerprint by lazy(LazyThreadSafetyMode.SYNCHRONIZED) {
+        val digest = MessageDigest.getInstance("SHA-256")
+        manifestEntries.forEach { entry ->
+            digest.update("${entry.sha256}  ${entry.relativePath}\n".toByteArray(Charsets.UTF_8))
+        }
+        digest.digest().toHex()
     }
 
     @Synchronized
@@ -28,7 +37,11 @@ internal class PythonDistribution(context: Context) {
             appContext.filesDir,
             "$RUNTIME_DATA_DIRECTORY/$DISTRIBUTION_DIRECTORY"
         )
-        if (matchesManifest(target)) return target
+        if (hasVerifiedMarker(target)) return target
+        if (matchesManifest(target)) {
+            writeVerifiedMarker(target)
+            return target
+        }
 
         val parent = target.parentFile
             ?: throw IllegalStateException("Python distribution has no parent directory")
@@ -52,9 +65,56 @@ internal class PythonDistribution(context: Context) {
             check(staging.renameTo(target)) {
                 "Unable to publish Python distribution: ${target.absolutePath}"
             }
+            writeVerifiedMarker(target)
             return target
         } finally {
             if (staging.exists()) staging.deleteRecursively()
+        }
+    }
+
+    /**
+     * Skips the per-file SHA-256 walk on the hot path of every terminal call.
+     *
+     * The marker binds the packaged manifest (by fingerprint), the distribution
+     * version, and the concrete directory together, so any change to the APK
+     * payload or the target location forces a fresh full verification. The
+     * marker itself is not part of the immutable APK manifest, so it never
+     * affects [matchesManifest]; it is only trusted after this process family
+     * wrote it following a complete pass.
+     *
+     * Threat-model note: the runtime executes with the host application's UID
+     * and is explicitly not a sandbox. A same-UID tamperer can already rewrite
+     * any application file, so accepting a same-UID-written marker does not
+     * lower the real security boundary; it only removes a per-call tax.
+     */
+    private fun hasVerifiedMarker(root: File): Boolean {
+        if (!root.isDirectory) return false
+        val expected = runCatching { verifiedMarkerContent(root) }.getOrNull() ?: return false
+        val content = runCatching { File(root, VERIFIED_MARKER_FILE_NAME).readText() }.getOrNull()
+        return content == expected
+    }
+
+    private fun verifiedMarkerContent(root: File): String {
+        return buildString {
+            appendLine("version=$PYTHON_DISTRIBUTION_VERSION")
+            appendLine("manifestSha256=$manifestFingerprint")
+            appendLine("distributionPath=${root.canonicalFile.path}")
+        }
+    }
+
+    /** Best effort: a failed write only costs one extra full verification. */
+    private fun writeVerifiedMarker(root: File) {
+        runCatching {
+            val marker = File(root, VERIFIED_MARKER_FILE_NAME)
+            val staged = File.createTempFile(".verified-", ".tmp", root)
+            try {
+                staged.writeText(verifiedMarkerContent(root), Charsets.UTF_8)
+                if (!marker.exists() || marker.delete()) {
+                    if (!staged.renameTo(marker)) staged.delete()
+                }
+            } finally {
+                if (staged.exists()) staged.delete()
+            }
         }
     }
 
@@ -198,6 +258,7 @@ internal class PythonDistribution(context: Context) {
         private const val PYTHON_MANIFEST_ASSET_PATH =
             "$PYTHON_ASSET_DIRECTORY/manifest.sha256"
         private const val PYTHON_ARCHIVE_ASSET_PATH = "$PYTHON_ASSET_DIRECTORY/stdlib.zip"
+        private const val VERIFIED_MARKER_FILE_NAME = ".verified"
         private const val SHA256_HEX_LENGTH = 64
         private const val HASH_BUFFER_BYTES = 16 * 1024
         private val SHA256_HEX_REGEX = Regex("[0-9a-f]{64}")

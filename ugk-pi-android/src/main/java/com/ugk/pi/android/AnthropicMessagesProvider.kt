@@ -169,18 +169,27 @@ class AnthropicMessagesProvider(
 
                 "content_block_stop" -> {
                     if (currentToolId != null && currentToolName != null) {
-                        val inputParsed = runCatching {
-                            val parsed = json.parseToJsonElement(currentToolInputJson.toString())
-                            parsed as? JsonObject ?: JsonObject(emptyMap())
-                        }.getOrDefault(JsonObject(emptyMap()))
-
-                        toolCalls.add(
-                            ToolCall(
-                                id = currentToolId!!,
-                                name = currentToolName!!,
-                                input = inputParsed
+                        // A non-empty accumulation that no longer parses as a
+                        // JSON object means the stream was truncated or
+                        // corrupted mid-arguments. Executing the tool with a
+                        // fabricated input would run it against arguments the
+                        // model never completed choosing, so the call is
+                        // dropped. Dropping only guarantees the fabricated
+                        // input is never executed; whether the turn is retried
+                        // depends on the runtime's incomplete-response check:
+                        // a stop reason of max_tokens/length retries, while
+                        // any other outcome (e.g. tool_use with non-blank
+                        // content) finishes as a partial-text answer.
+                        val input = parseToolInputOrNull(currentToolInputJson.toString())
+                        if (input != null) {
+                            toolCalls.add(
+                                ToolCall(
+                                    id = currentToolId!!,
+                                    name = currentToolName!!,
+                                    input = input
+                                )
                             )
-                        )
+                        }
                         currentToolId = null
                         currentToolName = null
                         currentToolInputJson.clear()
@@ -367,6 +376,19 @@ class AnthropicMessagesProvider(
                                 put("text", content)
                             }
                         )
+                    } else if (toolCalls.isEmpty()) {
+                        // Blank tool-less assistant messages can still sit in
+                        // a transcript (legacy data or host-appended entries).
+                        // Serialized as-is they would produce an empty
+                        // content array, which the Messages API rejects for
+                        // every later request of the session, so repair them
+                        // at this serialization boundary.
+                        add(
+                            buildJsonObject {
+                                put("type", "text")
+                                put("text", BLANK_ASSISTANT_PLACEHOLDER)
+                            }
+                        )
                     }
                     toolCalls.forEach { call ->
                         add(call.toAnthropicToolUse())
@@ -430,6 +452,18 @@ class AnthropicMessagesProvider(
         }
     }
 
+    /**
+     * Parses accumulated tool-input JSON. An empty accumulation is a
+     * legitimate no-argument call and maps to an empty object; anything else
+     * that fails to parse as a JSON object is truncated or corrupted input
+     * and maps to null so the caller drops the call instead of executing it
+     * with fabricated input.
+     */
+    private fun parseToolInputOrNull(accumulated: String): JsonObject? {
+        if (accumulated.isBlank()) return JsonObject(emptyMap())
+        return runCatching { json.parseToJsonElement(accumulated) }.getOrNull() as? JsonObject
+    }
+
     private fun parseResponse(body: String): ModelResponse {
         val root = json.parseToJsonElement(body).jsonObject
         val contentBlocks = root["content"]?.jsonArray ?: JsonArray(emptyList())
@@ -477,3 +511,6 @@ class AnthropicMessagesProvider(
         )
     }
 }
+
+/** Serialized stand-in for a blank tool-less assistant message. */
+private const val BLANK_ASSISTANT_PLACEHOLDER = "(no content)"

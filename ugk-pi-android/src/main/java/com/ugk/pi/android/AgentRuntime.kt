@@ -203,6 +203,14 @@ class AgentRuntime(
         require(maxIterations > 0) { "maxIterations must be greater than 0" }
 
         val inputImages = immutableListSnapshot(input.images)
+        // A run needs at least one usable input. Persisting a blank text-only
+        // user turn would poison every later request with an empty-content
+        // message that providers reject, so fail fast instead. Blank text
+        // with images remains a legal multimodal input.
+        if (input.content.isBlank() && inputImages.isEmpty()) {
+            emit(AgentEvent.Failed("Run input is empty."))
+            return@flow
+        }
         val inputMessage = userMessageWithTimeContext(input.content)
         session.append(inputMessage)
         emit(
@@ -607,10 +615,15 @@ class AgentRuntime(
             ?: false
         if (!terminalForTurn) return null
 
+        // A blank completion must never be persisted as a tool-less
+        // assistant message: Anthropic rejects it on every later request,
+        // which would permanently break the session with no self-healing
+        // path. Fall back to a fixed non-blank placeholder instead.
         return (result.metadata["assistantMessage"] as? JsonPrimitive)
             ?.contentOrNull
             ?.takeIf { it.isNotBlank() }
-            ?: result.content
+            ?: result.content.takeIf { it.isNotBlank() }
+            ?: TERMINAL_COMPLETION_PLACEHOLDER
     }
 
 }
@@ -716,6 +729,10 @@ private class CompositeAndroidSkillProvider(
  */
 internal const val DEFAULT_MAX_ITERATIONS = 500
 private const val MAX_INCOMPLETE_RESPONSE_RETRIES = 2
+
+/** Fixed stand-in for terminal tools that end the turn with no usable text. */
+private const val TERMINAL_COMPLETION_PLACEHOLDER =
+    "(The tool ended this turn without a message.)"
 private fun sessionAlreadyRunningMessage(sessionId: String): String =
     "AgentSession '$sessionId' is already running."
 private const val INCOMPLETE_RESPONSE_FAILURE_MESSAGE =

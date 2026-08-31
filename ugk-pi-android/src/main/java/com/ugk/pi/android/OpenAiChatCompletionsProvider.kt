@@ -77,6 +77,24 @@ class OpenAiChatCompletionsProvider(
         var currentStopReason: String? = null
         var completedEmitted = false
 
+        // A non-empty accumulation that no longer parses as a JSON object
+        // means the stream was truncated or corrupted mid-arguments:
+        // executing the tool with a fabricated empty input would run it
+        // against arguments the model never completed choosing, so the call
+        // is dropped. Dropping only guarantees the fabricated input is
+        // never executed; whether the turn is retried depends on the
+        // runtime's incomplete-response check: a stop reason of
+        // max_tokens/length retries, while any other outcome (e.g.
+        // tool_use with non-blank content) finishes as a partial-text
+        // answer. An empty argument string stays a legitimate no-argument
+        // call.
+        fun buildFinalToolCalls(): List<ToolCall> = toolDrafts.values.mapNotNull { draft ->
+            if (draft.id.isBlank() || draft.name.isBlank()) return@mapNotNull null
+            val parsedInput = parseToolArgumentsOrNull(draft.argsBuilder.toString())
+                ?: return@mapNotNull null
+            ToolCall(id = draft.id, name = draft.name, input = parsedInput)
+        }
+
         rawLines.collect { rawLine ->
             val line = rawLine.trim()
             if (line.isEmpty() || line.startsWith(":")) {
@@ -106,14 +124,7 @@ class OpenAiChatCompletionsProvider(
             val dataStr = line.removePrefix("data:").trim()
             if (dataStr == "[DONE]") {
                 if (!completedEmitted) {
-                    val finalToolCalls = toolDrafts.values.mapNotNull { draft ->
-                        if (draft.id.isBlank() || draft.name.isBlank()) return@mapNotNull null
-                        val parsedInput = runCatching {
-                            val parsed = json.parseToJsonElement(draft.argsBuilder.toString())
-                            parsed as? JsonObject ?: JsonObject(emptyMap())
-                        }.getOrDefault(JsonObject(emptyMap()))
-                        ToolCall(id = draft.id, name = draft.name, input = parsedInput)
-                    }
+                    val finalToolCalls = buildFinalToolCalls()
                     val response = ModelResponse(
                         content = accumulatedContent.toString(),
                         toolCalls = finalToolCalls,
@@ -180,14 +191,7 @@ class OpenAiChatCompletionsProvider(
 
         // 流结束兜底
         if (!completedEmitted) {
-            val finalToolCalls = toolDrafts.values.mapNotNull { draft ->
-                if (draft.id.isBlank() || draft.name.isBlank()) return@mapNotNull null
-                val parsedInput = runCatching {
-                    val parsed = json.parseToJsonElement(draft.argsBuilder.toString())
-                    parsed as? JsonObject ?: JsonObject(emptyMap())
-                }.getOrDefault(JsonObject(emptyMap()))
-                ToolCall(id = draft.id, name = draft.name, input = parsedInput)
-            }
+            val finalToolCalls = buildFinalToolCalls()
             val response = ModelResponse(
                 content = accumulatedContent.toString(),
                 toolCalls = finalToolCalls,
@@ -196,6 +200,18 @@ class OpenAiChatCompletionsProvider(
             )
             emit(ModelStreamChunk.Completed(response))
         }
+    }
+
+    /**
+     * Parses accumulated tool-call arguments. An empty accumulation is a
+     * legitimate no-argument call and maps to an empty object; anything else
+     * that fails to parse as a JSON object is truncated or corrupted input
+     * and maps to null so the caller drops the call instead of executing it
+     * with fabricated input.
+     */
+    private fun parseToolArgumentsOrNull(accumulated: String): JsonObject? {
+        if (accumulated.isBlank()) return JsonObject(emptyMap())
+        return runCatching { json.parseToJsonElement(accumulated) }.getOrNull() as? JsonObject
     }
 
     private fun requestBody(request: ModelRequest, stream: Boolean = false): JsonObject {

@@ -83,8 +83,10 @@ class LocalHttpServerManager(
 
             records[request.port]?.let { existing ->
                 val existingStatus = statusFor(existing)
-                if (existingStatus.state in RUNNING_STATES) return existingStatus
-                removeRecord(existing)
+                if (existingStatus.state in RUNNING_STATES && !isStaleNonListening(existing)) {
+                    return existingStatus
+                }
+                discardRecord(existing)
             }
 
             if (isPortListening(request.port)) {
@@ -162,7 +164,8 @@ class LocalHttpServerManager(
                 logFile = logFile,
                 processGroupId = processGroupId,
                 process = process,
-                logDrainThread = logDrainThread
+                logDrainThread = logDrainThread,
+                startedAtMillis = System.currentTimeMillis()
             )
             records[request.port] = server
             persist(server)
@@ -190,6 +193,12 @@ class LocalHttpServerManager(
                 if (!hasProcess(server)) {
                     removeRecord(server)
                     null
+                } else if (isStaleNonListening(server) && server.process == null) {
+                    // The persisted process-group id most likely died and was
+                    // recycled. status() stays read-only, so drop the dead
+                    // record without signaling and let start() rebuild.
+                    removeRecord(server)
+                    null
                 } else {
                     statusFor(server)
                 }
@@ -202,14 +211,22 @@ class LocalHttpServerManager(
             ensureMetadataLoaded()
             validatePort(port)
             val server = records[port] ?: return LocalHttpServerStatus.notFound(port)
-            val stopped = stopRecord(server)
-            if (!stopped) {
-                throw LocalHttpServerException(
-                    code = ERROR_STOP_FAILED,
-                    message = "Unable to terminate the managed HTTP server process group ${server.processGroupId}."
-                )
+            if (isUnattributableStaleRecord(server)) {
+                // The recorded process-group id can no longer be attributed to
+                // this server and may since have been recycled to an unrelated
+                // group, so signaling it could kill innocent processes. Only
+                // drop the dead record so the port can be rebuilt.
+                removeRecord(server)
+            } else {
+                val stopped = stopRecord(server)
+                if (!stopped) {
+                    throw LocalHttpServerException(
+                        code = ERROR_STOP_FAILED,
+                        message = "Unable to terminate the managed HTTP server process group ${server.processGroupId}."
+                    )
+                }
+                removeRecord(server)
             }
-            removeRecord(server)
             return LocalHttpServerStatus(
                 state = STATE_STOPPED,
                 port = server.port,
@@ -227,6 +244,15 @@ class LocalHttpServerManager(
             val servers = records.values.toList()
             var stopped = 0
             servers.forEach { server ->
+                // stopAll()/close() must keep exactly the same process-group
+                // recycling safety semantics as stop(): an unattributable
+                // stale record (no live handle, aged, and no longer listening)
+                // is only dropped without signaling, because its persisted
+                // process-group id may already belong to an unrelated group.
+                if (isUnattributableStaleRecord(server)) {
+                    discardRecord(server)
+                    return@forEach
+                }
                 // Keep the record for a group that survived the kill window:
                 // dropping it would orphan a live process group that the tool
                 // can no longer see or stop. This mirrors stop()'s contract.
@@ -285,6 +311,47 @@ class LocalHttpServerManager(
     private fun hasProcess(server: ManagedServer): Boolean {
         val processAlive = server.process?.let(::isAlive) == true
         return processAlive || NativeProcessGroupControl.processGroupExists(server.processGroupId)
+    }
+
+    /**
+     * Lazy liveness cross-check for records whose existence is only inferred
+     * from a persisted process-group id. kill(-pgid, 0) cannot distinguish a
+     * dead server from an unrelated group that later recycled the same id, so
+     * an aged record that is still not listening is treated as dead. A normal
+     * start listens within seconds (and a start that never listens is rolled
+     * back immediately), so the grace period never overlaps a real starting
+     * phase. No timer or thread is introduced: this runs inside the existing
+     * start()/status()/stop() check paths.
+     */
+    private fun isStaleNonListening(server: ManagedServer): Boolean {
+        if (System.currentTimeMillis() - server.startedAtMillis < STALE_RECORD_GRACE_MILLIS) return false
+        return !isPortListening(server.port)
+    }
+
+    /**
+     * True when a record can no longer be attributed to its persisted
+     * process-group id: it has no live in-process handle, it is past the
+     * stale grace period, and its port is not listening. The recorded group
+     * id may since have been recycled to an unrelated group, so signaling it
+     * could kill innocent processes — such a record must only be dropped,
+     * never signaled. stop(), stopAll() and close() must all preserve this
+     * pgid-recycling safety semantics, so they share this one predicate.
+     */
+    private fun isUnattributableStaleRecord(server: ManagedServer): Boolean {
+        return isStaleNonListening(server) && server.process?.let(::isAlive) != true
+    }
+
+    /**
+     * Removes a record that must not be reused. A record that still owns a
+     * live in-process handle cannot have a recycled process-group id, so its
+     * group is terminated through the normal stop path. A handle-less
+     * (reloaded) record is dropped without signaling for the reason above.
+     */
+    private fun discardRecord(server: ManagedServer) {
+        if (server.process?.let(::isAlive) == true) {
+            stopRecord(server)
+        }
+        removeRecord(server)
     }
 
     private fun stopRecord(server: ManagedServer): Boolean {
@@ -355,6 +422,7 @@ class LocalHttpServerManager(
                         processGroupId = processGroupId,
                         process = null,
                         logDrainThread = null,
+                        startedAtMillis = metadataFile.lastModified(),
                         metadataFile = metadataFile
                     )
                 }.onFailure { metadataFile.delete() }
@@ -456,6 +524,11 @@ class LocalHttpServerManager(
         val processGroupId: Int,
         val process: Process?,
         val logDrainThread: Thread?,
+        // Reloaded records use the metadata file's mtime: persist() writes it
+        // at start time and a failed start rolls the record back at once, so
+        // it approximates the start time without changing the persisted
+        // properties format.
+        val startedAtMillis: Long,
         val metadataFile: File = File(
             logFile.parentFile ?: logFile,
             "http-$port.properties"
@@ -488,6 +561,7 @@ class LocalHttpServerManager(
         const val SESSION_REPORT_WAIT_MILLIS = 500L
         const val STOP_GRACE_PERIOD_MILLIS = 500L
         const val STOP_KILL_WAIT_MILLIS = 1_000L
+        const val STALE_RECORD_GRACE_MILLIS = 120_000L
         const val SOCKET_CONNECT_TIMEOUT_MILLIS = 100
         const val MAX_MANAGED_SERVERS = 4
         const val MAX_LOG_BYTES = 64 * 1024

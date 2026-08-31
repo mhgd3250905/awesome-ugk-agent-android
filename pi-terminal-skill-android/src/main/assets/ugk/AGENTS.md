@@ -65,7 +65,10 @@ prebuilt Runtime-managed Tool when the task needs a persistent service.
 
 - Do not start a persistent HTTP server with `terminal_bash_execute`, `nohup`,
   `disown`, `setsid`, or a shell background job. That Tool is for bounded
-  one-shot scripts and its process group is intentionally tied to one call.
+  one-shot scripts and its process group is intentionally tied to one call:
+  when the call returns, the Runtime terminates any background process left
+  inside that call's process group. Such processes do not survive the Tool
+  call, so a long-running service must use the managed tool below.
 - Use `local_http_server_start` for a website or static directory that must be
   reachable by the browser. It launches the verified packaged CPython through
   the SDK's process-session manager, binds only to `127.0.0.1`, records its
@@ -95,7 +98,8 @@ prebuilt Runtime-managed Tool when the task needs a persistent service.
 - Keep output bounded, avoid infinite loops and daemon processes in
   `terminal_bash_execute`, and stop when the requested result is established.
   Persistent local services belong to the dedicated local HTTP tools, not to
-  a Bash background process.
+  a Bash background process; any background process still alive when the call
+  ends is terminated together with the call's process group.
 - Separate local verification from network access. Do not add a network call to
   a local component test unless the user explicitly asks for it.
 

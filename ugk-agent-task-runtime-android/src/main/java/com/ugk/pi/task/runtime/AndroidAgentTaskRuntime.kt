@@ -490,26 +490,62 @@ class AndroidAgentTaskRuntime(
             AgentTaskActionExecutionResult(false, "定时任务执行失败，请稍后重试。")
         }
 
-        // A denied notification is a delivery problem, not a task failure:
-        // repeating tasks must survive it and advance to the next run.
-        val updated = if (deliveryFailed) {
-            task.afterDeliveryFailure(now)
-        } else {
-            task.afterExecution(now, result.success)
+        // The action above can run for seconds to minutes (a prompt execution
+        // is an LLM/tool loop) while the foreground conversation shares this
+        // process, so the snapshot read at the top of handle() is stale by
+        // now. The control-plane tools in the schedule skill (cancel, update)
+        // write without holding PROCESS_HANDLE_LOCK, so writing back a record
+        // derived from that stale snapshot would resurrect a task that was
+        // just cancelled — and re-arm its platform trigger — or silently roll
+        // back a concurrent update. Re-read the record and fold the execution
+        // result into whatever is current instead.
+        val current = store.get(taskId)
+        val updated: AgentTask? = when {
+            current == null -> {
+                // The task was deleted while executing; writing any record
+                // back would revive it. The execution did happen, so the
+                // result notification below still fires.
+                null
+            }
+            current.status != AgentTaskStatus.SCHEDULED -> {
+                // Cancelled (or otherwise terminal) while executing: keep the
+                // user's decision instead of overwriting it back to
+                // SCHEDULED/COMPLETED, and never re-arm the platform trigger.
+                null
+            }
+            // A denied notification is a delivery problem, not a task
+            // failure: repeating tasks survive it and advance to the next run.
+            deliveryFailed -> current.afterDeliveryFailure(now)
+            else -> current.afterExecution(now, result.success)
         }
-        store.upsert(updated)
-        if (reschedule) {
-            if (updated.status == AgentTaskStatus.SCHEDULED) {
-                scheduler.schedule(updated)
-            } else if (task.action !is AgentTaskAction.RunAgentPrompt) {
-                // A JobService's current job is consumed by jobFinished().
-                // Canceling that same job from inside handle() can trigger
-                // onStopJob while the result is being committed.
-                scheduler.cancel(updated.id)
+        // A millisecond-scale race remains between this re-read and the
+        // upsert (the cross-module cancel tool does not take the process
+        // handle lock). That is accepted: the window shrinks from the whole
+        // execution duration to one store round-trip, a cancel landing inside
+        // it merely loses one already-started run's write-back, and closing
+        // it fully would need either a lock shared with the tool module or a
+        // compare-and-swap store API — both beyond this fix.
+        // updated != null already implies current != null: the when above
+        // returns null for every current == null branch, so no extra
+        // null-check is needed here.
+        if (updated != null) {
+            store.upsert(updated)
+            if (reschedule) {
+                if (updated.status == AgentTaskStatus.SCHEDULED) {
+                    scheduler.schedule(updated)
+                } else if (current?.action !is AgentTaskAction.RunAgentPrompt) {
+                    // A JobService's current job is consumed by jobFinished().
+                    // Canceling that same job from inside handle() can trigger
+                    // onStopJob while the result is being committed.
+                    scheduler.cancel(updated.id)
+                }
             }
         }
         if (!result.success || notifySuccessfulPrompt) {
-            notificationSink.publish(appContext, task, result.message)
+            // current may differ from the stale snapshot read at the top of
+            // handle() (concurrent cancel/update); prefer its title for the
+            // notification. task is only a fallback for a deleted record.
+            notificationSink.publish(appContext, current ?: task, result.message)
         }
         result
     }

@@ -2074,7 +2074,13 @@ class MainActivity : Activity() {
 
     override fun onSaveInstanceState(outState: Bundle) {
         conversationRuntime.rememberSession(activeConversation.id, session)
-        conversationStore.save(activeConversation)
+        // No whole-conversation save here: every conversation change already
+        // persists at its point of change (appendMessages/save/rename/create),
+        // while this in-memory snapshot can be stale — the refresh from the
+        // store is skipped while a run is busy, so a background scheduled run
+        // may have appended turns this snapshot has not observed, and a
+        // whole-conversation save would erase them. See the invariant
+        // documented on DemoConversationStore.appendStoredMessages.
         val draft = if (::inputField.isInitialized) inputField.text?.toString().orEmpty() else ""
         conversationRuntime.draft = draft
         outState.putString(KEY_DRAFT, draft)
