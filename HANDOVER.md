@@ -1,16 +1,16 @@
 # awesome-ugk-agent-android 项目交接文档 (Handover Document)
 
-> **Demo 0.9.1 版本**：`versionCode 12`（API 24 文件边界与 Intent data/type 稳定性修复）
-> **0.9.1 版本边界**：标签 `demo-app-v0.9.1`（远端状态以 Git 实测为准）
-> **上一保存版本**：`0.9.0 / versionCode 11`，标签 `demo-app-v0.9.0`
+> **Demo 0.9.2 版本**：`versionCode 13`（第二轮 P0 审查修复：SDK 协议/并发 + demo 生命周期/数据正确性）
+> **0.9.2 版本边界**：标签 `demo-app-v0.9.2`（远端状态以 Git 实测为准）
+> **上一保存版本**：`0.9.1 / versionCode 12`，标签 `demo-app-v0.9.1`
 > **架构整改实现 checkpoint**：`9268bc2`
 > **阶段 8 文档/验证 closeout**：`885c1e9`
 > **微信式对话视觉实现 checkpoint**：`af5b0b7075dd8a201dbfd857987521f7b0d3470a`
 > **首页顶栏收束 checkpoint**：`cde30bf9d12d262fce5141986a77230cbf6ff7b6`
 > **分支**：`main`  
-> **交接时间**：2026-08-30
+> **交接时间**：2026-08-31
 > **工作区**：`E:\AII\ugk-android-new`
-> **当前版本标签**：`demo-app-v0.9.1`（远端状态以 Git 实测为准）
+> **当前版本标签**：`demo-app-v0.9.2`（远端状态以 Git 实测为准）
 > **目标真机**：小米设备 `QSG6Q8IFDMDELVGQ`、第二台小米 `e0b93f2f`（型号 `2304FPN6DC`）
 > **注意**：设备列表中若有三星手机（`R5CRB11B2AW`），**严禁对其执行任何操作**，唯一下发与调试设备为小米手机。
 >
@@ -18,16 +18,19 @@
 
 ---
 
-## 0. 2026-08-29—30 架构与视觉收束（当前事实）
+## 0. 2026-08-29—31 架构、视觉与两轮 P0 修复收束（当前事实）
 
-- 本阶段先在 `demo-app-v0.8.0` / `79b0d31` 基线上完成文件型 skill 单文件 authoring MVP，再从 `demo-app-v0.9.0` / `38a5603` 合并 PR #2 的 API 24 文件边界与 Intent data/type 修复；当前版本为 `0.9.1 / versionCode 12`，版本边界标签为 `demo-app-v0.9.1`。
+- 2026-08-31 合并 PR #3（head `741649d`，merge commit `b91f1a8`）：第二轮 P0 审查修复共 14 项——Anthropic 连续 user 消息合并与 thinking 块回传、工具循环异常后会话可恢复、`InMemorySessionStore` 线程安全、任务运行时进程级互斥与损坏备份、通知权限缺失不再终态 FAILED、调度失败回滚、skill 扫描 symlink 边界与 frontmatter 重复 key、memory/app-file/播种原子写、demo 进程级 runtime 所有权（Activity 重建不再杀 Agent）、会话原子追加（后台定时结果不再被前台覆盖）、`stopAll` 失败组保留记录。当前版本为 `0.9.2 / versionCode 13`，版本边界标签为 `demo-app-v0.9.2`。
+- 0.9.2 合并验收（2026-08-31）：merge-base 恰为 `9340d6f`、`git diff --check` 干净；临时 worktree 复跑九模块 JVM + `assembleDebug` + AndroidTest 编译 `BUILD SUCCESSFUL`，62 个 XML 重算 `427` 测试（`424` passed、`3` skipped、0 failure/error，skip 均为 Windows symlink 限制）；APK metadata `versionCode 13 / versionName 0.9.2`；独立 reviewer 六维度审查 `PASS`（0 BLOCKING / 0 MAJOR / 4 MINOR / 6 NOTE，遗留项见 `docs/terminal-runtime-validation.md` 第 24 节与版本台账 0.9.2 条目）。`0.9.2` APK 未安装到设备，demo #12 Activity 重建端到端人工验收待做。
+- 0.9.1 真机验收（2026-08-31 上午）：`0.9.1 / versionCode 12` Debug APK 在授权小米 `QSG6Q8IFDMDELVGQ`（实测型号 `2602BRT18C`，Android 16 / API 36）全新安装（此前该包已被卸载，非覆盖升级），metadata 核对通过，全程无 FATAL、进程未重启；并在真实 Provider（deepseek-v4-flash @ api.deepseek.com）下完成 skill authoring E2E 五环节：`skill_save`（经用户确认弹窗）落盘并核对 SKILL.md frontmatter/body、`skill_list` 3 skills 全部 valid、`skill_read` manifest 一致、triggered 加载策略真实触发使用（回答显式引用 skill 并按其分步格式）、`skill_delete`（经确认弹窗）后目录移除。通知权限已授予、悬浮窗引导选"暂不"、无障碍服务未开启（skill authoring 不依赖）。
+- 本阶段先在 `demo-app-v0.8.0` / `79b0d31` 基线上完成文件型 skill 单文件 authoring MVP，再从 `demo-app-v0.9.0` / `38a5603` 合并 PR #2 的 API 24 文件边界与 Intent data/type 修复；该阶段版本为 `0.9.1 / versionCode 12`，版本边界标签为 `demo-app-v0.9.1`。
 - MVP 提供结构化 `skill_save`、`skill_delete`、完整 manifest `skill_read` 和内置 indexed `android-skill-creator` SOP，形成 create/update/delete/query/use 闭环；普通 `docs/*.md` 仍只是原料。完成声明必须同时有 `skill_save` 成功、`skill_list` 为 `valid` 和 `skill_read` manifest/body 核对。
 - `skill_save` 固定写入 repository 直接子目录，默认拒绝覆盖；`skill_delete` 只接收合法 name；路径/格式/写后校验/回滚、用户确认和 `agent-memory`/`android-skill-creator` protected-skill 规则均保持 fail-closed。supporting resources、脚本/资产执行和 UI 管理不在本 MVP。
 - PR #2（head `5bfc44f`，merge commit `771fa4e`）已修复 API 24 `File.toPath()` 崩溃、canonical/symlink 根目录逃逸和 Intent 同时设置 URI/MIME type 时 data 丢失；合并前独立 review 为 Standards/Spec `PASS`，0 blocking findings。
 - 审查事实：前置独立 review 发现的 frontmatter 注入 P1 已修复，精确复查为 `CLOSED / PASS`；本阶段独立 closeout review 已 `PASS`。
 - 当前门禁已通过：八个 SDK/Runtime 模块与 Demo JVM 共发现 `388` 个测试，`387` passed、`1` skipped、0 failure/error；跳过项是 Windows 主机无法创建 symlink 的单测，同类 Android 用例已编译。Demo assemble 与 AndroidTest Kotlin compile 通过，APK metadata 为 `versionCode 12 / versionName 0.9.1`，`git diff --check` 通过。
 - 设备事实勘误：功能代码的 `0.8.0 / versionCode 10` Debug APK 已通过 `adb install -r -d` 覆盖安装到授权小米 `QSG6Q8IFDMDELVGQ`（未卸载、未清理数据），当时只核对安装返回和 package metadata；`0.9.0 / versionCode 11` 本阶段不安装，不把设备安装成功描述为 skill authoring 行为验收。
-- `0.9.1` APK 本阶段未安装；尚未完成真实 Agent 的人工 create/update/delete/use end-to-end 场景，未调用真实 Provider/API。
+- `0.9.1` APK 与真实 Agent create/update/delete/use end-to-end 场景已于 2026-08-31 在授权小米真机与真实 Provider 下完成（见本节 0.9.1 真机验收条目）；`0.9.2` 尚未安装，其端到端人工验收为后续项。
 - 快速迭代后的模块化审查已完成计划中的 7 个实现阶段，并形成 9 个本地 checkpoint：Runtime 生命周期、设置领域/UI、上下文档位、Provider profile、进程/悬浮窗 ownership、conversation runtime、Session transcript、capability assembly、Terminal/Screen host interlock 均已形成明确单一 owner。
 - 架构整改实现 checkpoint 顺序为 `1409610`、`ccc76c9`、`20b2b60`、`f20bee7`、`1003cc1`、`74dd2ff`、`47964b5`、`9956116`、`9268bc2`，阶段 8 文档/验证收束为 `885c1e9`；随后按 patch 规则保存 `0.7.1 / versionCode 9`，该保存点不代表远程 PR 或 Release。
 - 2026-08-29 本机收束：八模块 JVM `271/271`、Demo JVM `104/104`；Demo Debug、五个关键 Release AAR、两个 Probe Release APK、Terminal Runtime 静态/哈希/AAR/APK/zipalign 验收均通过。

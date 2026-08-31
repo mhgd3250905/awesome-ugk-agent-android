@@ -1,11 +1,11 @@
 # Terminal Runtime 验证矩阵
 
-更新时间：2026-08-30
+更新时间：2026-08-31
 验证源码：`E:\AII\ugk-android-new`
-注意：最新 Terminal instrumentation/probe 的物理设备证据绑定到 source checkpoint `28bc352622458d29e090656ae42fd32f057e9196`；第 21—22 节保留历史版本保存，第 23 节记录当前 Demo `0.9.1 / versionCode 12` 稳定性 patch 保存与最终验证。后者不关闭 Terminal 设备矩阵、网络或发布 Gate。
+注意：最新 Terminal instrumentation/probe 的物理设备证据绑定到 source checkpoint `28bc352622458d29e090656ae42fd32f057e9196`；第 21—23 节保留历史版本保存，第 24 节记录当前 Demo `0.9.2 / versionCode 13` 第二轮 P0 修复保存与合并验收。后者不关闭 Terminal 设备矩阵、网络或发布 Gate。
 
 > 第 6—14、18—19 节按日期保留历史验证快照；这些章节中的“当前”仅指当时的源码、APK 或设备上下文。
-> 当前 Gate 结论和版本保存证据以文首总表、第 20 节和第 23 节为准；第 21—22 节是历史版本保存，第 23 节是当前 0.9.1 阶段。
+> 当前 Gate 结论和版本保存证据以文首总表、第 20 节和第 24 节为准；第 21—23 节是历史版本保存，第 24 节是当前 0.9.2 阶段。
 
 ## 1. 环境变量
 
@@ -351,3 +351,14 @@ Core API/JVM 边界：
 - `:demo-app:assembleDebug`、`:demo-app:compileDebugAndroidTestKotlin` 与 `git diff --check` 通过；APK metadata 为 `com.ugk.pi.android.testapp` / `versionCode 12` / `versionName 0.9.1`，并包含 `assets/agent-skills/android-skill-creator/SKILL.md`。
 - `pi-file-skill-android` 与 `pi-agent-skill-runtime-android` 的 `lintDebug` 为 0 error；`pi-system-skill-android` 的 8 个 Accessibility `NewApi` error 均在未改动的 `AccessibilityScreenAutomationBackend.kt`，本阶段改动的 `AndroidAppIntentTool.kt` 没有新增 lint finding。该既有 lint baseline 不作为本 patch 的新失败。
 - PR 说明记录 API 24/API 35 的文件边界、skill embed 与 Intent data/type targeted dynamic evidence；closeout 未重复操作真机、未运行真实 Provider/API、Terminal `-CheckPackages` 或 Release 矩阵，不据此改变既有设备与发布 Gate 结论。
+
+## 24. Demo 0.9.2 第二轮 P0 审查修复保存与合并验收
+
+验证日期：2026-08-31；阶段基线：`demo-app-v0.9.1` / `9340d6f`；PR #3 head 为 `741649d`（`c1b4ce7` 代码 + `741649d` 验证措辞修正），merge commit 为 `b91f1a8`。范围仅为 14 项修复（Anthropic 协议 role 交替与 thinking 块、工具循环异常恢复、会话/任务存储并发与数据一致性、skill 扫描边界与 frontmatter 重复 key、原子写、demo 进程级 runtime 所有权与会话追加、`stopAll` 记录保留）与 Demo `0.9.2 / versionCode 13` 版本元数据；不改变 Terminal 原生载荷、SDK publication `0.1.0`、依赖、权限、UI 基线或 Release Gate。
+
+- 版本元数据为 `0.9.2 / versionCode 13`，版本边界标签为 `demo-app-v0.9.2`；逐项修复说明与 PR 自报证据见 `docs/demo-app-version-ledger.md` 0.9.2 条目。
+- 合并验收复核（2026-08-31）：merge-base 恰为 `9340d6f`、恰含声明的 2 个提交、`git diff --check` 干净；在临时 worktree（PR head）复跑九模块 `testDebugUnitTest` 与 `:demo-app:assembleDebug`、`:demo-app:compileDebugAndroidTestKotlin` 为 `BUILD SUCCESSFUL`（244 actionable tasks）；62 个结果 XML 重算合计 `427` 个测试：`424` passed、`3` skipped、0 failure/error（3 个 skip 均为 Windows symlink 限制，其中 skill 扫描 2 项由仪器用例覆盖）。
+- APK metadata 复核：`com.ugk.pi.android.testapp` / `versionCode 13` / `versionName 0.9.2`、`minSdk 24`、`targetSdk 36`，并包含 `assets/agent-skills/android-skill-creator/SKILL.md`。
+- 独立 reviewer 六维度审查（需求完整性/逻辑正确性/边界/代码质量/测试覆盖/实际运行与文档一致性）：`PASS`，0 BLOCKING、0 MAJOR、4 MINOR、6 NOTE；33 个改动文件全部落在声明范围内，无 scope creep，未触碰 Terminal v1 scope、打包、权限边界或 Gate 退出条件。MINOR 项（前台 fallback 复活已删会话的理论路径、原子写固定 tmp 名并发交互、损坏备份单槽、catch Throwable 波及 Error）与 PR 自报遗留项一并记录，不阻塞本保存。
+- PR 声明的 API 35 x86_64 模拟器 `connectedDebugAndroidTest 28/28`（含 skill 扫描 symlink 红绿闭环取证）本机无该模拟器未复跑，以 PR 说明与版本台账记录为准；demo #12 Activity 重建端到端行为仍待真机/模拟器人工验收。
+- 本 closeout 未操作真机、未运行真实 Provider/API、Terminal `-CheckPackages` 或 Release 矩阵，不据此改变既有设备与发布 Gate 结论；`0.9.2` APK 本阶段未安装到设备。
