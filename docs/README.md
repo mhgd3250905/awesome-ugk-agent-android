@@ -50,7 +50,7 @@
 
 | 文件 | 角色 |
 |---|---|
-| [sdk-stabilization-baseline.md](sdk-stabilization-baseline.md) | 截至 2026-08-14 的 SDK 稳定化测试期快照；已被当前 `0.9.1` 保存点 superseded |
+| [sdk-stabilization-baseline.md](sdk-stabilization-baseline.md) | 截至 2026-08-14 的 SDK 稳定化测试期快照；已被当前 `0.9.3` 保存点 superseded |
 
 ## 快速阅读顺序
 

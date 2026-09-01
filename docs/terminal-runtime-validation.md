@@ -388,3 +388,14 @@ Core API/JVM 边界：
   - Workspace 泄漏检查：本次门禁前后差集 `LEAKED_COUNT=0`，比对确认测试前后没有新增匹配的 `ugk-terminal-*` 临时目录（此项仅证明当次运行无新增泄漏，不代表 TEMP 目录无历史残留）。
   - `git diff --check` 通过。
 - 边界与未执行：本阶段为纯测试套件清理与防泄漏治理，未触碰生产代码；未操作真机、未运行真实 Provider/API、Terminal `-CheckPackages` 或 Release 矩阵，不改变既有设备与发布 Gate 结论。
+
+## 26. Demo 0.9.3 输入区/附件体验与多图方案 A 保存验收
+
+验证日期：2026-09-01；阶段基线：PR #4 收束后的 `66d2abf`（远端 `5120709` docs closeout 之上）；版本保存 commit 为 `1170268`（`feat(demo-app): enhance composer and multi-image flow`），已快进推送到远端 `main`。范围仅为 `:demo-app` 输入区与附件体验优化（输入垂直对齐、去除贴边横线、附件信息上移可移除、"已导入"提示修正、进入设置不闪现悬浮球、会话历史底部 Bottom Sheet，新增 `material 1.13.0` 依赖）与多图方案 A（相册批量选择/相机追加、最多 4 张、横向待发送缩略图、单张删除、全屏预览、按顺序发送、历史持久化兼容旧单图数据），以及独立审查关闭的图片异步跨会话竞态、历史缩略图 Bitmap 内存峰值、毫秒文件名碰撞三类问题；不改变 Terminal 原生载荷、SDK publication `0.1.0`、权限或 Release Gate。
+
+- 版本元数据为 `0.9.3 / versionCode 14`，applicationId 仍为 `com.ugk.pi.android.testapp`；`demo-app-v0.9.3` 标签尚未创建，最新版本标签仍为 `demo-app-v0.9.2`。
+- 门禁：九模块 JVM 62 个结果 XML 合计 `441` 个测试：`438` passed、`3` skipped、0 failure/error（3 个 skip 与 PR #4 收束基线相同，均为 Windows 主机 symlink 限制）；`:demo-app:testDebugUnitTest`、`:demo-app:assembleDebug`、`:demo-app:compileDebugAndroidTestKotlin` 使用 `--max-workers=1` 通过（Windows 并行测试 JVM 曾触发 `errno=1455` 虚拟内存不足，属环境限制）；`git diff --check` 通过。
+- APK metadata：`com.ugk.pi.android.testapp` / `versionCode 14` / `versionName 0.9.3` / `minSdk 24`。
+- 真机验收：`0.9.3` Debug APK 覆盖安装并启动到授权小米 `QSG6Q8IFDMDELVGQ`（实测型号 `2602BRT18C`，Android 16 / API 36），用户完成界面/功能人工测试并明确回复"测试通过"；本轮真机验收为用户手动操作，无自动外部 API 请求。
+- 独立审查（Luna）对多图与附件流程的最终结论为 `PASS`；三类修复（图片异步跨会话竞态、历史缩略图 Bitmap 内存峰值、毫秒文件名碰撞）均已关闭。
+- 边界与未执行：本轮没有 connected AndroidTest 结果目录（AndroidTest 仅完成 Kotlin 编译）；未运行 Terminal `-CheckPackages` 或 Release 矩阵，不改变既有设备与发布 Gate 结论。

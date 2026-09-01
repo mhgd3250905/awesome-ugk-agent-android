@@ -1,11 +1,11 @@
 # demo-app 版本与变更台账
 
-更新时间：2026-08-31
-当前保存版本：`0.9.2`（`versionCode 13`）
+更新时间：2026-09-01
+当前保存版本：`0.9.3`（`versionCode 14`）
 版本范围：仅 `:demo-app`；SDK/AAR 模块版本继续独立维护。
-当前阶段：在 `demo-app-v0.9.1` 基线上合并第二轮 P0 审查修复（SDK 协议正确性、任务运行时并发、demo 生命周期与数据正确性），版本为 `0.9.2 / versionCode 13`。版本边界标签为 `demo-app-v0.9.2`；远端状态以 Git 实测为准。
+当前阶段：在 `0.9.2` 基线上完成 Demo 输入区与附件体验优化及多图方案 A（相册批量选择/相机追加、最多 4 张、横向待发送缩略图、全屏预览、按顺序发送、历史持久化兼容旧单图数据），版本为 `0.9.3 / versionCode 14`。保存 commit `1170268` 已推送至远端 `main`；尚未创建 `demo-app-v0.9.3` 标签，最新版本标签仍为 `demo-app-v0.9.2`。远端状态以 Git 实测为准。
 
-> 文首元数据、版本规则和 `0.9.2` 记录描述当前保存点；其后的版本条目是不可改写的历史记录。
+> 文首元数据、版本规则和 `0.9.3` 记录描述当前保存点；其后的版本条目是不可改写的历史记录。
 > 历史条目中的“当前”仅指该条目记录时点，不是今天的版本或验证状态。
 
 ## 版本规则
@@ -13,9 +13,33 @@
 - `versionCode` 只递增，不因重新打包或覆盖安装回退。
 - `versionName` 使用面向测试交付的 SemVer 风格；聊天、会话和悬浮窗等一组可感知能力完成后提升 minor 版本。
 - 稳定性修复、生命周期恢复和验收证据整理使用 patch 版本递增，不与新的用户可感知 UI 能力混用。
-- 本阶段版本边界标签名为 `demo-app-v0.9.2`；`demo-app-v0.9.1`、`demo-app-v0.9.0`、`demo-app-v0.8.0`、`demo-app-v0.7.1`、`demo-app-v0.7.0`、`demo-app-v0.6.0`、`demo-app-v0.5.0`、`demo-app-v0.4.0` 和 `demo-app-v0.3.0` 保留为历史 Demo 交付标签，不代表 Terminal Runtime 已达到最终发布状态。
+- 最新版本边界标签仍为 `demo-app-v0.9.2`（`0.9.3` 保存点尚未打标签）；`demo-app-v0.9.2`、`demo-app-v0.9.1`、`demo-app-v0.9.0`、`demo-app-v0.8.0`、`demo-app-v0.7.1`、`demo-app-v0.7.0`、`demo-app-v0.6.0`、`demo-app-v0.5.0`、`demo-app-v0.4.0` 和 `demo-app-v0.3.0` 保留为历史 Demo 交付标签，不代表 Terminal Runtime 已达到最终发布状态。
 - Debug APK 允许本机从被 Git 忽略的配置读取 API 默认值，不能作为对外分发包；API Key 不进入源码、文档或提交。
 - 真机迭代使用固定 Debug 签名和 `adb install -r -d`，不以卸载、清数据作为常规版本升级步骤；本阶段不操作真机。
+
+## 0.9.3 · 2026-08-31 · 输入区与附件体验优化 + 多图方案 A
+
+### 变更范围
+
+- 输入区与附件体验（在 `0.9.2` 基线上，隔离 clone `codex/fix-input-composer-ui` 分支完成）：
+  - 输入框文字改为正确的垂直对齐；去除输入框上方贴边横线。
+  - 附件（文件导入）信息移动到输入框上方展示，可单独移除；删除附件后不再保留错误的"已导入"提示。
+  - 进入设置页时不再闪现悬浮球；会话历史入口改为底部 Bottom Sheet（新增 `com.google.android.material:material:1.13.0` 依赖）。
+- 多图方案 A：
+  - 相册支持批量选择、相机支持追加拍摄，最多 4 张；待发送图片以横向缩略图条展示在输入框上方，支持单张删除。
+  - 点击缩略图进入全屏预览；多图按添加顺序随消息发送。
+  - 会话历史持久化保存多图数据，并兼容读取旧版本单图数据。
+- 独立审查（Luna）关闭三类问题：图片异步处理跨会话竞态、历史缩略图 Bitmap 内存峰值、毫秒级文件名碰撞；最终审查结论 `PASS`。
+- Demo 版本由 `0.9.2 / versionCode 13` 提升到 `0.9.3 / versionCode 14`。不改变 SDK publication `0.1.0`、权限、Terminal v1 scope 或 Release Gate。
+
+### 验收证据与边界
+
+- 九模块 JVM 单元测试 62 个结果 XML 合计 `441` 个测试：`438` passed、`3` skipped、0 failure/error（3 个 skip 与 PR #4 收束基线相同，均为 Windows 主机 symlink 限制）。
+- `:demo-app:testDebugUnitTest`、`:demo-app:assembleDebug`、`:demo-app:compileDebugAndroidTestKotlin` 使用 `--max-workers=1` 通过（Windows 并行启动多个测试 JVM 曾触发 `errno=1455` 虚拟内存不足，属环境限制，非断言失败）；`git diff --check` 通过。
+- APK metadata：`com.ugk.pi.android.testapp` / `versionCode 14` / `versionName 0.9.3` / `minSdk 24`。
+- 真机验收：`0.9.3 / versionCode 14` Debug APK 覆盖安装并启动到授权小米 `QSG6Q8IFDMDELVGQ`（型号 `2602BRT18C`，Android 16 / API 36），用户完成界面/功能测试并明确回复"测试通过"。
+- 本轮没有 connected AndroidTest 结果目录；AndroidTest 仅完成 Kotlin 编译。
+- 保存 commit `1170268`（`feat(demo-app): enhance composer and multi-image flow`）已快进推送到远端 `main`；尚未创建 `demo-app-v0.9.3` 标签，最新版本标签仍为 `demo-app-v0.9.2`；远端状态以 Git 实测为准。
 
 ## 0.9.2 · 2026-08-31 · 第二轮 P0 审查修复（SDK 协议/并发 + demo 生命周期/数据正确性）
 

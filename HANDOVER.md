@@ -1,16 +1,16 @@
 # awesome-ugk-agent-android 项目交接文档 (Handover Document)
 
-> **Demo 0.9.2 版本**：`versionCode 13`（第二轮 P0 审查修复：SDK 协议/并发 + demo 生命周期/数据正确性）
-> **0.9.2 版本边界**：标签 `demo-app-v0.9.2`（远端状态以 Git 实测为准）
-> **上一保存版本**：`0.9.1 / versionCode 12`，标签 `demo-app-v0.9.1`
+> **Demo 0.9.3 版本**：`versionCode 14`（输入区与附件体验优化 + 多图方案 A：批量选择/追加/预览/顺序发送）
+> **0.9.3 版本边界**：保存 commit `1170268` 已推送远端 `main`；尚未创建 `demo-app-v0.9.3` 标签（远端状态以 Git 实测为准）
+> **上一保存版本**：`0.9.2 / versionCode 13`，标签 `demo-app-v0.9.2`
 > **架构整改实现 checkpoint**：`9268bc2`
 > **阶段 8 文档/验证 closeout**：`885c1e9`
 > **微信式对话视觉实现 checkpoint**：`af5b0b7075dd8a201dbfd857987521f7b0d3470a`
 > **首页顶栏收束 checkpoint**：`cde30bf9d12d262fce5141986a77230cbf6ff7b6`
 > **分支**：`main`  
-> **交接时间**：2026-08-31
+> **交接时间**：2026-09-01
 > **工作区**：`E:\AII\ugk-android-new`
-> **当前版本标签**：`demo-app-v0.9.2`（远端状态以 Git 实测为准）
+> **当前版本标签**：仍为 `demo-app-v0.9.2`；`0.9.3` 保存点尚未打标签（远端状态以 Git 实测为准）
 > **目标真机**：小米设备 `QSG6Q8IFDMDELVGQ`、第二台小米 `e0b93f2f`（型号 `2304FPN6DC`）
 > **注意**：设备列表中若有三星手机（`R5CRB11B2AW`），**严禁对其执行任何操作**，唯一下发与调试设备为小米手机。
 >
@@ -18,8 +18,9 @@
 
 ---
 
-## 0. 2026-08-29—31 架构、视觉与两轮 P0 修复收束（当前事实）
+## 0. 2026-08-29—09-01 架构、视觉、两轮 P0 修复与 0.9.3 体验收束（当前事实）
 
+- 2026-08-31—09-01 在隔离 clone `codex/fix-input-composer-ui` 分支完成 Demo 输入区与附件体验优化（输入文字垂直对齐、去除输入框上方贴边横线、附件信息上移并可移除、删除附件后清除"已导入"提示、进入设置不再闪现悬浮球、会话历史改底部 Bottom Sheet，新增 material 1.13.0 依赖）与多图方案 A（相册批量选择/相机追加、最多 4 张、横向待发送缩略图、单张删除、全屏预览、按顺序发送、历史持久化兼容旧单图数据）；独立审查（Luna）关闭图片异步跨会话竞态、历史缩略图 Bitmap 内存峰值、毫秒文件名碰撞三类问题，结论 `PASS`。九模块 JVM 62 个结果 XML 合计 `441` 测试（`438` passed、`3` skipped、0 failure/error）；Demo 门禁（`--max-workers=1`）与 `git diff --check` 通过；APK metadata `com.ugk.pi.android.testapp / versionCode 14 / versionName 0.9.3`；`0.9.3` Debug APK 覆盖安装并启动到授权小米 `QSG6Q8IFDMDELVGQ`（`2602BRT18C`，Android 16 / API 36），用户完成界面/功能测试并明确回复"测试通过"。保存 commit `1170268` 已快进推送到远端 `main`；`demo-app-v0.9.3` 标签尚未创建。本轮无 connected AndroidTest 结果（仅 Kotlin 编译）。
 - 2026-08-31 合并 PR #4（head `ac2c3f9`，merge commit `7dc1b7c17e3503a9aa528cc3088b27b518d58b8a`）：测试套件清理与防 workspace 泄漏——删除冗余 `MainActivityLifecyclePolicyInstrumentedTest` 与 `ContextCompactionBoundedTranscriptTest`（裁剪场景合入 `ContextCompactorTest`），删除重复 `AgentRuntimeBuilderLiveSkillProviderTest`（能力合入 `AgentRuntimeCapabilityAssemblyTest`），修复 `AndroidAutomationAgentIntegrationInstrumentedTest` 中文编码乱码，解耦 `AgentSkillSeederTest` 夹具路径，并为 `BashCommandToolTest` 和 `TerminalAgentPluginCompositionTest` 增加 `@After` 清理所有记录的 workspace（删除失败则测试失败以防静默泄漏）。全工程 JVM 单元测试重算为 `422` 个（`419` passed、`3` skipped、0 failure/error）；门禁 244 actionable tasks 全绿通过；本次门禁前后差集 `LEAKED_COUNT=0`、无新增匹配目录（不代表 TEMP 不存在历史残留）。Demo 版本元数据保持 `0.9.2 / versionCode 13`。
 - 2026-08-31 合并 PR #3（head `741649d`，merge commit `b91f1a8`）：第二轮 P0 审查修复共 14 项——Anthropic 连续 user 消息合并与 thinking 块回传、工具循环异常后会话可恢复、`InMemorySessionStore` 线程安全、任务运行时进程级互斥与损坏备份、通知权限缺失不再终态 FAILED、调度失败回滚、skill 扫描 symlink 边界与 frontmatter 重复 key、memory/app-file/播种原子写、demo 进程级 runtime 所有权（Activity 重建不再杀 Agent）、会话原子追加（后台定时结果不再被前台覆盖）、`stopAll` 失败组保留记录。当前版本为 `0.9.2 / versionCode 13`，版本边界标签为 `demo-app-v0.9.2`。
 - 0.9.2 合并验收（2026-08-31）：merge-base 恰为 `9340d6f`、`git diff --check` 干净；临时 worktree 复跑九模块 JVM + `assembleDebug` + AndroidTest 编译 `BUILD SUCCESSFUL`，62 个 XML 重算 `427` 测试（`424` passed、`3` skipped、0 failure/error，skip 均为 Windows symlink 限制）；APK metadata `versionCode 13 / versionName 0.9.2`；独立 reviewer 六维度审查 `PASS`（0 BLOCKING / 0 MAJOR / 4 MINOR / 6 NOTE，遗留项见 `docs/terminal-runtime-validation.md` 第 24 节与版本台账 0.9.2 条目）。`0.9.2` APK 未安装到设备，demo #12 Activity 重建端到端人工验收待做。
