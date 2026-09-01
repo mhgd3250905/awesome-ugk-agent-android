@@ -2,7 +2,7 @@
 
 更新时间：2026-09-01
 验证源码：`E:\AII\ugk-android-new`
-注意：最新 Terminal instrumentation/probe 的物理设备证据绑定到 source checkpoint `28bc352622458d29e090656ae42fd32f057e9196`；第 21—23 节保留历史版本保存，第 24 节记录 Demo `0.9.2 / versionCode 13` 第二轮 P0 修复保存与合并验收，第 25 节记录 PR #4 测试套件清理与防泄漏收束验收，第 26 节记录 Demo `0.9.4 / versionCode 15` 第三轮 P0 审查修复（含未走保存流程的 `0.9.3` 中间提交补记）。后两者不关闭 Terminal 设备矩阵、网络或发布 Gate。
+注意：最新 Terminal instrumentation/probe 的物理设备证据绑定到 source checkpoint `28bc352622458d29e090656ae42fd32f057e9196`；第 21—23 节保留历史版本保存，第 24 节记录 Demo `0.9.2 / versionCode 13` 第二轮 P0 修复保存与合并验收，第 25 节记录 PR #4 测试套件清理与防泄漏收束验收，第 26 节记录 Demo `0.9.3 / versionCode 14` 输入区/多图保存验收，第 27 节记录 Demo `0.9.4 / versionCode 15` 第三轮 P0 审查修复。后两者不关闭 Terminal 设备矩阵、网络或发布 Gate。
 
 > 第 6—14、18—19 节按日期保留历史验证快照；这些章节中的“当前”仅指当时的源码、APK 或设备上下文。
 > 当前 Terminal Gate 结论以文首总表与第 20 节为准；第 21—23 节为历史版本保存；Demo 0.9.2 保存以第 24 节为准；PR #4 测试 closeout 以第 25 节为准。
@@ -389,11 +389,22 @@ Core API/JVM 边界：
   - `git diff --check` 通过。
 - 边界与未执行：本阶段为纯测试套件清理与防泄漏治理，未触碰生产代码；未操作真机、未运行真实 Provider/API、Terminal `-CheckPackages` 或 Release 矩阵，不改变既有设备与发布 Gate 结论。
 
-## 26. Demo 0.9.4 第三轮 P0 审查修复保存（SDK 协议/并发/性能 + 终端进程组契约）
+## 26. Demo 0.9.3 输入区/附件体验与多图方案 A 保存验收
 
-验证日期：2026-09-01；审查与修复范围：`main@1170268`（`0.9.3 / versionCode 14`，composer 与多图流程，未走保存流程——版本台账已补记）之上的第三轮 P0 审查。本轮不改变 Terminal v1 scope、原生载荷、打包方式或权限边界；Release Gate 状态不变。
+验证日期：2026-09-01；阶段基线：PR #4 收束后的 `66d2abf`（远端 `5120709` docs closeout 之上）；版本保存 commit 为 `1170268`（`feat(demo-app): enhance composer and multi-image flow`），已快进推送到远端 `main`。范围仅为 `:demo-app` 输入区与附件体验优化（输入垂直对齐、去除贴边横线、附件信息上移可移除、"已导入"提示修正、进入设置不闪现悬浮球、会话历史底部 Bottom Sheet，新增 `material 1.13.0` 依赖）与多图方案 A（相册批量选择/相机追加、最多 4 张、横向待发送缩略图、单张删除、全屏预览、按顺序发送、历史持久化兼容旧单图数据），以及独立审查关闭的图片异步跨会话竞态、历史缩略图 Bitmap 内存峰值、毫秒文件名碰撞三类问题；不改变 Terminal 原生载荷、SDK publication `0.1.0`、权限或 Release Gate。
 
-- 修复项（每项均有先红后绿的复现用例；本轮新增 8 个 JVM 测试类共 17 个用例 + 1 个仪器用例，其中 10 个为缺陷复现用例，修复前失败取证见 PR 说明）：
+- 版本元数据为 `0.9.3 / versionCode 14`，applicationId 仍为 `com.ugk.pi.android.testapp`；版本边界标签 `demo-app-v0.9.3` 已创建，指向 `1170268`。
+- 门禁：九模块 JVM 62 个结果 XML 合计 `441` 个测试：`438` passed、`3` skipped、0 failure/error（3 个 skip 与 PR #4 收束基线相同，均为 Windows 主机 symlink 限制）；`:demo-app:testDebugUnitTest`、`:demo-app:assembleDebug`、`:demo-app:compileDebugAndroidTestKotlin` 使用 `--max-workers=1` 通过（Windows 并行测试 JVM 曾触发 `errno=1455` 虚拟内存不足，属环境限制）；`git diff --check` 通过。
+- APK metadata：`com.ugk.pi.android.testapp` / `versionCode 14` / `versionName 0.9.3` / `minSdk 24`。
+- 真机验收：`0.9.3` Debug APK 覆盖安装并启动到授权小米 `QSG6Q8IFDMDELVGQ`（实测型号 `2602BRT18C`，Android 16 / API 36），用户完成界面/功能人工测试并明确回复"测试通过"；本轮真机验收为用户手动操作，无自动外部 API 请求。
+- 独立审查（Luna）对多图与附件流程的最终结论为 `PASS`；三类修复（图片异步跨会话竞态、历史缩略图 Bitmap 内存峰值、毫秒文件名碰撞）均已关闭。后续第三轮审查的独立补审亦为 `PASS`（见第 27 节）。
+- 边界与未执行：本轮没有 connected AndroidTest 结果目录（AndroidTest 仅完成 Kotlin 编译）；未运行 Terminal `-CheckPackages` 或 Release 矩阵，不改变既有设备与发布 Gate 结论。
+
+## 27. Demo 0.9.4 第三轮 P0 审查修复保存（SDK 协议/并发/性能 + 终端进程组契约）
+
+验证日期：2026-09-01；审查与修复范围：`main@1170268`（正式保存的 `0.9.3 / versionCode 14`，标签 `demo-app-v0.9.3`，保存验收见第 26 节）之上的第三轮 P0 审查。本轮不改变 Terminal v1 scope、原生载荷、打包方式或权限边界；Release Gate 状态不变。
+
+- 修复项（每项均有先红后绿的复现用例；本轮新增 7 个 JVM 测试类共 17 个用例 + 1 个仪器用例，其中 10 个为缺陷复现用例，修复前失败取证见 PR 说明）：
   - `ugk-pi-android`：`terminalForTurn` 空白完成不再持久化空白 Assistant（Anthropic 空 content 数组 400 永久坏档，双层防御）；空白 run 输入入口拒绝；两 Provider 截断/损坏 tool 参数丢弃而非伪造 `{}` 执行；`postStream` 取消即断连（原阻塞至 180s 读超时）+ 单行 `maxResponseBytes` 上限。
   - `ugk-agent-task-runtime-android`：`handle()` 写回前重读记录，执行期间并发 cancel/update 不再被过期快照覆盖（取消任务复活、改期回滚）；残余毫秒级窗口在代码注释中声明。
   - `pi-schedule-skill-android`：`nextRunAtMillis` 溢出降级 null、返回值非负（防 AlarmManager 负值立即触发热循环，敌意持久化数据路径）。

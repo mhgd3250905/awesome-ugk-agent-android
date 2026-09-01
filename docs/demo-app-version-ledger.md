@@ -3,7 +3,7 @@
 更新时间：2026-09-01
 当前保存版本：`0.9.4`（`versionCode 15`）
 版本范围：仅 `:demo-app`；SDK/AAR 模块版本继续独立维护。
-当前阶段：在 `main@1170268`（未走保存流程的 `0.9.3 / versionCode 14` composer/多图功能提交，本台账由 0.9.3 条目补记）之上合并第三轮 P0 审查修复（SDK 协议完整性、任务运行时控制面竞态、原子写并发安全、终端运行时进程组契约与校验性能），版本为 `0.9.4 / versionCode 15`。版本边界标签为 `demo-app-v0.9.4`；远端状态以 Git 实测为准。
+当前阶段：在 `0.9.3 / versionCode 14`（composer 与多图功能，正式保存 commit `1170268`，标签 `demo-app-v0.9.3`，保存条目见下）之上合并第三轮 P0 审查修复（SDK 协议完整性、任务运行时控制面竞态、原子写并发安全、终端运行时进程组契约与校验性能），版本为 `0.9.4 / versionCode 15`。版本边界标签为 `demo-app-v0.9.4`；远端状态以 Git 实测为准。
 
 > 文首元数据、版本规则和 `0.9.4` 记录描述当前保存点；其后的版本条目是不可改写的历史记录。
 > 历史条目中的“当前”仅指该条目记录时点，不是今天的版本或验证状态。
@@ -13,7 +13,7 @@
 - `versionCode` 只递增，不因重新打包或覆盖安装回退。
 - `versionName` 使用面向测试交付的 SemVer 风格；聊天、会话和悬浮窗等一组可感知能力完成后提升 minor 版本。
 - 稳定性修复、生命周期恢复和验收证据整理使用 patch 版本递增，不与新的用户可感知 UI 能力混用。
-- 本阶段版本边界标签名为 `demo-app-v0.9.4`；`demo-app-v0.9.2`、`demo-app-v0.9.1`、`demo-app-v0.9.0`、`demo-app-v0.8.0`、`demo-app-v0.7.1`、`demo-app-v0.7.0`、`demo-app-v0.6.0`、`demo-app-v0.5.0`、`demo-app-v0.4.0` 和 `demo-app-v0.3.0` 保留为历史 Demo 交付标签，不代表 Terminal Runtime 已达到最终发布状态（`0.9.3` 为未走保存流程的中间提交，无独立标签，见 0.9.3 条目补记说明）。
+- 本阶段版本边界标签名为 `demo-app-v0.9.4`；`demo-app-v0.9.3`（指向 `1170268`）、`demo-app-v0.9.2`、`demo-app-v0.9.1`、`demo-app-v0.9.0`、`demo-app-v0.8.0`、`demo-app-v0.7.1`、`demo-app-v0.7.0`、`demo-app-v0.6.0`、`demo-app-v0.5.0`、`demo-app-v0.4.0` 和 `demo-app-v0.3.0` 保留为历史 Demo 交付标签，不代表 Terminal Runtime 已达到最终发布状态。
 - Debug APK 允许本机从被 Git 忽略的配置读取 API 默认值，不能作为对外分发包；API Key 不进入源码、文档或提交。
 - 真机迭代使用固定 Debug 签名和 `adb install -r -d`，不以卸载、清数据作为常规版本升级步骤；本阶段不操作真机。
 
@@ -31,29 +31,36 @@
 
 ### 验收证据与边界
 
-- 十个模块 JVM 单元测试合计 `916` 个（`138` 个测试类）：`910` passed、`6` skipped、0 failure/error；skip 均为 Windows 主机 symlink 限制的既有用例。本轮新增 8 个 JVM 测试类共 17 个用例 + 1 个仪器用例，其中 10 个为缺陷复现用例（修复前确认失败、修复后转绿，取证见 PR 说明），其余为防御边界锁定用例。
+- 九个模块 JVM 单元测试合计 `916` 个（`138` 个测试类）：`910` passed、`6` skipped、0 failure/error；skip 均为 Windows 主机 symlink 限制的既有用例。本轮新增 7 个 JVM 测试类共 17 个用例 + 1 个仪器用例，其中 10 个为缺陷复现用例（修复前确认失败、修复后转绿，取证见 PR 说明），其余为防御边界锁定用例。
 - API 35 x86_64 模拟器（`codex_api35`）`:demo-app:connectedDebugAndroidTest` `28/28` 通过（0 failure/0 skipped），含新增 `TerminalBackgroundProcessCleanupInstrumentedTest.naturalExitTerminatesBackgroundChildrenOfTheCall`——对真实原生运行时验证后台子进程随调用结束被清扫。本轮未操作任何真机。
 - `:demo-app:assembleDebug` 通过，APK metadata 为 `versionCode 15 / versionName 0.9.4`。
 - 每个缺陷项均带先红后绿的复现测试；`LocalHttpServerManager` 惰性清理为行为加固，未带专用仪器用例（既有 `LocalHttpServerManagerInstrumentedTest` 全绿）。遗留未修复项（主线程位图解码、相册 URI 权限过期、arm64 16KB、`handle` 残余毫秒级竞态窗口等）记录于 PR 说明，不宣称已解决。
 - 版本边界标签为 `demo-app-v0.9.4`；远端状态以 Git 实测为准。
 
-## 0.9.3 · 2026-08-31 · composer 与多图流程（补记：未走保存流程的中间提交）
-
-> 本条目为补记：`1170268`（`feat(demo-app): enhance composer and multi-image flow`）把版本提升到 `0.9.3 / versionCode 14` 但未按版本规则更新本台账与验证文档，也无版本边界标签。该提交随后的第三轮 P0 审查由 0.9.4 条目记录；本条目按补记时的实际代码状态登记，不补造当时的验收证据。
+## 0.9.3 · 2026-08-31 · 输入区与附件体验优化 + 多图方案 A
 
 ### 变更范围
 
-- composer 增强：附件菜单整合（拍照/相册/文档导入）、待发图片预览条与配额提示（上限 4 张）、移除单张待发图。
-- 多图流程：`DemoConversationStore` 会话 JSON 从 org.json 迁移到 kotlinx.serialization（`imagePath` 单图字段兼容解码为 `imagePaths` 列表，逐条容错隔离坏记录）；图片经 EXIF 纠偏、采样解码与 JPEG 压缩后进入多模态消息与会话持久化；选择处理引入 generation 守卫防止切换会话/重建后的脏提交。
-- `DemoImageUtils` 采样/缩放纯函数化并带单测；新增 material 1.13.0 依赖（BottomSheetDialog 历史会话列表）。
-- Demo 版本由 `0.9.2 / versionCode 13` 提升到 `0.9.3 / versionCode 14`（随功能提交一并发生）。该提交新增/扩充 demo-app 单测（`AgentOverlayPolicyTest`、`DemoConversationStoreTest`、`DemoImageSelectionTest`），全工程 JVM 测试数由 `422` 增至 `441`（`@Test` 注解口径）。
+- 输入区与附件体验（在 `0.9.2` 基线上，隔离 clone `codex/fix-input-composer-ui` 分支完成）：
+  - 输入框文字改为正确的垂直对齐；去除输入框上方贴边横线。
+  - 附件（文件导入）信息移动到输入框上方展示，可单独移除；删除附件后不再保留错误的"已导入"提示。
+  - 进入设置页时不再闪现悬浮球；会话历史入口改为底部 Bottom Sheet（新增 `com.google.android.material:material:1.13.0` 依赖）。
+- 多图方案 A：
+  - 相册支持批量选择、相机支持追加拍摄，最多 4 张；待发送图片以横向缩略图条展示在输入框上方，支持单张删除。
+  - 点击缩略图进入全屏预览；多图按添加顺序随消息发送。
+  - 会话历史持久化保存多图数据，并兼容读取旧版本单图数据。
+- 独立审查（Luna）关闭三类问题：图片异步处理跨会话竞态、历史缩略图 Bitmap 内存峰值、毫秒级文件名碰撞；最终审查结论 `PASS`。
+- Demo 版本由 `0.9.2 / versionCode 13` 提升到 `0.9.3 / versionCode 14`。不改变 SDK publication `0.1.0`、权限、Terminal v1 scope 或 Release Gate。
 
 ### 验收证据与边界
 
-- 该提交未走保存验收流程；补记时的回归证据为 0.9.4 条目记录的第三轮审查全量门禁（JVM `916`、模拟器 `28/28`），覆盖该提交的测试与代码。
-- 第三轮审查确认该提交未回退 0.9.2 的历史 P0 修复（连续 user 消息合并、原子 append、坏档容错）；发现的问题（onSaveInstanceState 覆盖残留、flush 落盘语义等）已由 0.9.4 修复。
-- 无 `demo-app-v0.9.3` 标签；不作为版本边界。
-
+- 九模块 JVM 单元测试 62 个结果 XML 合计 `441` 个测试：`438` passed、`3` skipped、0 failure/error（3 个 skip 与 PR #4 收束基线相同，均为 Windows 主机 symlink 限制）。
+- `:demo-app:testDebugUnitTest`、`:demo-app:assembleDebug`、`:demo-app:compileDebugAndroidTestKotlin` 使用 `--max-workers=1` 通过（Windows 并行启动多个测试 JVM 曾触发 `errno=1455` 虚拟内存不足，属环境限制，非断言失败）；`git diff --check` 通过。
+- APK metadata：`com.ugk.pi.android.testapp` / `versionCode 14` / `versionName 0.9.3` / `minSdk 24`。
+- 真机验收：`0.9.3 / versionCode 14` Debug APK 覆盖安装并启动到授权小米 `QSG6Q8IFDMDELVGQ`（型号 `2602BRT18C`，Android 16 / API 36），用户完成界面/功能测试并明确回复"测试通过"。
+- 本轮没有 connected AndroidTest 结果目录；AndroidTest 仅完成 Kotlin 编译。
+- 保存 commit `1170268`（`feat(demo-app): enhance composer and multi-image flow`）已快进推送到远端 `main`；版本边界标签 `demo-app-v0.9.3` 已创建，指向 `1170268`；远端状态以 Git 实测为准。
+- 后续第三轮 P0 审查对该提交代码的独立补审结论为 `PASS`（附 2 项非阻断 MAJOR 建议：主线程批量解码缩略图、busy 时静默丢图）；其发现的问题（`onSaveInstanceState` 覆盖残留、flush 落盘语义等）已由 0.9.4 条目修复。
 
 ## 0.9.2 · 2026-08-31 · 第二轮 P0 审查修复（SDK 协议/并发 + demo 生命周期/数据正确性）
 
