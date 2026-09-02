@@ -37,6 +37,27 @@ val fixedDebugKeystorePath = requireNotNull(fixedDebugKeystore) {
 }
 val localApiConfig = loadLocalApiConfig(localProperty("ugk.api.config"))
 
+// Release uploads to Play App Signing use a dedicated upload key; all four
+// properties must come from the ignored local.properties.
+val releaseKeystorePath = localProperty("ugk.release.keystore")
+val releaseKeystorePassword = localProperty("ugk.release.storePassword")
+val releaseKeyAlias = localProperty("ugk.release.keyAlias")
+val releaseKeyPassword = localProperty("ugk.release.keyPassword")
+val hasReleaseSigning = listOf(
+    releaseKeystorePath,
+    releaseKeystorePassword,
+    releaseKeyAlias,
+    releaseKeyPassword,
+).all { it != null }
+if (releaseKeystorePath != null) {
+    require(File(releaseKeystorePath).isFile) {
+        "demo-app ugk.release.keystore points to a missing file: $releaseKeystorePath"
+    }
+    require(hasReleaseSigning) {
+        "demo-app release signing requires ugk.release.keystore/storePassword/keyAlias/keyPassword together"
+    }
+}
+
 require(File(fixedDebugKeystorePath).isFile) {
     "demo-app requires a stable ugk.debug.keystore in local.properties; refusing to fall back to a different debug key"
 }
@@ -46,11 +67,11 @@ android {
     compileSdk = 36
 
     defaultConfig {
-        applicationId = "com.ugk.pi.android.testapp"
+        applicationId = "com.ugk.pi.agent"
         minSdk = 24
         targetSdk = 36
-        versionCode = 15
-        versionName = "0.9.4"
+        versionCode = 102
+        versionName = "1.0.2"
         testInstrumentationRunner = "androidx.test.runner.AndroidJUnitRunner"
     }
 
@@ -63,6 +84,15 @@ android {
         keyPassword = "android"
     }
 
+    if (hasReleaseSigning) {
+        signingConfigs.create("upload") {
+            storeFile = file(releaseKeystorePath!!)
+            storePassword = releaseKeystorePassword
+            keyAlias = releaseKeyAlias
+            keyPassword = releaseKeyPassword
+        }
+    }
+
     buildTypes {
         getByName("debug") {
             // These values are read from the developer's ignored local config
@@ -71,6 +101,12 @@ android {
             resValue("string", "ugk_default_api_base_url", localApiConfig["baseurl"].orEmpty())
             resValue("string", "ugk_default_api_key", localApiConfig["apikey"].orEmpty())
             resValue("string", "ugk_default_api_model", localApiConfig["model"].orEmpty())
+        }
+        getByName("release") {
+            isMinifyEnabled = false
+            if (hasReleaseSigning) {
+                signingConfig = signingConfigs.getByName("upload")
+            }
         }
     }
 
