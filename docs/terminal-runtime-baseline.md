@@ -54,7 +54,7 @@
 
 - API 24 / x86_64 / 4 KB：Demo A `10/10`、Demo B `5/5`；
 - API 36 / x86_64 / 16 KB：Demo A `10/10`、Demo B `5/5`；
-- `BashCommandToolTest`：`10/10`。
+- `BashCommandToolTest`：`26/26`。
 
 覆盖默认确认、重复 call id、运行中/排队取消、`cancelAll()`、并发槽位复用、stdout/stderr 独立截断、普通超时、TERM-resistant descendant、SIGKILL 升级、Python、execmem 和双包名重定位。
 

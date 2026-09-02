@@ -105,7 +105,10 @@ prebuilt Runtime-managed Tool when the task needs a persistent service.
 
 ## Reporting failures
 
-When a command fails, report the actual exit code and relevant stderr. If the
-failure is caused by an unavailable command, correct the script using the
-translation rules above rather than invoking another shell or guessing that a
-package is installed.
+When a command fails, report the actual exit code and relevant stderr. A
+negative exit code means the process was terminated by a signal, for example
+exitCode `-9` for SIGKILL; the Runtime itself sends these signals when a call
+times out, is cancelled, or sweeps leftover background processes when the call
+ends. If the failure is caused by an unavailable command, correct the script
+using the translation rules above rather than invoking another shell or
+guessing that a package is installed.

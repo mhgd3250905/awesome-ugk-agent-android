@@ -234,3 +234,11 @@
 - 范围：本阶段只支持单个 `SKILL.md`，不实现 supporting resource tools、脚本/资产执行、UI 管理、迁移框架、依赖或版本发布；不改变 `ugk-pi-android` 核心和其它模块。
 - 验证与回退：focused unit tests 覆盖创建、存在拒绝、覆盖、非法输入不损坏旧文件、写后 list/read 可见、自定义删除、内置保护、plugin 工具组合和确认旁路；运行 `:pi-agent-skill-runtime-android:testDebugUnitTest` 与 `git diff --check`。回退仅撤销本决策对应的 runtime tools、SOP asset、测试和文档改动，不触碰 D-022/D-024 已完成能力。
 - 当前验证：八个 SDK/Runtime 模块合计 `279/279`（Core 122、File 9、Schedule 9、Task Runtime 7、System 42、Agent Skill Runtime 70、Terminal Runtime 0 `NO-SOURCE`、Terminal Skill 20），Demo `107/107`，总计 `386/386`，0 failure/error/skipped；Demo assemble 与 AndroidTest Kotlin compile 通过；Gradle 输出 `BUILD SUCCESSFUL`，共 244 actionable tasks。aapt metadata 为 `com.ugk.pi.android.testapp` / `versionCode 11` / `versionName 0.9.0`，APK 含 `assets/agent-skills/android-skill-creator/SKILL.md`，`git diff --check` 通过；独立 closeout review 为 `PASS`。0.8.0 metadata APK 已安装证据仅限 package metadata；0.9.0 未安装，人工 Agent end-to-end、`connectedDebugAndroidTest`、真实 Provider/API 与 Terminal `-CheckPackages` 未运行。版本边界标签为 `demo-app-v0.9.0`，远端状态以 Git 实测为准。
+
+## D-027：Terminal 工具错误 content 统一为纯文本并解释信号终止
+
+- 日期：2026-09-03
+- 背景：`terminal_bash_execute` 的错误 content 是纯文本 message，而 `local_http_server_*` 的错误 content 是 JSON `{"error", "message"}` 且 metadata 只有 `code`，两套格式并存；同时 JVM 对信号终止进程返回负 exit code（如 -9=SIGKILL），Runtime 在超时、取消和调用结束清扫后台进程组时也会产生这类终止，模型无法把它与"命令自身失败"区分。
+- 决策：两族工具共用包内 `terminalToolError` 辅助：错误 content 为 `"<CODE>: <message>"` 纯文本（错误码可检索），metadata 恒为 `{code, message}`；既有错误码字符串值与 `isError` 判定不变。负 exit code 时 `terminal_bash_execute` 在 9 字段 JSON payload 之后向 content 追加一行信号解释（信号号 + 常见信号名 + Runtime 清扫语义），payload 字段集不扩展；SDK runtime `AGENTS.md` 的 "Reporting failures" 段同步补充该含义。
+- 原因：统一的人类可读且可检索的格式降低模型与宿主的解析成本；把"被 Runtime 终止"显式告知模型，避免把进程组清扫误报为脚本失败。结果 payload 的 9 字段已被 skill `resultSemantics` 与架构文档锁定，因此解释放 content 而不是新增字段。
+- 影响：错误 content 格式变化对 LLM/宿主可见（local HTTP 从 JSON 变纯文本，Bash 错误 content 增加错误码前缀）；payload 字段、错误码集合、`isError` 语义不变；格式与信号解释由 `BashCommandToolTest`、`LocalHttpServerToolTest` 锁定。

@@ -416,3 +416,18 @@ Core API/JVM 边界：
   - `:demo-app:connectedDebugAndroidTest`（AVD `codex_api35`，API 35 x86_64，page size 4 KB）：`28/28` 通过、0 failure、0 skipped，含新增 `TerminalBackgroundProcessCleanupInstrumentedTest.naturalExitTerminatesBackgroundChildrenOfTheCall`——真实原生运行时上验证 bash 后台子进程随调用结束被清扫。
   - `:demo-app:assembleDebug` 通过；APK metadata `versionCode 15 / versionName 0.9.4`；`git diff --check` 通过。
 - 边界与未执行：本轮未操作真机、未调用真实 Provider/API、未跑 `-CheckPackages` 与 Release 矩阵；arm64（尤其 16 KB）Gate 状态不变。遗留项（demo 主线程位图解码、相册 URI 权限过期、Activity 重建丢失待发图片与拍照文件、`handle` 残余毫秒级竞态、`local_http_server` 跨实例元数据共享、非 SSE 后端 pretty-print JSON 容错等）记录于 PR 说明与版本台账 0.9.4 条目，不宣称已解决。
+
+## 28. Terminal Tool 错误路径 JVM 测试与错误映射完善（开发计划 P1 第 1 项）
+
+验证日期：2026-09-03；源码状态：`cockpit/work/4b5fdb3d2d0de585` 分支工作区未提交改动（含本轮改动）。本轮为 JVM 单元测试与错误映射完善，不改变 Terminal v1 scope、原生载荷、打包方式或权限边界；设备矩阵、网络与 Release Gate 状态不变。
+
+- 行为改动（LLM 可见）：
+  - `terminal_bash_execute` 与 `local_http_server_*` 的错误结果统一为纯文本 content（`"<CODE>: <message>"`），metadata 恒为 `{code, message}`；此前 local HTTP 工具的错误 content 为 JSON `{"error": ..., "message": ...}` 且 metadata 只有 `code`。
+  - 负 exit code（信号终止）时，`terminal_bash_execute` 的 content 在 9 字段 JSON payload 后追加一行解释（如 `exitCode=-9 ... signal 9 (SIGKILL)`，并说明 Runtime 自身的超时/取消/调用结束清扫也会产生该类终止）；payload 仍为恰好 9 字段，不新增字段。
+  - SDK runtime `AGENTS.md` 的 "Reporting failures" 段补充负 exit code 信号终止含义（见 D-027）。
+  - `local_http_server_start/status/stop` 的 tool description 补充纯文本错误格式说明。
+- 测试：`pi-terminal-skill-android` 新增 19 个 JVM 测试（`BashCommandToolTest` 12→26、`LocalHttpServerToolTest` 4→9），覆盖：timedOut payload、exitCode=null 且未超时、负 exit code 信号解释与 9 字段 payload 锁定、MISSING_SCRIPT（缺失/空/空白）、INVALID_TIMEOUT（0/负数/超 policy 上限拒绝，1 与上限接受）、INVALID_WORKSPACE_PATH（绝对路径/反斜杠/`.` 段/`..`，均断言 metadata code）、INVALID_ENVIRONMENT（33 项、非法名字；32 项与 4096 字节边界接受）、IOException/IllegalArgumentException/IllegalStateException 映射（含无 message 回退类名）、local HTTP 的 PORT_IN_USE/TOO_MANY_SERVERS/START_FAILED/STOP_FAILED/INVALID_INPUT/LOCAL_HTTP_SERVER_FAILED 兜底（含无 message 回退类名）、既有取消测试补 CANCELLED code 断言。
+- 命令与结果（均加 `--max-workers=1`，`JAVA_HOME=E:\Android\Android Studio\jbr`）：
+  - `.\gradlew.bat :pi-terminal-skill-android:testDebugUnitTest --console=plain --max-workers=1`：`39/39` 通过，0 failure/error/skipped（`BashCommandToolTest` 26、`LocalHttpServerToolTest` 9、`TerminalAgentPluginCompositionTest` 4）。
+  - 全模块 JVM（第 3 节八个模块命令 + `:demo-app:testDebugUnitTest`）：`BUILD SUCCESSFUL`，合计 `506` tests、`3` skipped（既有 Windows symlink 限制用例，分布于 File Skill 1、Agent Skill Runtime 2）、0 failure、0 error；分模块：Core 136、File 13、Schedule 14、Task Runtime 19、System 42、Agent Skill Runtime 83、Terminal Runtime 0（`NO-SOURCE`）、Terminal Skill 39、Demo 160。
+- 边界与未执行：未运行设备/connected 测试、`-CheckPackages`、Release 矩阵或真实 Provider/API；本轮不关闭任何 Gate。

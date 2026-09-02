@@ -27,7 +27,7 @@ class LocalHttpServerStartTool(
     override val name: String = "local_http_server_start"
 ) : AgentTool {
     override val description: String =
-        "Starts or reuses a managed Python HTTP server bound only to 127.0.0.1 for a directory inside the terminal workspace."
+        "Starts or reuses a managed Python HTTP server bound only to 127.0.0.1 for a directory inside the terminal workspace. Errors are reported as a plain-text message prefixed with the error code."
 
     override val inputSchema: JsonObject = buildJsonObject {
         put("type", "object")
@@ -63,7 +63,7 @@ class LocalHttpServerStatusTool(
     override val name: String = "local_http_server_status"
 ) : AgentTool {
     override val description: String =
-        "Reads the state of Runtime-managed local HTTP servers without starting, stopping, or changing anything."
+        "Reads the state of Runtime-managed local HTTP servers without starting, stopping, or changing anything. Errors are reported as a plain-text message prefixed with the error code."
 
     override val inputSchema: JsonObject = buildJsonObject {
         put("type", "object")
@@ -96,7 +96,7 @@ class LocalHttpServerStopTool(
     override val name: String = "local_http_server_stop"
 ) : AgentTool {
     override val description: String =
-        "Stops a Runtime-managed local HTTP server by port; it never terminates an unmanaged process."
+        "Stops a Runtime-managed local HTTP server by port; it never terminates an unmanaged process. Errors are reported as a plain-text message prefixed with the error code."
 
     override val inputSchema: JsonObject = buildJsonObject {
         put("type", "object")
@@ -134,37 +134,20 @@ private suspend fun runToolCall(
                 content = block().toString()
             )
         } catch (error: LocalHttpServerException) {
-            ToolResult(
-                toolCallId = call.id,
-                name = call.name,
-                content = buildJsonObject {
-                    put("error", error.code)
-                    put("message", error.message)
-                }.toString(),
-                isError = true,
-                metadata = buildJsonObject { put("code", error.code) }
-            )
+            terminalToolError(call.id, call.name, error.code, error.message)
         } catch (error: IllegalArgumentException) {
-            ToolResult(
-                toolCallId = call.id,
-                name = call.name,
-                content = buildJsonObject {
-                    put("error", "INVALID_INPUT")
-                    put("message", error.message ?: "Invalid local HTTP server input.")
-                }.toString(),
-                isError = true,
-                metadata = buildJsonObject { put("code", "INVALID_INPUT") }
+            terminalToolError(
+                call.id,
+                call.name,
+                "INVALID_INPUT",
+                error.message ?: "Invalid local HTTP server input."
             )
         } catch (error: Exception) {
-            ToolResult(
-                toolCallId = call.id,
-                name = call.name,
-                content = buildJsonObject {
-                    put("error", "LOCAL_HTTP_SERVER_FAILED")
-                    put("message", error.message ?: error::class.java.name)
-                }.toString(),
-                isError = true,
-                metadata = buildJsonObject { put("code", "LOCAL_HTTP_SERVER_FAILED") }
+            terminalToolError(
+                call.id,
+                call.name,
+                "LOCAL_HTTP_SERVER_FAILED",
+                error.message ?: error::class.java.name
             )
         }
     }

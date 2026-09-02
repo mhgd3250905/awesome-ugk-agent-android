@@ -364,24 +364,33 @@ class BashCommandTool(
         return ToolResult(
             toolCallId = call.id,
             name = name,
-            content = payload.toString(),
+            content = signalExitNote()?.let { note -> payload.toString() + "\n" + note }
+                ?: payload.toString(),
             isError = timedOut || exitCode == null || exitCode != 0,
             metadata = payload
         )
     }
 
-    private fun error(call: ToolCall, code: String, message: String): ToolResult {
-        return ToolResult(
-            toolCallId = call.id,
-            name = name,
-            content = message,
-            isError = true,
-            metadata = buildJsonObject {
-                put("code", code)
-                put("message", message)
-            }
-        )
+    /**
+     * The JVM reports a signal-terminated process with a negative exit value
+     * (-9 for SIGKILL). Explaining it in the content keeps the model from
+     * reading the Runtime's own timeout, cancellation, or end-of-call process
+     * group sweep as a normal script failure.
+     */
+    private fun BashCommandResult.signalExitNote(): String? {
+        val signalExitCode = exitCode ?: return null
+        if (signalExitCode >= 0) return null
+        val signal = -signalExitCode
+        val signalName = SIGNAL_NAMES[signal]?.let { " ($it)" }.orEmpty()
+        return "exitCode=$signalExitCode means the process was terminated by " +
+            "signal $signal$signalName. The Runtime itself terminates a call's " +
+            "process group on timeout or cancellation and sweeps leftover " +
+            "background processes when a call ends, so this usually reflects " +
+            "Runtime termination rather than a normal script exit."
     }
+
+    private fun error(call: ToolCall, code: String, message: String): ToolResult =
+        terminalToolError(call.id, name, code, message)
 
     private fun JsonObject.string(name: String): String? =
         (this[name] as? JsonPrimitive)?.contentOrNull
@@ -419,6 +428,23 @@ class BashCommandTool(
 
     private companion object {
         val ENVIRONMENT_NAME = Regex("[A-Za-z_][A-Za-z0-9_]*")
+        val SIGNAL_NAMES = mapOf(
+            1 to "SIGHUP",
+            2 to "SIGINT",
+            3 to "SIGQUIT",
+            4 to "SIGILL",
+            5 to "SIGTRAP",
+            6 to "SIGABRT",
+            7 to "SIGBUS",
+            8 to "SIGFPE",
+            9 to "SIGKILL",
+            10 to "SIGUSR1",
+            11 to "SIGSEGV",
+            12 to "SIGUSR2",
+            13 to "SIGPIPE",
+            14 to "SIGALRM",
+            15 to "SIGTERM"
+        )
         val RESERVED_ENVIRONMENT_VARIABLES = setOf(
             "HOME",
             "PWD",

@@ -2,10 +2,12 @@ package com.ugk.pi.terminal.skill
 
 import com.ugk.pi.android.ToolCall
 import com.ugk.pi.android.ToolExecutionContext
+import com.ugk.pi.android.ToolResult
 import com.ugk.pi.terminal.runtime.BashCommandExecutor
 import com.ugk.pi.terminal.runtime.BashCommandRequest
 import com.ugk.pi.terminal.runtime.BashCommandResult
 import java.io.File
+import java.io.IOException
 import java.nio.file.Files
 import java.util.concurrent.CountDownLatch
 import java.util.concurrent.TimeUnit
@@ -250,6 +252,7 @@ class BashCommandToolTest {
         assertTrue(interrupted.get())
         assertTrue(result?.isError == true)
         assertTrue(result?.content?.contains("cancel", ignoreCase = true) == true)
+        assertEquals("CANCELLED", result?.metadata?.get("code")?.toString()?.trim('"'))
         assertFalse(tool.cancel("call-explicit-cancel"))
     }
 
@@ -524,6 +527,434 @@ class BashCommandToolTest {
         assertEquals("false", result.metadata?.get("stderrTruncated").toString())
     }
 
+    @Test
+    fun reportsTimeoutResultAsToolError() = runBlocking {
+        val workspace = createWorkspace()
+        val executor = BashCommandExecutor { request ->
+            BashCommandResult(
+                command = listOf("bash", "-c", request.script),
+                executablePath = "/fake/libugk_bash.so",
+                exitCode = null,
+                stdout = "partial",
+                stderr = "",
+                durationMillis = 5_000,
+                timedOut = true,
+                outputTruncated = false,
+                workingDirectory = request.workingDirectory!!.absolutePath
+            )
+        }
+        val tool = BashCommandTool(
+            executor = executor,
+            workspaceRoot = workspace,
+            policy = TerminalToolPolicy(requireUserConfirmation = false)
+        )
+
+        val result = tool.execute(
+            call("timed-out"),
+            ToolExecutionContext(sessionId = "session")
+        )
+
+        assertTrue(result.isError)
+        assertEquals("true", result.metadata?.get("timedOut").toString())
+        assertEquals("null", result.metadata?.get("exitCode").toString())
+        assertTrue(result.content.contains("timedOut"))
+    }
+
+    @Test
+    fun reportsNullExitCodeWithoutTimeoutAsToolError() = runBlocking {
+        val workspace = createWorkspace()
+        val executor = BashCommandExecutor { request ->
+            BashCommandResult(
+                command = listOf("bash", "-c", request.script),
+                executablePath = "/fake/libugk_bash.so",
+                exitCode = null,
+                stdout = "",
+                stderr = "",
+                durationMillis = 3,
+                timedOut = false,
+                outputTruncated = false,
+                workingDirectory = request.workingDirectory!!.absolutePath
+            )
+        }
+        val tool = BashCommandTool(
+            executor = executor,
+            workspaceRoot = workspace,
+            policy = TerminalToolPolicy(requireUserConfirmation = false)
+        )
+
+        val result = tool.execute(
+            call("null-exit-code"),
+            ToolExecutionContext(sessionId = "session")
+        )
+
+        assertTrue(result.isError)
+        assertEquals("null", result.metadata?.get("exitCode").toString())
+        assertEquals("false", result.metadata?.get("timedOut").toString())
+    }
+
+    @Test
+    fun explainsSignalTerminationForNegativeExitCodes() = runBlocking {
+        val workspace = createWorkspace()
+        listOf(
+            -9 to "signal 9 (SIGKILL)",
+            -15 to "signal 15 (SIGTERM)",
+            -42 to "signal 42"
+        ).forEach { (signalExitCode, expectedPhrase) ->
+            val executor = BashCommandExecutor { request ->
+                BashCommandResult(
+                    command = listOf("bash", "-c", request.script),
+                    executablePath = "/fake/libugk_bash.so",
+                    exitCode = signalExitCode,
+                    stdout = "",
+                    stderr = "",
+                    durationMillis = 2,
+                    timedOut = false,
+                    outputTruncated = false,
+                    workingDirectory = request.workingDirectory!!.absolutePath
+                )
+            }
+            val tool = BashCommandTool(
+                executor = executor,
+                workspaceRoot = workspace,
+                policy = TerminalToolPolicy(requireUserConfirmation = false)
+            )
+
+            val result = tool.execute(
+                call("signal-$signalExitCode"),
+                ToolExecutionContext(sessionId = "session")
+            )
+
+            assertTrue(result.isError)
+            assertEquals(signalExitCode.toString(), result.metadata?.get("exitCode").toString())
+            assertTrue(
+                "expected '$expectedPhrase' in content: ${result.content}",
+                result.content.contains("terminated by $expectedPhrase")
+            )
+            assertTrue(result.content.contains("sweeps leftover background processes"))
+        }
+
+        val cleanTool = BashCommandTool(
+            executor = RecordingExecutor(),
+            workspaceRoot = workspace,
+            policy = TerminalToolPolicy(requireUserConfirmation = false)
+        )
+        val cleanResult = cleanTool.execute(
+            call("signal-free-success"),
+            ToolExecutionContext(sessionId = "session")
+        )
+        assertFalse(cleanResult.isError)
+        assertFalse(cleanResult.content.contains("terminated by signal"))
+    }
+
+    @Test
+    fun resultPayloadKeepsExactlyTheNineDocumentedFields() = runBlocking {
+        val workspace = createWorkspace()
+        val tool = BashCommandTool(
+            executor = RecordingExecutor(),
+            workspaceRoot = workspace,
+            policy = TerminalToolPolicy(requireUserConfirmation = false)
+        )
+
+        val result = tool.execute(
+            call("payload-shape"),
+            ToolExecutionContext(sessionId = "session")
+        )
+
+        assertFalse(result.isError)
+        assertEquals(
+            setOf(
+                "stdout",
+                "stderr",
+                "exitCode",
+                "timedOut",
+                "outputTruncated",
+                "stdoutTruncated",
+                "stderrTruncated",
+                "durationMillis",
+                "workingDirectory"
+            ),
+            result.metadata?.keys?.toSet()
+        )
+    }
+
+    @Test
+    fun rejectsMissingOrBlankScript() = runBlocking {
+        val tool = BashCommandTool(
+            executor = RecordingExecutor(),
+            workspaceRoot = createWorkspace(),
+            policy = TerminalToolPolicy(requireUserConfirmation = false)
+        )
+
+        listOf(null, "", "   ").forEachIndexed { index, script ->
+            val result = tool.execute(
+                ToolCall(
+                    id = "missing-script-$index",
+                    name = tool.name,
+                    input = buildJsonObject { script?.let { put("script", it) } }
+                ),
+                ToolExecutionContext(sessionId = "session")
+            )
+
+            assertTrue(result.isError)
+            assertEquals("MISSING_SCRIPT", errorCode(result))
+            assertTrue(result.content.startsWith("MISSING_SCRIPT: "))
+        }
+    }
+
+    @Test
+    fun rejectsTimeoutOutsidePolicyRangeAndAcceptsBoundaries() = runBlocking {
+        val executor = RecordingExecutor()
+        val tool = BashCommandTool(
+            executor = executor,
+            workspaceRoot = createWorkspace(),
+            policy = TerminalToolPolicy(
+                requireUserConfirmation = false,
+                defaultTimeoutMillis = 5_000,
+                maxTimeoutMillis = 10_000
+            )
+        )
+
+        listOf(0L, -1L, 10_001L).forEachIndexed { index, timeoutMillis ->
+            val result = tool.execute(
+                ToolCall(
+                    id = "invalid-timeout-$index",
+                    name = tool.name,
+                    input = buildJsonObject {
+                        put("script", "printf ok")
+                        put("timeoutMillis", timeoutMillis)
+                    }
+                ),
+                ToolExecutionContext(sessionId = "session")
+            )
+
+            assertTrue(result.isError)
+            assertEquals("INVALID_TIMEOUT", errorCode(result))
+            assertTrue(result.content.startsWith("INVALID_TIMEOUT: "))
+            assertTrue(result.content.contains("1 and 10000"))
+        }
+
+        listOf(1L, 10_000L).forEachIndexed { index, timeoutMillis ->
+            val result = tool.execute(
+                ToolCall(
+                    id = "valid-timeout-$index",
+                    name = tool.name,
+                    input = buildJsonObject {
+                        put("script", "printf ok")
+                        put("timeoutMillis", timeoutMillis)
+                    }
+                ),
+                ToolExecutionContext(sessionId = "session")
+            )
+
+            assertFalse(result.isError)
+            assertEquals(timeoutMillis, executor.lastRequest?.timeoutMillis)
+        }
+    }
+
+    @Test
+    fun rejectsWorkspacePathVariantsWithStructuredCode() = runBlocking {
+        val tool = BashCommandTool(
+            executor = RecordingExecutor(),
+            workspaceRoot = createWorkspace(),
+            policy = TerminalToolPolicy(requireUserConfirmation = false)
+        )
+
+        listOf(
+            "/etc/passwd",
+            "C:\\Windows\\System32",
+            "projects/./demo",
+            "a/../b",
+            "../outside"
+        ).forEachIndexed { index, workingDirectory ->
+            val result = tool.execute(
+                ToolCall(
+                    id = "invalid-path-$index",
+                    name = tool.name,
+                    input = buildJsonObject {
+                        put("script", "pwd")
+                        put("workingDirectory", workingDirectory)
+                    }
+                ),
+                ToolExecutionContext(sessionId = "session")
+            )
+
+            assertTrue(result.isError)
+            assertEquals("INVALID_WORKSPACE_PATH", errorCode(result))
+        }
+    }
+
+    @Test
+    fun resolvesWorkingDirectoryAgainstTheCanonicalWorkspaceRoot() = runBlocking {
+        val workspace = createWorkspace()
+        val executor = RecordingExecutor()
+        val tool = BashCommandTool(
+            executor = executor,
+            workspaceRoot = File(workspace, "nested/.."),
+            policy = TerminalToolPolicy(requireUserConfirmation = false)
+        )
+
+        val result = tool.execute(
+            ToolCall(
+                id = "canonical-root",
+                name = tool.name,
+                input = buildJsonObject {
+                    put("script", "pwd")
+                    put("workingDirectory", "projects/demo")
+                }
+            ),
+            ToolExecutionContext(sessionId = "session")
+        )
+
+        assertFalse(result.isError)
+        val workingDirectory = executor.lastRequest?.workingDirectory
+        assertTrue(workingDirectory != null)
+        assertTrue(
+            workingDirectory!!.canonicalPath.startsWith(workspace.canonicalPath + File.separator)
+        )
+    }
+
+    @Test
+    fun rejectsEnvironmentBeyondSizeAndNameRules() = runBlocking {
+        val tool = BashCommandTool(
+            executor = RecordingExecutor(),
+            workspaceRoot = createWorkspace(),
+            policy = TerminalToolPolicy(requireUserConfirmation = false)
+        )
+
+        val oversized = buildJsonObject { repeat(33) { put("VAR_$it", "v") } }
+        val invalidEnvironments = listOf(
+            "33 entries" to oversized,
+            "leading digit" to buildJsonObject { put("9VAR", "v") },
+            "hyphenated name" to buildJsonObject { put("MY-VAR", "v") },
+            "name with space" to buildJsonObject { put("MY VAR", "v") },
+            "empty name" to buildJsonObject { put("", "v") }
+        )
+
+        invalidEnvironments.forEachIndexed { index, (label, environment) ->
+            val result = tool.execute(
+                ToolCall(
+                    id = "invalid-env-rule-$index",
+                    name = tool.name,
+                    input = buildJsonObject {
+                        put("script", "pwd")
+                        put("environment", environment)
+                    }
+                ),
+                ToolExecutionContext(sessionId = "session")
+            )
+
+            assertTrue("expected INVALID_ENVIRONMENT for '$label'", result.isError)
+            assertEquals("INVALID_ENVIRONMENT", errorCode(result))
+        }
+    }
+
+    @Test
+    fun acceptsEnvironmentAtDocumentedBoundaries() = runBlocking {
+        val executor = RecordingExecutor()
+        val tool = BashCommandTool(
+            executor = executor,
+            workspaceRoot = createWorkspace(),
+            policy = TerminalToolPolicy(requireUserConfirmation = false)
+        )
+
+        val maxEntries = buildJsonObject { repeat(32) { put("VAR_$it", "v") } }
+        val maxValueBytes = buildJsonObject { put("LANG", "a".repeat(4 * 1024)) }
+
+        listOf(
+            "32 entries" to maxEntries,
+            "4096-byte value" to maxValueBytes
+        ).forEachIndexed { index, (label, environment) ->
+            val result = tool.execute(
+                ToolCall(
+                    id = "valid-env-$index",
+                    name = tool.name,
+                    input = buildJsonObject {
+                        put("script", "pwd")
+                        put("environment", environment)
+                    }
+                ),
+                ToolExecutionContext(sessionId = "session")
+            )
+
+            assertFalse("expected valid $label boundary", result.isError)
+            assertEquals(environment.size, executor.lastRequest?.environment?.size)
+        }
+    }
+
+    @Test
+    fun mapsExecutorIOExceptionToProcessStartFailed() = runBlocking {
+        val tool = BashCommandTool(
+            executor = BashCommandExecutor { _ -> throw IOException("spawn failed") },
+            workspaceRoot = createWorkspace(),
+            policy = TerminalToolPolicy(requireUserConfirmation = false)
+        )
+
+        val result = tool.execute(
+            call("io-failure"),
+            ToolExecutionContext(sessionId = "session")
+        )
+
+        assertTrue(result.isError)
+        assertEquals("PROCESS_START_FAILED", errorCode(result))
+        assertTrue(result.content.startsWith("PROCESS_START_FAILED: "))
+        assertTrue(result.content.contains("spawn failed"))
+        assertEquals("spawn failed", result.metadata?.get("message")?.toString()?.trim('"'))
+    }
+
+    @Test
+    fun mapsIOExceptionWithoutMessageToClassNameFallback() = runBlocking {
+        val tool = BashCommandTool(
+            executor = BashCommandExecutor { _ -> throw IOException() },
+            workspaceRoot = createWorkspace(),
+            policy = TerminalToolPolicy(requireUserConfirmation = false)
+        )
+
+        val result = tool.execute(
+            call("io-failure-no-message"),
+            ToolExecutionContext(sessionId = "session")
+        )
+
+        assertTrue(result.isError)
+        assertEquals("PROCESS_START_FAILED", errorCode(result))
+        assertTrue(result.content.contains("java.io.IOException"))
+    }
+
+    @Test
+    fun mapsIllegalArgumentExceptionToInvalidRequest() = runBlocking {
+        val tool = BashCommandTool(
+            executor = BashCommandExecutor { _ -> throw IllegalArgumentException("bad request detail") },
+            workspaceRoot = createWorkspace(),
+            policy = TerminalToolPolicy(requireUserConfirmation = false)
+        )
+
+        val result = tool.execute(
+            call("illegal-argument"),
+            ToolExecutionContext(sessionId = "session")
+        )
+
+        assertTrue(result.isError)
+        assertEquals("INVALID_REQUEST", errorCode(result))
+        assertTrue(result.content.contains("bad request detail"))
+    }
+
+    @Test
+    fun mapsIllegalStateExceptionToRuntimeUnavailable() = runBlocking {
+        val tool = BashCommandTool(
+            executor = BashCommandExecutor { _ -> throw IllegalStateException("runtime is closed") },
+            workspaceRoot = createWorkspace(),
+            policy = TerminalToolPolicy(requireUserConfirmation = false)
+        )
+
+        val result = tool.execute(
+            call("illegal-state"),
+            ToolExecutionContext(sessionId = "session")
+        )
+
+        assertTrue(result.isError)
+        assertEquals("RUNTIME_UNAVAILABLE", errorCode(result))
+        assertTrue(result.content.contains("runtime is closed"))
+    }
+
     private class RecordingExecutor : BashCommandExecutor {
         var lastRequest: BashCommandRequest? = null
 
@@ -544,6 +975,9 @@ class BashCommandToolTest {
     }
 
     private companion object {
+        fun errorCode(result: ToolResult): String? =
+            result.metadata?.get("code")?.toString()?.trim('"')
+
         fun call(id: String): ToolCall {
             return ToolCall(
                 id = id,
