@@ -78,6 +78,7 @@ class AgentFloatingWindow(private val context: Context) : ConfirmationOverlayHos
     private var collapsedY = dp(180)
     private var externalAutomationMode = false
     private var preImeY: Int? = null
+    private var preImeHeight: Int? = null
     private var imeBaseVisibleBottom: Int? = null
     private var imeLayoutListener: ViewTreeObserver.OnGlobalLayoutListener? = null
     private var imeApplyPending: Runnable? = null
@@ -128,6 +129,7 @@ class AgentFloatingWindow(private val context: Context) : ConfirmationOverlayHos
         collapsedY = collapsedParams.y
         hideCollapsed()
         preImeY = null
+        preImeHeight = null
         expandedParams.width = clampExpandedWidth(expandedParams.width)
         expandedParams.height = clampExpandedHeight(expandedParams.height)
         expandedParams.x = clampX(collapsedX, expandedParams.width)
@@ -248,7 +250,10 @@ class AgentFloatingWindow(private val context: Context) : ConfirmationOverlayHos
         if (active && expandedView != null && pendingConfirmation == null) {
             collapseToBubble()
         }
-        if (expandedView == null) preImeY = null
+        if (expandedView == null) {
+            preImeY = null
+            preImeHeight = null
+        }
         updateExpandedWindowFlags(forceFocusable = pendingConfirmation != null)
     }
 
@@ -287,10 +292,13 @@ class AgentFloatingWindow(private val context: Context) : ConfirmationOverlayHos
             val imm = context.getSystemService(Context.INPUT_METHOD_SERVICE) as InputMethodManager
             imm.hideSoftInputFromWindow(field.windowToken, 0)
         }
-        // Persist the user-intended position: the window may currently sit
-        // at an IME avoidance offset that must not leak into later expands.
+        // Persist the user-intended position and height: the window may
+        // currently sit at an IME avoidance offset or a compressed height
+        // that must not leak into later expands.
         expandedY = preImeY ?: expandedY
+        expandedParams.height = preImeHeight ?: expandedParams.height
         preImeY = null
+        preImeHeight = null
         detachImeAvoidance()
         // A programmatic removal ends any in-flight touch gesture: no UP/CANCEL
         // will arrive for a detached view, so the suppression flag must reset here.
@@ -309,6 +317,9 @@ class AgentFloatingWindow(private val context: Context) : ConfirmationOverlayHos
     private fun collapseToBubble() {
         expandedX = expandedParams.x
         // Collapse from the user-intended position, not the IME-avoided one.
+        // Only the y anchor is consumed here; the height anchor is left for
+        // hideExpanded() so the compressed IME height does not leak into the
+        // next expand.
         expandedY = preImeY ?: expandedParams.y
         preImeY = null
         collapsedX = clampX(expandedX, collapsedParams.width)
@@ -668,7 +679,11 @@ class AgentFloatingWindow(private val context: Context) : ConfirmationOverlayHos
                         if (nextWidth != expandedParams.width || nextHeight != expandedParams.height) {
                             // Only an actual resize is a user-intent position change; a bare
                             // tap on the handle must not drop the pre-IME restore anchor.
+                            // Dropping the height anchor too makes the resized height the
+                            // accepted baseline; the post-gesture re-apply re-runs avoidance
+                            // against it.
                             preImeY = null
+                            preImeHeight = null
                             expandedParams.width = nextWidth
                             expandedParams.height = nextHeight
                             expandedParams.x = clampX(expandedParams.x, nextWidth)
@@ -859,17 +874,23 @@ class AgentFloatingWindow(private val context: Context) : ConfirmationOverlayHos
 
     private fun applyImeAvoidance(imeTop: Int) {
         val root = expandedView ?: return
-        val targetY = ImeAvoidance.targetY(
+        val decision = ImeAvoidance.avoidanceDecision(
             windowTop = expandedParams.y,
             windowHeight = expandedParams.height,
             imeTop = imeTop,
             minY = dp(48),
-            margin = dp(IME_AVOIDANCE_MARGIN_DP)
+            margin = dp(IME_AVOIDANCE_MARGIN_DP),
+            minHeight = minExpandedHeight(),
+            maxHeight = maxExpandedHeight()
         )
-        if (targetY == expandedParams.y) return
+        if (decision.targetY == expandedParams.y &&
+            decision.targetHeight == expandedParams.height
+        ) return
         if (preImeY == null) preImeY = expandedY
-        expandedY = targetY
-        expandedParams.y = targetY
+        if (preImeHeight == null) preImeHeight = expandedParams.height
+        expandedY = decision.targetY
+        expandedParams.y = decision.targetY
+        expandedParams.height = decision.targetHeight
         runCatching {
             windowManager.updateViewLayout(root, expandedParams)
         }.onFailure {
@@ -879,12 +900,18 @@ class AgentFloatingWindow(private val context: Context) : ConfirmationOverlayHos
 
     private fun restoreFromImeAvoidance() {
         val root = expandedView ?: return
-        val restore = preImeY ?: return
+        val restoreY = preImeY
+        val restoreHeight = preImeHeight
+        if (restoreY == null && restoreHeight == null) return
         preImeY = null
-        val targetY = clampY(restore, expandedParams.height)
-        if (targetY == expandedParams.y) return
+        preImeHeight = null
+        // Clamp the height first: the y clamp bound depends on it.
+        val targetHeight = clampExpandedHeight(restoreHeight ?: expandedParams.height)
+        val targetY = clampY(restoreY ?: expandedParams.y, targetHeight)
+        if (targetY == expandedParams.y && targetHeight == expandedParams.height) return
         expandedY = targetY
         expandedParams.y = targetY
+        expandedParams.height = targetHeight
         runCatching {
             windowManager.updateViewLayout(root, expandedParams)
         }.onFailure {
@@ -1391,9 +1418,16 @@ class AgentFloatingWindow(private val context: Context) : ConfirmationOverlayHos
                         val dy = event.rawY - touchY
                         if (!dragging && (kotlin.math.abs(dx) > touchSlop() || kotlin.math.abs(dy) > touchSlop())) {
                             dragging = true
-                            // A confirmed drag makes the finger the intent;
-                            // the pre-IME baseline must no longer restore it.
-                            if (params === expandedParams) preImeY = null
+                            // A confirmed drag makes the finger the intent for
+                            // the position only: the finger never touches the
+                            // height, so the pre-IME height baseline survives
+                            // and the keyboard-closing restore still returns
+                            // the user's original height. The post-gesture
+                            // re-apply re-runs avoidance from the released
+                            // geometry and records the released position.
+                            if (params === expandedParams) {
+                                preImeY = null
+                            }
                         }
                         if (dragging) {
                             params.x = clampX(initialX + dx.toInt(), params.width)

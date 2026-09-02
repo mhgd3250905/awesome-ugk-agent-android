@@ -1,6 +1,7 @@
 package com.ugk.pi.android.testapp
 
 import org.junit.Assert.assertEquals
+import org.junit.Assert.assertTrue
 import org.junit.Test
 
 class ImeAvoidanceTest {
@@ -185,5 +186,123 @@ class ImeAvoidanceTest {
         // Shifted bottom must sit at imeTop - margin.
         val targetY = ImeAvoidance.targetY(1000, 500, imeTop, 48, 8)
         assertEquals(1240 - 8, targetY + 500)
+    }
+
+    @Test
+    fun decisionNoOverlapKeepsWindowTopAndHeight() {
+        val decision = ImeAvoidance.avoidanceDecision(
+            windowTop = 100,
+            windowHeight = 400,
+            imeTop = 600,
+            minY = 48,
+            margin = 8,
+            minHeight = 240,
+            maxHeight = 2000
+        )
+        assertEquals(100, decision.targetY)
+        assertEquals(400, decision.targetHeight)
+    }
+
+    @Test
+    fun decisionHiddenImeSentinelKeepsWindowTopAndHeight() {
+        val decision = ImeAvoidance.avoidanceDecision(
+            windowTop = 100,
+            windowHeight = 400,
+            imeTop = Int.MAX_VALUE,
+            minY = 48,
+            margin = 8,
+            minHeight = 240,
+            maxHeight = 2000
+        )
+        assertEquals(100, decision.targetY)
+        assertEquals(400, decision.targetHeight)
+    }
+
+    @Test
+    fun decisionShiftSufficientChangesOnlyY() {
+        // bottom = 900, imeTop = 700 -> shift 208 solves it; height untouched.
+        val decision = ImeAvoidance.avoidanceDecision(
+            windowTop = 500,
+            windowHeight = 400,
+            imeTop = 700,
+            minY = 48,
+            margin = 8,
+            minHeight = 240,
+            maxHeight = 2000
+        )
+        assertEquals(292, decision.targetY)
+        assertEquals(400, decision.targetHeight)
+    }
+
+    @Test
+    fun decisionClampedShiftCompressesHeightToImeTopMinusMargin() {
+        // Window already pinned at minY with a tall height: the residual
+        // overlap is resolved by compressing, not by shifting further.
+        val decision = ImeAvoidance.avoidanceDecision(
+            windowTop = 48,
+            windowHeight = 1800,
+            imeTop = 1000,
+            minY = 48,
+            margin = 8,
+            minHeight = 240,
+            maxHeight = 2200
+        )
+        assertEquals(48, decision.targetY)
+        assertEquals(1000 - 8 - 48, decision.targetHeight)
+        // Compression never grows the window.
+        assertTrue(decision.targetHeight <= 1800)
+    }
+
+    @Test
+    fun decisionCompressionNeverShrinksBelowMinHeight() {
+        // imeTop - margin - minY = 244 stays just above minHeight.
+        val decision = ImeAvoidance.avoidanceDecision(
+            windowTop = 48,
+            windowHeight = 1800,
+            imeTop = 300,
+            minY = 48,
+            margin = 8,
+            minHeight = 240,
+            maxHeight = 2200
+        )
+        assertEquals(48, decision.targetY)
+        assertEquals(244, decision.targetHeight)
+    }
+
+    @Test
+    fun decisionExtremeSmallGapKeepsMinHeightAsBestEffort() {
+        // imeTop leaves less than minHeight above minY: the residual
+        // overlap is accepted rather than breaking the height floor.
+        val decision = ImeAvoidance.avoidanceDecision(
+            windowTop = 48,
+            windowHeight = 1800,
+            imeTop = 250,
+            minY = 48,
+            margin = 8,
+            minHeight = 240,
+            maxHeight = 2200
+        )
+        assertEquals(48, decision.targetY)
+        assertEquals(240, decision.targetHeight)
+    }
+
+    @Test
+    fun decisionTargetYAgreesWithLegacyTargetY() {
+        // targetY delegates to avoidanceDecision, so both clamp branches
+        // must agree on the y outcome.
+        assertEquals(
+            ImeAvoidance.targetY(200, 400, 300, 48, 8),
+            ImeAvoidance.avoidanceDecision(200, 400, 300, 48, 8, 240, 2000).targetY
+        )
+        assertEquals(
+            ImeAvoidance.targetY(1000, 2000, 1200, 48, 8),
+            ImeAvoidance.avoidanceDecision(1000, 2000, 1200, 48, 8, 240, 2000).targetY
+        )
+        // Unclamped plain shift: the y outcome is below minY, so the legacy
+        // shift branch must also match.
+        assertEquals(
+            ImeAvoidance.targetY(500, 400, 700, 48, 8),
+            ImeAvoidance.avoidanceDecision(500, 400, 700, 48, 8, 240, 2000).targetY
+        )
     }
 }
