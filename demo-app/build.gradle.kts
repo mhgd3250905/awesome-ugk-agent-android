@@ -140,6 +140,14 @@ dependencies {
     implementation("androidx.core:core-ktx:1.12.0")
     implementation("com.google.android.material:material:1.13.0")
 
+    // Google Play In-App Updates (FLEXIBLE flow). MainActivity extends
+    // androidx.activity.ComponentActivity for registerForActivityResult, so
+    // androidx.activity is declared explicitly instead of relying on the
+    // version material pulls in transitively.
+    implementation("androidx.activity:activity:1.10.1")
+    implementation("com.google.android.play:app-update:2.1.0")
+    implementation("com.google.android.play:app-update-ktx:2.1.0")
+
     // 成熟优秀的 Android 原生 Markdown 渲染框架 (CommonMark + Spannable)
     implementation("io.noties.markwon:core:4.6.2")
     implementation("io.noties.markwon:ext-tables:4.6.2")

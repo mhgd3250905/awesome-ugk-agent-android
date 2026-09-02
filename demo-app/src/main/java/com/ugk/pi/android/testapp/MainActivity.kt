@@ -4,7 +4,6 @@ import android.app.AlertDialog
 import android.content.Context
 import android.content.Intent
 import android.provider.Settings
-import android.app.Activity
 import android.view.inputmethod.InputMethodManager
 import android.graphics.Canvas
 import android.graphics.Color
@@ -30,6 +29,8 @@ import android.widget.LinearLayout
 import android.widget.ScrollView
 import android.widget.HorizontalScrollView
 import android.widget.TextView
+import androidx.activity.ComponentActivity
+import androidx.activity.result.contract.ActivityResultContracts
 import androidx.core.view.ViewCompat
 import androidx.core.view.WindowInsetsCompat
 import androidx.core.widget.NestedScrollView
@@ -63,7 +64,7 @@ import kotlinx.coroutines.withContext
 import java.text.DateFormat
 import java.util.Date
 
-class MainActivity : Activity() {
+class MainActivity : ComponentActivity() {
 
     private val processScope by lazy { (application as DemoApplication).processScope }
     private val conversationRuntime: DemoConversationRuntime
@@ -146,6 +147,17 @@ class MainActivity : Activity() {
     private val floatingWindow: AgentFloatingWindow
         get() = processScope.overlayController.window
 
+    // Registered during construction so the launcher is ready long before
+    // the Activity reaches STARTED, as the Activity Result API requires.
+    private val inAppUpdateLauncher = registerForActivityResult(
+        ActivityResultContracts.StartIntentSenderForResult()
+    ) { result ->
+        // The once-per-process flag was set before the flow launched, so a
+        // user cancel or failure only needs to drop the download listener.
+        if (result.resultCode != RESULT_OK) inAppUpdateController.onUpdateFlowAbandoned()
+    }
+    private val inAppUpdateController: InAppUpdateController by lazy { InAppUpdateController(this, inAppUpdateLauncher) }
+
     override fun onCreate(savedInstanceState: Bundle?) {
         super.onCreate(savedInstanceState)
         ThemeManager.init(this)
@@ -202,7 +214,7 @@ class MainActivity : Activity() {
         requestNotificationPermissionIfNeeded()
     }
 
-    override fun onNewIntent(intent: Intent?) {
+    override fun onNewIntent(intent: Intent) {
         super.onNewIntent(intent)
         setIntent(intent)
         if (::activeConversation.isInitialized) refreshActiveConversationFromStore()
@@ -260,7 +272,7 @@ class MainActivity : Activity() {
 
     override fun onRequestPermissionsResult(
         requestCode: Int,
-        permissions: Array<out String>,
+        permissions: Array<String>,
         grantResults: IntArray
     ) {
         super.onRequestPermissionsResult(requestCode, permissions, grantResults)
@@ -428,6 +440,7 @@ class MainActivity : Activity() {
         // background-run summary, so keep it hidden while this Activity is
         // visible to avoid competing with the conversation.
         floatingWindow.hide()
+        inAppUpdateController.checkOnResume()
     }
 
     override fun onPause() {
@@ -440,6 +453,7 @@ class MainActivity : Activity() {
 
     override fun onDestroy() {
         cancelPendingStreamingRender()
+        inAppUpdateController.release()
         val finishing = isFinishing && !isChangingConfigurations
         if (finishing) {
             runCoordinator.stop()
