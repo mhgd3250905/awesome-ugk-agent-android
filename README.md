@@ -13,7 +13,7 @@ Android Agent Runtime SDK：提供通用 Agent 工具循环、Android Skill，�
 - v1 不支持、不打包、不宣称 Node.js、Git、OpenSSH、jq。
 - Runtime 无 UI，不要求安装 Termux 或第二个 App；它与宿主共享 Android UID，不是安全沙箱。
 - `pi-system-skill-android` 提供白名单 Android 原生 Intent Tool；打开网页、相机、拨号、地图、分享等动作不通过终端执行。
-- `demo-app` 当前保存版本为 `1.0.4`（`versionCode 104`），版本边界标签为 `demo-app-v1.0.4@4e4bbe4`。自 `1.0.2` 起以 `com.ugk.pi.agent` 身份经 Google Play 分发：`1.0.2 (102)` 封闭测试全球上线（177 国家/地区，2026-09-01），`1.0.3 (103)` 悬浮窗软键盘避让与 `1.0.4 (104)` Play 应用内更新提示（FLEXIBLE）均已发布到内部测试轨道（2026-09-02）。`0.9.x` 及更早的变更明细见 [`docs/demo-app-version-ledger.md`](docs/demo-app-version-ledger.md)。
+- `demo-app` 当前保存版本为 `1.0.5`（`versionCode 105`），版本边界标签为 `demo-app-v1.0.5@11d764a`。自 `1.0.2` 起以 `com.ugk.pi.agent` 身份经 Google Play 分发：`1.0.2 (102)` 封闭测试全球上线（177 国家/地区，2026-09-01），`1.0.3 (103)` 悬浮窗软键盘避让与 `1.0.4 (104)` Play 应用内更新提示（FLEXIBLE）均已发布到内部测试轨道（2026-09-02）。`0.9.x` 及更早的变更明细见 [`docs/demo-app-version-ledger.md`](docs/demo-app-version-ledger.md)。
 - 2026-08-29 已完成快速迭代后的模块化架构收敛：生命周期、配置、Provider、会话、transcript、capability assembly 与 Terminal/Screen interlock 均有单一 owner；本机 JVM、Debug/Release 构建和 Terminal 包验收通过，设备/发布矩阵仍未关闭。
 
 ## 模块

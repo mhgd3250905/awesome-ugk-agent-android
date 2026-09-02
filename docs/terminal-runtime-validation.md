@@ -46,7 +46,7 @@ $env:ANDROID_USER_HOME = 'C:\Users\29485\.android'
   --console=plain
 ```
 
-结果（2026-08-29）：全部任务成功；`ugk-terminal-runtime-android:testDebugUnitTest` 当前为 `NO-SOURCE`。当前 XML 合计 `271` 个测试，`0` failure、`0` error、`0` skipped；分模块数量见第 20 节。Demo JVM 测试另以 `:demo-app:testDebugUnitTest` 验证 `104/104`。
+结果（2026-08-29）：全部任务成功；`ugk-terminal-runtime-android:testDebugUnitTest` 为 `NO-SOURCE`。截至 2026-08-29 的历史计数：XML 合计 `271` 个测试，`0` failure、`0` error、`0` skipped；分模块数量见第 20 节。Demo JVM 测试另以 `:demo-app:testDebugUnitTest` 验证 `104/104`。最新合计以第 28 节为准。
 
 ```powershell
 .\scripts\terminal-runtime\verify-runtime.ps1 `
@@ -431,3 +431,18 @@ Core API/JVM 边界：
   - `.\gradlew.bat :pi-terminal-skill-android:testDebugUnitTest --console=plain --max-workers=1`：`39/39` 通过，0 failure/error/skipped（`BashCommandToolTest` 26、`LocalHttpServerToolTest` 9、`TerminalAgentPluginCompositionTest` 4）。
   - 全模块 JVM（第 3 节八个模块命令 + `:demo-app:testDebugUnitTest`）：`BUILD SUCCESSFUL`，合计 `506` tests、`3` skipped（既有 Windows symlink 限制用例，分布于 File Skill 1、Agent Skill Runtime 2）、0 failure、0 error；分模块：Core 136、File 13、Schedule 14、Task Runtime 19、System 42、Agent Skill Runtime 83、Terminal Runtime 0（`NO-SOURCE`）、Terminal Skill 39、Demo 160。
 - 边界与未执行：未运行设备/connected 测试、`-CheckPackages`、Release 矩阵或真实 Provider/API；本轮不关闭任何 Gate。
+
+## 29. 第四轮 P0 审查修复（分支 fix/p0-review-round4-20260903）
+
+验证日期：2026-09-03；源码状态：分支 `fix/p0-review-round4-20260903`（基于 `cockpit/work/4b5fdb3d2d0de585` = origin/main + D-027 两提交）。全部缺陷先由独立验证工以复现测试实证（含突变敏感性验证），修复后复现测试翻转为回归测试；本轮不改变 Terminal v1 scope、原生载荷或权限边界（`local_http_server` 的 token 门禁见 D-028，属安全边界收紧而非放宽）。
+
+- 修复清单与证据（缺陷在 HEAD `a2e451b` 均先被复现测试证实）：
+  - `ugk-pi-android`：第三方工具回显错误 `toolCallId` 时 Runtime 归一化信封 id（原会永久砖化会话）；SSE 流式累计字节封顶 `maxStreamedBytes` 默认 8 MiB（原流式路径无总量上限，已实测 8MB 无截断）；OpenAI 非流式非对象 `arguments` 改为丢弃（对齐流式"丢弃不伪造"，原伪造 `{"value":...}`）；OpenAI 兼容网关 content-parts 数组容错拼接（原抛 `IllegalArgumentException` 杀 run）；incomplete-response 重试重新挂载原始多模态输入附件（推翻旧"一次性"设计：重试提示词要求基于原始输入复现答案，与不可见图片矛盾）。
+  - `ugk-agent-task-runtime-android`：恢复循环逐任务隔离（原单个 JobScheduler 失败中止全部后续任务重排，已实证）；`handle()` 全局锁改 per-task 锁（原通知投递被分钟级 prompt 执行串行阻塞，已实证）；构造路径幂等 re-arm（进程内首次初始化收敛 SCHEDULED 任务的平台 armed 状态，自愈"alarm 消费后进程被杀"的断链孤儿）。
+  - `ugk-terminal-runtime-android` / `pi-terminal-skill-android`：`local_http_server` 改为 token 门禁 handler（随机 128-bit URL 路径段 + `realpath` 符号链接遏制 + 复用不同目录报 `PORT_IN_USE`，见 D-028；handler 脚本已在本机 CPython 3.14 实测 404/200/逃逸阻断）；`OutputCollector` UTF-8 截断回退到码点边界（原截断尾部产生 U+FFFD）。
+  - `demo-app`：trace 写入移出主线程（原每个流式 delta 主线程 open/write/close+stat，常态触发 ANR 风险）；`DemoCapabilityInterlock` ownership 提升为进程级（原前后台各持实例私有状态，D-025 要求的互斥跨实例失效；`AndroidAutomationAgentPlugin` 新增与 Terminal 相同的 D-025 装饰缝）。
+  - 文档：README 版本行 1.0.5、根 AGENTS.md 包名表述、HANDOVER 历史快照声明、validation 第 3 节历史措辞、troubleshooting 重复编号修正。
+- 命令与结果（`JAVA_HOME=E:\Android\Android Studio\jbr`，`--rerun-tasks` 强制重跑）：
+  - 全模块 JVM（第 3 节八模块命令 + `:demo-app:testDebugUnitTest`）：`BUILD SUCCESSFUL`，合计 `553` tests、`3` skipped（既有 Windows symlink 限制用例）、0 failure、0 error；分模块：Core 152、File 13、Schedule 14、Task Runtime 26、System 42、Agent Skill Runtime 83、Terminal Runtime 17（新增 JVM 测试源集）、Terminal Skill 39、Demo 167。基线（`a2e451b`）为 `506/3/0`。
+  - `:demo-app:compileDebugKotlin`、`:demo-app:compileDebugAndroidTestKotlin`：通过（`local_http_server` token URL 的仪器测试断言已同步更新，无 token 请求断言 404）。
+- 边界与未执行：本轮未操作设备/AVD（`LocalHttpServerManagerInstrumentedTest` 与 probe 仪器用例仅编译验证，token handler 在设备上的实际运行待下次 connected 回归）；未跑 `-CheckPackages`、Release 矩阵或真实 Provider/API；不关闭任何 Gate。负 exitCode 设备侧验证（第 28 节遗留）状态不变。

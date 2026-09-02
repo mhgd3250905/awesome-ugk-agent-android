@@ -33,7 +33,7 @@ Demo 当前已开启 `NOTIFY_USER` 和 `RUN_AGENT_PROMPT`：
 - “10 分钟后提醒我休息”会创建一个 `ONE_SHOT` 任务，到期后发送 Android 通知。
 - “10 分钟后检查微信是否有新消息”应创建 `RUN_AGENT_PROMPT`；到点后系统启动 `AgentTaskJobService`，恢复任务关联的会话，使用 `AgentRunSource.SCHEDULED_TASK` 调用 AgentRuntime 的完整模型/Tool 循环，并把用户任务和最终结果写回同一会话。
 - `REPEATING_UNTIL` 会在每次到点处理后重新计算下一次执行时间，不在进程里维持常驻循环。
-- 设备重启或应用升级后，广播接收器从持久化 Store 恢复 `SCHEDULED` 任务；Prompt 任务重新交给 `JobScheduler`。
+- 设备重启或应用升级后，广播接收器从持久化 Store 恢复 `SCHEDULED` 任务；Prompt 任务重新交给 `JobScheduler`。除广播外，进程内首次初始化 Task Runtime 时也会在后台线程执行一次幂等 re-arm：对全部 `SCHEDULED` 任务按记录重新 schedule（同 alarm requestCode / 同 jobId 为替换语义），自愈"alarm 已消费但进程在 handle 写回前被杀"造成的断链。
 - Android 13（API 33）及以上需要用户授予通知权限；闹钟使用普通非精确调度，可能受到 Doze 和小米系统省电策略影响。
 - Prompt 任务要求有可用网络；没有网络时由 `JobScheduler` 等待可用网络，而不是由应用进程自建轮询线程。
 

@@ -1,3 +1,5 @@
+> **历史快照声明**：本文为 2026-09-01 时点历史快照，已 superseded；当前状态以 `docs/demo-app-version-ledger.md` 与 `docs/terminal-runtime-baseline.md` 为准。
+
 # awesome-ugk-agent-android 项目交接文档 (Handover Document)
 
 > **Demo 0.9.4 版本**：`versionCode 15`（第三轮 P0 审查修复：SDK 协议完整性/任务控制面竞态/原子写并发/终端进程组契约与校验性能）
