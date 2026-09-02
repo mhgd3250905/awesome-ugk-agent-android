@@ -256,29 +256,6 @@ internal object NativeExecutableProcess {
         }
     }
 
-    private class OutputCollector(private val limitBytes: Int) {
-        private val output = ByteArrayOutputStream()
-
-        var truncated: Boolean = false
-            private set
-
-        @Synchronized
-        fun append(buffer: ByteArray, bytesRead: Int) {
-            val remaining = limitBytes - output.size()
-            if (remaining <= 0) {
-                truncated = true
-                return
-            }
-
-            val bytesToWrite = minOf(remaining, bytesRead)
-            output.write(buffer, 0, bytesToWrite)
-            if (bytesToWrite < bytesRead) truncated = true
-        }
-
-        @Synchronized
-        fun text(): String = output.toString(Charsets.UTF_8.name())
-    }
-
     private const val POLL_INTERVAL_MILLIS = 10L
     private const val STOP_GRACE_PERIOD_MILLIS = 500L
     private const val STOP_KILL_WAIT_MILLIS = 1_000L
@@ -289,4 +266,77 @@ internal object NativeExecutableProcess {
     private const val SESSION_LAUNCHER_FILE_NAME = "libugk_session_launcher.so"
     private const val SIGNAL_TERMINATE = 15
     private const val SIGNAL_KILL = 9
+}
+
+/**
+ * Bounded byte collector for captured process output.
+ *
+ * The byte cap can split a multi-byte UTF-8 code point, either inside the
+ * chunk that reaches the limit or right before a later chunk that is then
+ * dropped whole. [text] therefore trims a dangling partial code point when
+ * [truncated] is set, so a truncated capture never ends in a replacement
+ * character; [truncated] itself still reports the data loss.
+ */
+internal class OutputCollector(private val limitBytes: Int) {
+    private val output = ByteArrayOutputStream()
+
+    var truncated: Boolean = false
+        private set
+
+    @Synchronized
+    fun append(buffer: ByteArray, bytesRead: Int) {
+        val remaining = limitBytes - output.size()
+        if (remaining <= 0) {
+            truncated = true
+            return
+        }
+
+        val bytesToWrite = minOf(remaining, bytesRead)
+        output.write(buffer, 0, bytesToWrite)
+        if (bytesToWrite < bytesRead) truncated = true
+    }
+
+    @Synchronized
+    fun text(): String {
+        val bytes = output.toByteArray()
+        val end = if (truncated) completeUtf8PrefixLength(bytes) else bytes.size
+        return String(bytes, 0, end, Charsets.UTF_8)
+    }
+
+    companion object {
+        private const val MAX_UTF8_SEQUENCE_BYTES = 4
+
+        /**
+         * Largest length that stays within `bytes.size` and ends on a
+         * complete UTF-8 code point boundary. Walks back over at most three
+         * trailing continuation bytes to the sequence lead; if the lead
+         * announces more bytes than were captured, the partial sequence is
+         * dropped (1-4 bytes).
+         */
+        internal fun completeUtf8PrefixLength(bytes: ByteArray): Int {
+            var leadIndex = bytes.size - 1
+            var checked = 0
+            while (leadIndex >= 0 &&
+                checked < MAX_UTF8_SEQUENCE_BYTES - 1 &&
+                isContinuationByte(bytes[leadIndex])
+            ) {
+                leadIndex--
+                checked++
+            }
+            if (leadIndex < 0) return 0
+            val leadByte = bytes[leadIndex].toInt() and 0xff
+            val expectedLength = when {
+                leadByte < 0x80 -> 1
+                leadByte ushr 5 == 0b110 -> 2
+                leadByte ushr 4 == 0b1110 -> 3
+                leadByte ushr 3 == 0b11110 -> 4
+                else -> 1
+            }
+            return if (leadIndex + expectedLength > bytes.size) leadIndex else bytes.size
+        }
+
+        private fun isContinuationByte(byte: Byte): Boolean {
+            return byte.toInt() and 0xc0 == 0x80
+        }
+    }
 }

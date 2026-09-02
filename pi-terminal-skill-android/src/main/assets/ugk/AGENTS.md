@@ -78,9 +78,13 @@ prebuilt Runtime-managed Tool when the task needs a persistent service.
   confirmation.
 - Use `local_http_server_stop` when the user asks to stop the service. It only
   stops a service owned and recorded by this Runtime and requires confirmation.
-- The returned `http://127.0.0.1:<port>/` URL is reachable by another App on
-  the same Android device, such as a browser. It is not a LAN/public URL and
-  an app-private filesystem path must never be passed to the browser.
+- The returned URL has the form `http://127.0.0.1:<port>/<token>/`, where the
+  token path segment is random and created by each start. Use the complete URL
+  exactly as returned by the tool, without editing or shortening it. The URL is
+  reachable by another App on the same Android device, such as a browser, but
+  the random token cannot be enumerated or guessed by other Apps. It is not a
+  LAN/public URL and an app-private filesystem path must never be passed to
+  the browser.
 
 ## Execution and safety
 

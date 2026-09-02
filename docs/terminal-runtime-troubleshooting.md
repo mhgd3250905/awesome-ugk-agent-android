@@ -151,7 +151,7 @@ process-group 控制，服务只绑定 `127.0.0.1`。
 **验证边界**：已添加 Tool 单元测试和 demo 真机/模拟器仪器测试；该能力仍与宿主共享 Android UID，
 不提供公网/LAN 绑定，也不保证宿主进程被系统彻底杀死后的服务恢复。
 
-## 16. demo-app 返回前台像“重启”
+## 17. demo-app 返回前台像“重启”
 
 **根因**：如果启动器重新创建 `MainActivity`，仅放在 Activity 私有字段中的运行 Job、对话视图和权限提示状态会重新初始化；这不一定代表 Android 进程真的被杀死。
 
@@ -159,7 +159,7 @@ process-group 控制，服务只绑定 `127.0.0.1`。
 
 **验证**：API35 x86_64/4 KB 模拟器上，HOME→`am start -W -n com.ugk.pi.android.testapp/.MainActivity` 后，ActivityRecord 和进程 PID 保持不变，输入草稿 `draft123` 保留；没有出现应用异常。若系统彻底杀死进程，当前只保证 API 配置恢复，完整运行中的 Agent Tool 任务不会后台续跑。
 
-## 17. 无悬浮窗权限时打开外部 App 导致 demo-app 崩溃
+## 18. 无悬浮窗权限时打开外部 App 导致 demo-app 崩溃
 
 **现象**：Agent 通过原生 `launch_android_app_intent` 打开 Chrome 后，Chrome 显示目标页面无法连接；此前 `127.0.0.1` 服务器已经返回过 HTTP 200。
 

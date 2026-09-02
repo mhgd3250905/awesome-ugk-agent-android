@@ -35,25 +35,21 @@ class LocalHttpServerManagerInstrumentedTest {
                 )
             )
             assertEquals("running", started.state)
-            assertEquals("http://127.0.0.1:$port/", started.url)
+            // The URL is token-gated: a random URL-safe path segment that
+            // other loopback Apps cannot enumerate or guess.
+            val url = started.url.orEmpty()
+            assertTrue(url.matches(Regex("http://127\\.0\\.0\\.1:$port/[A-Za-z0-9_-]{22}/")))
+            val tokenPath = url
+                .removePrefix("http://127.0.0.1:$port/")
+                .removeSuffix("/")
 
-            val response = Socket().use { socket ->
-                socket.connect(InetSocketAddress("127.0.0.1", port), 1_000)
-                socket.soTimeout = 1_000
-                val writer = socket.getOutputStream().bufferedWriter()
-                writer.write("GET / HTTP/1.0")
-                writer.write(13)
-                writer.write(10)
-                writer.write("Host: 127.0.0.1")
-                writer.write(13)
-                writer.write(10)
-                writer.write(13)
-                writer.write(10)
-                writer.flush()
-                socket.getInputStream().bufferedReader().use { it.readText() }
-            }
-            assertTrue(response.contains("200 OK"))
-            assertTrue(response.contains("managed-weather-site"))
+            val gatedResponse = rawGet(port, "/$tokenPath/")
+            assertTrue(gatedResponse.contains("200 OK"))
+            assertTrue(gatedResponse.contains("managed-weather-site"))
+
+            // Without the token the same port must answer 404, not the tree.
+            val ungatedResponse = rawGet(port, "/")
+            assertTrue(ungatedResponse.contains("404"))
 
             assertEquals("running", manager.status(port).single().state)
             // A newly constructed manager must recover the persisted process
@@ -65,6 +61,24 @@ class LocalHttpServerManagerInstrumentedTest {
         } finally {
             manager.stopAll()
             directory.deleteRecursively()
+        }
+    }
+
+    private fun rawGet(port: Int, rawPath: String): String {
+        return Socket().use { socket ->
+            socket.connect(InetSocketAddress("127.0.0.1", port), 1_000)
+            socket.soTimeout = 1_000
+            val writer = socket.getOutputStream().bufferedWriter()
+            writer.write("GET $rawPath HTTP/1.0")
+            writer.write(13)
+            writer.write(10)
+            writer.write("Host: 127.0.0.1")
+            writer.write(13)
+            writer.write(10)
+            writer.write(13)
+            writer.write(10)
+            writer.flush()
+            socket.getInputStream().bufferedReader().use { it.readText() }
         }
     }
 }

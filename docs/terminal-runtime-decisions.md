@@ -242,3 +242,11 @@
 - 决策：两族工具共用包内 `terminalToolError` 辅助：错误 content 为 `"<CODE>: <message>"` 纯文本（错误码可检索），metadata 恒为 `{code, message}`；既有错误码字符串值与 `isError` 判定不变。负 exit code 时 `terminal_bash_execute` 在 9 字段 JSON payload 之后向 content 追加一行信号解释（信号号 + 常见信号名 + Runtime 清扫语义），payload 字段集不扩展；SDK runtime `AGENTS.md` 的 "Reporting failures" 段同步补充该含义。
 - 原因：统一的人类可读且可检索的格式降低模型与宿主的解析成本；把"被 Runtime 终止"显式告知模型，避免把进程组清扫误报为脚本失败。结果 payload 的 9 字段已被 skill `resultSemantics` 与架构文档锁定，因此解释放 content 而不是新增字段。
 - 影响：错误 content 格式变化对 LLM/宿主可见（local HTTP 从 JSON 变纯文本，Bash 错误 content 增加错误码前缀）；payload 字段、错误码集合、`isError` 语义不变；格式与信号解释由 `BashCommandToolTest`、`LocalHttpServerToolTest` 锁定。
+
+## D-028：本地 HTTP 服务 token 门禁与符号链接遏制
+
+- 日期：2026-09-03
+- 背景：`LocalHttpServerManager` 原先直接执行 `python -m http.server <port> --bind 127.0.0.1 --directory <dir>`，除 loopback 绑定与目录限制（D-017）外没有任何鉴权。Android 上所有 App 共享 loopback 端口空间，任意持有 INTERNET 权限的 App 都能 `GET http://127.0.0.1:<port>/` 拿到目录列表并下载 workspace 全部文件；又因 Bash 可 `ln -s`（PATH 含 `/system/bin`），workspace 内符号链接可把宿主 filesDir 任意文件（数据库/shared_prefs）挂进服务树（`SimpleHTTPRequestHandler` 跟随 symlink），D-017 未声明也未覆盖这两种暴露。另外 start() 复用 RUNNING 记录时忽略请求的 directory，端口实际仍在服务旧目录却返回成功，误导模型。
+- 决策：每次 start 由 Manager 用 `SecureRandom` 生成 16 字节 token（无填充 URL-safe Base64，22 字符，自研编码器因 `java.util.Base64` 需 API 26 且 `android.util.Base64` 无法在 JVM 单测调用），并把固定 handler 脚本（`token_http_handler.py`，仅标准库，每次 start 覆写）写入 managedServiceDirectory 后经 session launcher 启动。脚本基于 `SimpleHTTPRequestHandler`：请求路径第一段不等于 token 一律 404（不 403，避免探测确认），等于则剥掉 token 段继续服务（目录列表与文件下载都在 token 前缀下工作）；对映射出的本地路径做 `os.path.realpath` 校验，不在服务根 realpath 之下则 404（阻断 symlink 逃逸）；只绑定 `127.0.0.1`。持久化 metadata 新增 token 字段，无 token 的旧记录按 legacy 处理（URL 维持旧形态 `http://127.0.0.1:port/`，reload 不报错）；status/stop 返回的 URL 一律来自 `urlFor(port, token)`，新形态为 `http://127.0.0.1:<port>/<token>/`。复用 RUNNING 记录但请求 directory 不同时抛 `PORT_IN_USE`（"already serving a different directory"），不再静默成功。SDK runtime `AGENTS.md` 的 URL 契约段同步更新。
+- 原因：可达性是功能需求（浏览器必须能打开），可枚举性不是；把"任意可达"收敛为"持 token 可达"在保留浏览器可用性的同时消除同设备其他 App 的未授权读取面。404 而非 403 让无 token 探测无法与不存在路径区分。
+- 影响：URL 形态变化对模型/宿主可见（工具结果、AGENTS.md 契约与 demo 仪器测试断言同步更新）；旧持久化记录按 legacy 兼容，升级前已运行的旧服务不受影响，新 start 一律带 token；token 生成、URL 拼接、handler 脚本结构（含可选主机 python `py_compile` 冒烟，无 python 自动跳过）与复用错误路径由 `ugk-terminal-runtime-android` 新增 JVM 测试（`LocalHttpServerManagerTest`）锁定。

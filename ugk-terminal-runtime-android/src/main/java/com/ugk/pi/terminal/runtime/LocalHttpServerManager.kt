@@ -6,6 +6,7 @@ import java.io.FileInputStream
 import java.io.FileOutputStream
 import java.net.InetSocketAddress
 import java.net.Socket
+import java.security.SecureRandom
 import java.util.Properties
 
 /** A request for the SDK-managed, loopback-only Python HTTP server. */
@@ -63,6 +64,14 @@ class LocalHttpServerException(
  * verified Python launcher from nativeLibraryDir inside the same dedicated
  * POSIX session machinery as Bash, persists the process-group id, checks the
  * loopback port, and can terminate the whole group later.
+ *
+ * Every start writes a fixed token-gated handler script and serves it under
+ * a fresh random token path segment: any App on the device shares the
+ * loopback port space, so plain `python -m http.server` would let every
+ * other App read the whole served tree. The handler rejects every path that
+ * does not carry the token (404, not 403, so the tree cannot be probed) and
+ * refuses local paths whose realpath escapes the served root, which blocks
+ * symlink escapes planted inside the workspace.
  */
 class LocalHttpServerManager(
     private val runtime: BashRuntime
@@ -84,6 +93,9 @@ class LocalHttpServerManager(
             records[request.port]?.let { existing ->
                 val existingStatus = statusFor(existing)
                 if (existingStatus.state in RUNNING_STATES && !isStaleNonListening(existing)) {
+                    directoryReuseError(request.port, existing.directory, directory)?.let { failure ->
+                        throw failure
+                    }
                     return existingStatus
                 }
                 discardRecord(existing)
@@ -107,6 +119,11 @@ class LocalHttpServerManager(
                     "Unable to create managed service directory: $absolutePath"
                 }
             }
+            // The handler script is a read-only constant: overwrite it on
+            // every start so a stale or truncated copy cannot survive.
+            val handlerScript = File(serviceDirectory, HANDLER_SCRIPT_FILE_NAME)
+            handlerScript.writeText(TOKEN_HTTP_HANDLER_SCRIPT, Charsets.UTF_8)
+            val token = generateToken()
             val logFile = File(serviceDirectory, "http-${request.port}.log")
             val reportFile = File(serviceDirectory, "session-${request.port}.pid")
             if (reportFile.exists()) reportFile.delete()
@@ -123,11 +140,9 @@ class LocalHttpServerManager(
             val command = listOf(
                 runtime.sessionLauncherFile().absolutePath,
                 runtime.pythonExecutableFile().absolutePath,
-                "-m",
-                "http.server",
+                handlerScript.absolutePath,
                 request.port.toString(),
-                "--bind",
-                LOOPBACK_HOST,
+                token,
                 "--directory",
                 directory.absolutePath
             )
@@ -161,6 +176,7 @@ class LocalHttpServerManager(
             val server = ManagedServer(
                 port = request.port,
                 directory = directory,
+                token = token,
                 logFile = logFile,
                 processGroupId = processGroupId,
                 process = process,
@@ -231,7 +247,7 @@ class LocalHttpServerManager(
                 state = STATE_STOPPED,
                 port = server.port,
                 directory = server.directory.absolutePath,
-                url = urlFor(server.port),
+                url = urlFor(server.port, server.token),
                 logFile = server.logFile.absolutePath,
                 processGroupId = server.processGroupId
             )
@@ -302,7 +318,7 @@ class LocalHttpServerManager(
             state = state,
             port = server.port,
             directory = server.directory.absolutePath,
-            url = urlFor(server.port),
+            url = urlFor(server.port, server.token),
             logFile = server.logFile.absolutePath,
             processGroupId = server.processGroupId
         )
@@ -391,6 +407,9 @@ class LocalHttpServerManager(
         val properties = Properties().apply {
             setProperty(KEY_PORT, server.port.toString())
             setProperty(KEY_DIRECTORY, server.directory.absolutePath)
+            // Absent for records persisted before D-028; those reload as
+            // legacy servers whose URL has no token path segment.
+            server.token?.let { setProperty(KEY_TOKEN, it) }
             setProperty(KEY_LOG_FILE, server.logFile.absolutePath)
             setProperty(KEY_PROCESS_GROUP_ID, server.processGroupId.toString())
         }
@@ -411,6 +430,7 @@ class LocalHttpServerManager(
                     FileInputStream(metadataFile).use { input -> properties.load(input) }
                     val port = properties.getProperty(KEY_PORT).toInt()
                     val directory = File(properties.getProperty(KEY_DIRECTORY)).canonicalFile
+                    val token = properties.getProperty(KEY_TOKEN)
                     val logFile = File(properties.getProperty(KEY_LOG_FILE)).canonicalFile
                     val processGroupId = properties.getProperty(KEY_PROCESS_GROUP_ID).toInt()
                     check(port in MIN_PORT..MAX_PORT)
@@ -418,6 +438,7 @@ class LocalHttpServerManager(
                     records[port] = ManagedServer(
                         port = port,
                         directory = directory,
+                        token = token,
                         logFile = logFile,
                         processGroupId = processGroupId,
                         process = null,
@@ -520,6 +541,9 @@ class LocalHttpServerManager(
     private class ManagedServer(
         val port: Int,
         val directory: File,
+        // Null only for records persisted before D-028 (legacy servers
+        // whose URL has no token path segment).
+        val token: String?,
         val logFile: File,
         val processGroupId: Int,
         val process: Process?,
@@ -535,7 +559,7 @@ class LocalHttpServerManager(
         )
     )
 
-    private companion object {
+    internal companion object {
         const val MIN_PORT = 1_024
         const val MAX_PORT = 65_535
         const val LOOPBACK_HOST = "127.0.0.1"
@@ -550,23 +574,188 @@ class LocalHttpServerManager(
         const val ERROR_STOP_FAILED = "STOP_FAILED"
         const val KEY_PORT = "port"
         const val KEY_DIRECTORY = "directory"
+        const val KEY_TOKEN = "token"
         const val KEY_LOG_FILE = "logFile"
         const val KEY_PROCESS_GROUP_ID = "processGroupId"
+        const val HANDLER_SCRIPT_FILE_NAME = "token_http_handler.py"
+        const val TOKEN_BYTES = 16
+        const val BASE64_URL_ALPHABET =
+            "ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789-_"
         const val SESSION_REPORT_ENVIRONMENT_VARIABLE = "UGK_TERMINAL_SESSION_REPORT_FILE"
-        const val SIGNAL_TERMINATE = 15
-        const val SIGNAL_KILL = 9
-        const val POLL_INTERVAL_MILLIS = 10L
-        const val PORT_POLL_INTERVAL_MILLIS = 50L
-        const val PORT_START_TIMEOUT_MILLIS = 3_000L
-        const val SESSION_REPORT_WAIT_MILLIS = 500L
-        const val STOP_GRACE_PERIOD_MILLIS = 500L
-        const val STOP_KILL_WAIT_MILLIS = 1_000L
-        const val STALE_RECORD_GRACE_MILLIS = 120_000L
-        const val SOCKET_CONNECT_TIMEOUT_MILLIS = 100
-        const val MAX_MANAGED_SERVERS = 4
-        const val MAX_LOG_BYTES = 64 * 1024
-        const val LOG_BUFFER_BYTES = 8 * 1024
+        private const val SIGNAL_TERMINATE = 15
+        private const val SIGNAL_KILL = 9
+        private const val POLL_INTERVAL_MILLIS = 10L
+        private const val PORT_POLL_INTERVAL_MILLIS = 50L
+        private const val PORT_START_TIMEOUT_MILLIS = 3_000L
+        private const val SESSION_REPORT_WAIT_MILLIS = 500L
+        private const val STOP_GRACE_PERIOD_MILLIS = 500L
+        private const val STOP_KILL_WAIT_MILLIS = 1_000L
+        private const val STALE_RECORD_GRACE_MILLIS = 120_000L
+        private const val SOCKET_CONNECT_TIMEOUT_MILLIS = 100
+        private const val MAX_MANAGED_SERVERS = 4
+        private const val MAX_LOG_BYTES = 64 * 1024
+        private const val LOG_BUFFER_BYTES = 8 * 1024
         val RUNNING_STATES = setOf(STATE_RUNNING, STATE_STARTING)
+
+        /**
+         * Fresh token for one server start: 16 SecureRandom bytes in unpadded
+         * URL-safe Base64 (22 characters). Other Apps on the device share the
+         * loopback port space, so the URL must be unguessable, not just bound
+         * to 127.0.0.1.
+         */
+        internal fun generateToken(random: SecureRandom = SecureRandom()): String {
+            val bytes = ByteArray(TOKEN_BYTES)
+            random.nextBytes(bytes)
+            return encodeBase64Url(bytes)
+        }
+
+        /**
+         * Minimal unpadded URL-safe Base64 encoder. `java.util.Base64` needs
+         * API 26 and `android.util.Base64` is not callable from JVM unit
+         * tests, so the Runtime ships its own encoder for this minSdk-24 path.
+         */
+        internal fun encodeBase64Url(bytes: ByteArray): String {
+            val result = StringBuilder()
+            var index = 0
+            while (index < bytes.size) {
+                val b0 = bytes[index].toInt() and 0xff
+                val b1 = if (index + 1 < bytes.size) bytes[index + 1].toInt() and 0xff else -1
+                val b2 = if (index + 2 < bytes.size) bytes[index + 2].toInt() and 0xff else -1
+                result.append(BASE64_URL_ALPHABET[b0 ushr 2])
+                result.append(
+                    BASE64_URL_ALPHABET[((b0 and 0x03) shl 4) or (if (b1 >= 0) b1 ushr 4 else 0)]
+                )
+                if (b1 < 0) break
+                result.append(
+                    BASE64_URL_ALPHABET[((b1 and 0x0f) shl 2) or (if (b2 >= 0) b2 ushr 6 else 0)]
+                )
+                if (b2 < 0) break
+                result.append(BASE64_URL_ALPHABET[b2 and 0x3f])
+                index += 3
+            }
+            return result.toString()
+        }
+
+        /**
+         * Token-gated URL for a managed server. A null token is a legacy
+         * pre-D-028 record and keeps the old root URL so status()/stop() keep
+         * describing what that server actually serves.
+         */
+        internal fun urlFor(port: Int, token: String?): String {
+            return if (token.isNullOrBlank()) {
+                "http://$LOOPBACK_HOST:$port/"
+            } else {
+                "http://$LOOPBACK_HOST:$port/$token/"
+            }
+        }
+
+        /**
+         * Non-null when start() must not silently reuse a RUNNING server
+         * because it serves a different directory than the one requested.
+         * Returning the running status anyway would report success while the
+         * port keeps serving the old tree.
+         */
+        internal fun directoryReuseError(
+            port: Int,
+            runningDirectory: File,
+            requestedDirectory: File
+        ): LocalHttpServerException? {
+            if (runningDirectory.absolutePath == requestedDirectory.absolutePath) return null
+            return LocalHttpServerException(
+                code = ERROR_PORT_IN_USE,
+                message = "Port $port is already serving a different directory " +
+                    "(${runningDirectory.absolutePath} instead of ${requestedDirectory.absolutePath}). " +
+                    "Stop it first or choose another port."
+            )
+        }
+
+        /**
+         * Fixed handler served by the managed Python process. Requirements:
+         * standard library only; bind 127.0.0.1; answer 404 unless the first
+         * URL path segment equals the per-start token; reject paths whose
+         * realpath leaves the served root (symlink containment).
+         */
+        internal const val TOKEN_HTTP_HANDLER_SCRIPT = """# Token-gated static HTTP server for the UGK Android Terminal Runtime.
+#
+# Standard library only. Every request URL must begin with the per-start
+# random token path segment created by the Runtime; any other path answers
+# 404, so other apps on the shared loopback interface cannot enumerate the
+# served tree. A path whose mapped local file resolves outside the served
+# root, for example through a symlink, is rejected with 404 as well.
+
+import argparse
+import os
+import urllib.parse
+from functools import partial
+from http.server import SimpleHTTPRequestHandler, ThreadingHTTPServer
+
+BIND_HOST = "127.0.0.1"
+
+
+class SymlinkEscape(Exception):
+    # Raised when a requested path resolves outside the served root.
+    pass
+
+
+class TokenGatedRequestHandler(SimpleHTTPRequestHandler):
+    token = ""
+
+    def token_matches(self):
+        path = urllib.parse.urlsplit(self.path).path
+        first_segment = path.lstrip("/").split("/", 1)[0]
+        return first_segment == self.token
+
+    def path_without_token(self, path):
+        requested = urllib.parse.urlsplit(path).path
+        rest = requested.lstrip("/")
+        if rest == self.token:
+            return "/"
+        if rest.startswith(self.token + "/"):
+            return "/" + rest[len(self.token) + 1:]
+        return requested
+
+    def do_GET(self):
+        if not self.token_matches():
+            self.send_error(404)
+            return
+        try:
+            super().do_GET()
+        except SymlinkEscape:
+            self.send_error(404)
+
+    def do_HEAD(self):
+        if not self.token_matches():
+            self.send_error(404)
+            return
+        try:
+            super().do_HEAD()
+        except SymlinkEscape:
+            self.send_error(404)
+
+    def translate_path(self, path):
+        local = super().translate_path(self.path_without_token(path))
+        root = os.path.realpath(self.directory)
+        resolved = os.path.realpath(local)
+        if resolved != root and not resolved.startswith(root + os.sep):
+            raise SymlinkEscape(path)
+        return local
+
+
+def main():
+    parser = argparse.ArgumentParser()
+    parser.add_argument("port", type=int)
+    parser.add_argument("token")
+    parser.add_argument("--directory", default=os.getcwd())
+    arguments = parser.parse_args()
+    TokenGatedRequestHandler.token = arguments.token
+    handler = partial(TokenGatedRequestHandler, directory=arguments.directory)
+    server = ThreadingHTTPServer((BIND_HOST, arguments.port), handler)
+    server.serve_forever()
+
+
+if __name__ == "__main__":
+    main()
+"""
     }
 }
 

@@ -35,6 +35,7 @@ class LocalHttpServerToolTest {
 
         assertFalse(result.isError)
         assertTrue(result.content.contains("9001"))
+        assertTrue(result.content.contains("http://127.0.0.1:9001/$TOKEN_PATH_SEGMENT/"))
         assertEquals(LocalHttpServerRequest("weather-site", 9001), controller.lastStart)
     }
 
@@ -221,7 +222,7 @@ class LocalHttpServerToolTest {
                 state = "running",
                 port = request.port,
                 directory = request.directory,
-                url = "http://127.0.0.1:${request.port}/",
+                url = "http://127.0.0.1:${request.port}/$TOKEN_PATH_SEGMENT/",
                 logFile = "/private/http-${request.port}.log",
                 processGroupId = 1234
             )
@@ -253,6 +254,10 @@ class LocalHttpServerToolTest {
     }
 
     private companion object {
+        // Same shape as a real token-gated URL path segment produced by the
+        // Runtime manager: unpadded URL-safe Base64.
+        const val TOKEN_PATH_SEGMENT = "AbCdEfGhIjKlMnOpQrSt"
+
         fun errorCode(result: ToolResult): String? =
             result.metadata?.get("code")?.toString()?.trim('"')
     }
