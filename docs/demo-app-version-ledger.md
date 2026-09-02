@@ -1,11 +1,11 @@
 # demo-app 版本与变更台账
 
-更新时间：2026-09-01
-当前保存版本：`0.9.4`（`versionCode 15`）
+更新时间：2026-09-02
+当前保存版本：`1.0.4`（`versionCode 104`）
 版本范围：仅 `:demo-app`；SDK/AAR 模块版本继续独立维护。
-当前阶段：在 `0.9.3 / versionCode 14`（composer 与多图功能，正式保存 commit `1170268`，标签 `demo-app-v0.9.3`，保存条目见下）之上合并第三轮 P0 审查修复（SDK 协议完整性、任务运行时控制面竞态、原子写并发安全、终端运行时进程组契约与校验性能），版本为 `0.9.4 / versionCode 15`。版本边界标签为 `demo-app-v0.9.4`；远端状态以 Git 实测为准。
+当前阶段：在 `1.0.2`（更名 `com.ugk.pi.agent` 并上线 Play 封闭测试，commit `6f88115`，标签 `demo-app-v1.0.2@6f88115`）之上交付悬浮窗软键盘避让（`1.0.3 / 103`，commit `032589c`）与 Play 应用内更新提示（`1.0.4 / 104`，功能 commit `11d9945`、版本 commit `4e4bbe4`）；`1.0.3`、`1.0.4` 均已发布到 Play 内部测试轨道。版本边界标签为 `demo-app-v1.0.4@4e4bbe4`；远端状态以 Git 实测为准。
 
-> 文首元数据、版本规则和 `0.9.4` 记录描述当前保存点；其后的版本条目是不可改写的历史记录。
+> 文首元数据、版本规则和 `1.0.4` 记录描述当前保存点；其后的版本条目是不可改写的历史记录。
 > 历史条目中的“当前”仅指该条目记录时点，不是今天的版本或验证状态。
 
 ## 版本规则
@@ -13,9 +13,53 @@
 - `versionCode` 只递增，不因重新打包或覆盖安装回退。
 - `versionName` 使用面向测试交付的 SemVer 风格；聊天、会话和悬浮窗等一组可感知能力完成后提升 minor 版本。
 - 稳定性修复、生命周期恢复和验收证据整理使用 patch 版本递增，不与新的用户可感知 UI 能力混用。
-- 本阶段版本边界标签名为 `demo-app-v0.9.4`；`demo-app-v0.9.3`（指向 `1170268`）、`demo-app-v0.9.2`、`demo-app-v0.9.1`、`demo-app-v0.9.0`、`demo-app-v0.8.0`、`demo-app-v0.7.1`、`demo-app-v0.7.0`、`demo-app-v0.6.0`、`demo-app-v0.5.0`、`demo-app-v0.4.0` 和 `demo-app-v0.3.0` 保留为历史 Demo 交付标签，不代表 Terminal Runtime 已达到最终发布状态。
+- 本阶段版本边界标签名为 `demo-app-v1.0.4@4e4bbe4`；`demo-app-v1.0.3@032589c`、`demo-app-v1.0.2@6f88115`、`demo-app-v0.9.4`、`demo-app-v0.9.3`（指向 `1170268`）、`demo-app-v0.9.2`、`demo-app-v0.9.1`、`demo-app-v0.9.0`、`demo-app-v0.8.0`、`demo-app-v0.7.1`、`demo-app-v0.7.0`、`demo-app-v0.6.0`、`demo-app-v0.5.0`、`demo-app-v0.4.0` 和 `demo-app-v0.3.0` 保留为历史 Demo 交付标签，不代表 Terminal Runtime 已达到最终发布状态。
 - Debug APK 允许本机从被 Git 忽略的配置读取 API 默认值，不能作为对外分发包；API Key 不进入源码、文档或提交。
 - 真机迭代使用固定 Debug 签名和 `adb install -r -d`，不以卸载、清数据作为常规版本升级步骤；本阶段不操作真机。
+
+## 1.0.4 · 2026-09-02 · Play 应用内更新提示（FLEXIBLE）
+
+### 变更范围
+
+- `demo-app` 集成 Google Play In-App Updates（`com.google.android.play:app-update:2.1.0` / `app-update-ktx:2.1.0`，另显式声明 `androidx.activity:activity:1.10.1`）：FLEXIBLE 流程，Play 官方更新对话框每进程最多自动发起一次（`InAppUpdateProcessScope` 进程级状态，Activity 配置变化重建不复弹）；下载完成后每次回前台以 snackbar 提示重启安装（`completeUpdate()`）；旁加载/无 Play 设备静默 no-op。
+- `MainActivity` 基类由 `android.app.Activity` 切换为 `androidx.activity.ComponentActivity` 以承载 `startUpdateFlowForResult` launcher；`onNewIntent` / `onRequestPermissionsResult` 参数空ability相应收紧（JVM 签名不变，运行时行为不变）。
+- Demo 版本由 `1.0.3 / versionCode 103` 提升到 `1.0.4 / versionCode 104`。不改变权限、Terminal v1 scope 或聊天 UI 基线。
+
+### 验收证据与边界
+
+- `:demo-app:testDebugUnitTest` 于 HEAD `4e4bbe4` 实测 `153/153`（0 failure/error/skipped），含 `InAppUpdateControllerTest` 10 例；`:demo-app:assembleDebug`、`:demo-app:bundleRelease` 通过，AAB 元数据 `versionCode 104 / versionName 1.0.4`。
+- 独立 review 结论为有条件通过后修复 1 个 P1（防骚扰状态由 Activity 实例级提升为进程级）并补 launcher 存活守卫；两项 P3（`completeUpdate` 失败的用户可感知提示、纯决策类拆分文件）延后。
+- 模拟器（`ugk_dev_api35_smooth`）冒烟：基类切换后主界面/设置页/HOME 重开/IME 输入零回归，logcat 无 FATAL；debug 直装包上 Play 可用性检查按预期静默失败（`ERROR_APP_NOT_OWNED`，仅日志无 UI）。
+- 发布记录（外部观察）：AAB 上传 Play 内部测试轨道并于 2026-09-02 16:26 生效（截图 `playstore-internal-104-2026-09-02.png`），更新包 4.61 MB；版本说明 en-US 注明 in-app update prompt。
+- 应用内更新弹窗对测试人员自下一版（`105+`）起实际可见——`104` 自身为轨道最新版时无更新可推。
+- 版本边界标签为 `demo-app-v1.0.4@4e4bbe4`；远端状态以 Git 实测为准。
+
+## 1.0.3 · 2026-09-02 · 悬浮窗软键盘避让
+
+### 变更范围
+
+- `AgentFloatingWindow` 新增 IME 避让（新文件 `ImeAvoidance`）：跨 App overlay 不依赖系统 `ADJUST_RESIZE`/`ADJUST_PAN`（实测对悬浮窗均无效），三层检测——`onApplyWindowInsets` 缓存 + 150ms 防抖、`imeBottom > 0` 精确换算、IME 可见但无值时按屏高约 58% 估算兜底；键盘收起恢复 `preImeY` 锚点。不挂 `WindowInsetsAnimation.Callback`（会使 overlay 丢失 ime 数值）。
+- Demo 版本由 `1.0.2 / versionCode 102` 提升到 `1.0.3 / versionCode 103`。不改变依赖、权限、Terminal v1 scope 或主界面聊天 UI 基线。
+
+### 验收证据与边界
+
+- `ImeAvoidanceTest` 12/12 通过；`:demo-app:assembleDebug` / `testDebugUnitTest` 通过。
+- 五轮迭代 + 独立 review 终审通过（4 个 P1 全部修复）；模拟器（`ugk_dev_api35_smooth`）实测：贴底弹键盘上移至理论位 ±10px、收键盘复位 0 误差、三连开关零漂移、不重叠时不移动、收起再展开无跳变。
+- 边界：估算兜底对第三方浮动键盘/横屏未验证（方向保守）；API 24-29 差值法无老设备实测；悬浮窗 resize 手柄热区过小为延后优化项。
+- 发布记录（外部观察）：AAB 上传 Play 内部测试轨道并于 2026-09-02 15:16 生效（截图 `playstore-internal-103-2026-09-02.png`）。
+- 版本边界标签为 `demo-app-v1.0.3@032589c`；远端状态以 Git 实测为准。
+
+## 1.0.2 · 2026-09-01 · 更名 UGK Agent 并上线 Play 封闭测试
+
+### 变更范围
+
+- `applicationId` 由 `com.ugk.pi.android.testapp` 改为 `com.ugk.pi.agent`；`versionCode 15 -> 102`、`versionName 0.9.4 -> 1.0.2`；新增 release upload 签名配置（四项 keystore 属性均读自被 Git 忽略的 `local.properties`，不入库）；应用更名 UGK Agent（commit `6f88115`）。
+- Play 上架过渡：`versionCode 100` 对应首个内部测试在线版本 `1.0.0`；`versionCode 101` 在上架准备期消耗（轨道与内容以 Play Console 发布历史为准）。`100-102` 均已消耗，后续版本从 `103` 起递增。
+
+### 验收证据与边界
+
+- 发布记录（外部观察）：`1.0.2 (102)` 于 2026-09-01 23:36 面向 177 国家/地区上线封闭测试；opt-in 链接 `https://play.google.com/apps/testing/com.ugk.pi.agent`。
+- 版本边界标签为 `demo-app-v1.0.2@6f88115`；远端状态以 Git 实测为准。
 
 ## 0.9.4 · 2026-09-01 · 第三轮 P0 审查修复（SDK 协议/并发/性能 + 终端进程组契约）
 
