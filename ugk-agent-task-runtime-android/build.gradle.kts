@@ -21,6 +21,15 @@ android {
     kotlinOptions {
         jvmTarget = "17"
     }
+
+    testOptions {
+        unitTests {
+            // The restore/convergence failure path logs via android.util.Log
+            // and is exercised by JVM tests; the default-value stubs turn
+            // those calls into no-ops instead of "not mocked" errors.
+            isReturnDefaultValues = true
+        }
+    }
 }
 
 dependencies {

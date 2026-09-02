@@ -14,90 +14,125 @@ import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.launch
 import kotlinx.coroutines.runBlocking
 import kotlinx.coroutines.withTimeout
+import org.junit.Assert.assertEquals
 import org.junit.Assert.assertFalse
 import org.junit.Assert.assertTrue
 import org.junit.Test
 import java.util.Collections
 import java.util.concurrent.CountDownLatch
 import java.util.concurrent.TimeUnit
+import java.util.concurrent.atomic.AtomicInteger
 import java.util.concurrent.atomic.AtomicLong
 
 /**
- * Reproduces (JVM) the process-wide serialization of task delivery:
- * [AndroidAgentTaskRuntime.handle] holds PROCESS_HANDLE_LOCK
- * (AndroidAgentTaskRuntime.kt:439, lock declared at line 569 in the
- * companion object, shared by every runtime instance in the process) for the
- * WHOLE duration of the call, including the prompt executor run
- * (promptExecutor.execute at line 474). A notification task firing during a
- * slow prompt execution cannot pass `notificationSink.publish` (line 462)
- * until the prompt finishes — the reminder is delayed by the whole LLM/tool
- * loop.
- *
- * The assertions below pin the CURRENT (defective) behavior: while the
- * prompt executor is parked inside execute(), the notification handle makes
- * no progress; it only delivers after the prompt releases the lock.
+ * handle() must run under a per-task lock instead of a process-wide one: a
+ * prompt execution (an LLM/tool loop that can take minutes) may not delay an
+ * unrelated task's notification delivery, while two deliveries of the SAME
+ * task (alarm plus job, or a double fire) still serialize their check-then-act
+ * execution transition.
  */
-class ProcessHandleLockSerializationReproTest {
+class ProcessHandlePerTaskLockTest {
 
     @Test
-    fun `notification delivery is blocked while a prompt execution holds the process lock`() = runBlocking {
+    fun `notification delivery completes while an unrelated prompt execution is parked`() = runBlocking {
         val store = FakeStore()
         store.upsert(slowPromptTask())
         store.upsert(notifyTask())
         val scheduler = RecordingScheduler()
         val sink = TimestampingNotificationSink()
         val executor = BlockingPromptExecutor()
-        // Alarm and job deliveries each build their own runtime instance, but
-        // PROCESS_HANDLE_LOCK lives in the companion object, so both instances
-        // contend on the same process-wide mutex.
+        // Alarm and job deliveries each build their own runtime instance; the
+        // per-task locks live in the companion object, so both instances
+        // still contend on the same lock for one task id.
         val promptRuntime = AndroidAgentTaskRuntime(
-            dummyContext(), store, scheduler, sink, executor, FixedClock(1_600_000_000_000L)
+            dummyContext(), store, scheduler, sink, executor, FixedClock(1_600_000_000_000L),
+            rearmExecutor = null
         )
         val notifyRuntime = AndroidAgentTaskRuntime(
-            dummyContext(), store, scheduler, sink, null, FixedClock(1_600_000_000_000L)
+            dummyContext(), store, scheduler, sink, null, FixedClock(1_600_000_000_000L),
+            rearmExecutor = null
         )
 
         val promptResult = CompletableDeferred<AgentTaskActionExecutionResult>()
         launch(Dispatchers.IO) { promptResult.complete(promptRuntime.handle(SLOW_TASK_ID)) }
-        // The prompt handle now sits inside execute() while holding the lock.
+        // The prompt handle now sits inside execute() while holding only its
+        // own task's lock.
         assertTrue(executor.started.await(5, TimeUnit.SECONDS))
 
-        val notifyCallNanos = System.nanoTime()
         val notifyResult = CompletableDeferred<AgentTaskActionExecutionResult>()
         launch(Dispatchers.IO) { notifyResult.complete(notifyRuntime.handle(NOTIFY_TASK_ID)) }
 
-        // Defect evidence 1: with the prompt executor parked, the notification
-        // is not delivered within the wait window — the notify handle is stuck
-        // before notificationSink.publish (line 462), behind the lock.
-        val notifiedWhilePromptParked = sink.notifyDelivery.await(500, TimeUnit.MILLISECONDS)
-        assertFalse(
-            "expected the notification to stay blocked while the prompt executor holds the process lock",
-            notifiedWhilePromptParked
+        // Fixed behavior 1: the notification is delivered WHILE the prompt
+        // executor is still parked, and the notify handle() returns without
+        // waiting for the prompt to release anything.
+        assertTrue(
+            "expected the notification to be delivered while the prompt executor is parked",
+            sink.notifyDelivery.await(5, TimeUnit.SECONDS)
         )
-        // Defect evidence 2: the notify handle() call itself has not returned.
-        assertFalse(
-            "expected handle(task_notify) to still be blocked (not completed) while the prompt runs",
-            notifyResult.isCompleted
-        )
+        val notifyOutcome = withTimeout(10_000) { notifyResult.await() }
+        assertTrue(notifyOutcome.success)
 
         val releaseNanos = System.nanoTime()
         executor.release.complete(Unit)
         val promptOutcome = withTimeout(10_000) { promptResult.await() }
-        val notifyOutcome = withTimeout(10_000) { notifyResult.await() }
         assertTrue(promptOutcome.success)
-        assertTrue(notifyOutcome.success)
 
-        // Defect evidence 3: the notification only goes out AFTER the prompt
-        // released the lock (timestamp ordering, monotonic clock).
+        // Fixed behavior 2: the notification went out strictly BEFORE the
+        // prompt was released (monotonic clock), not after it.
         val notifyPublishNanos = sink.firstNotifyPublishNanos.get()
         assertTrue(
-            "notification publish must not have happened before the prompt release " +
+            "notification publish must happen before the prompt release " +
                 "(publish=$notifyPublishNanos, release=$releaseNanos)",
-            notifyPublishNanos >= releaseNanos
+            notifyPublishNanos in 0 until releaseNanos
         )
-        assertTrue(
-            "the notification task must have been delivered only after release",
-            sink.publishedTaskIds.contains(NOTIFY_TASK_ID)
+        assertTrue(sink.publishedTaskIds.contains(NOTIFY_TASK_ID))
+        // The two concurrent handles committed their own records without
+        // interfering with each other.
+        assertEquals(AgentTaskStatus.COMPLETED, store.get(NOTIFY_TASK_ID)?.status)
+        assertEquals(AgentTaskStatus.SCHEDULED, store.get(SLOW_TASK_ID)?.status)
+        assertEquals(1_600_000_060_000L, store.get(SLOW_TASK_ID)?.nextRunAtMillis)
+    }
+
+    @Test
+    fun `two deliveries of the same task still serialize their execution`() = runBlocking {
+        val store = FakeStore()
+        store.upsert(slowPromptTask())
+        val scheduler = RecordingScheduler()
+        val executor = BlockingPromptExecutor()
+        val runtimeA = AndroidAgentTaskRuntime(
+            dummyContext(), store, scheduler, NoopSink, executor, FixedClock(1_600_000_000_000L),
+            rearmExecutor = null
+        )
+        val runtimeB = AndroidAgentTaskRuntime(
+            dummyContext(), store, scheduler, NoopSink, executor, FixedClock(1_600_000_000_000L),
+            rearmExecutor = null
+        )
+
+        val first = CompletableDeferred<AgentTaskActionExecutionResult>()
+        launch(Dispatchers.IO) { first.complete(runtimeA.handle(SLOW_TASK_ID)) }
+        assertTrue(executor.started.await(5, TimeUnit.SECONDS))
+
+        val second = CompletableDeferred<AgentTaskActionExecutionResult>()
+        launch(Dispatchers.IO) { second.complete(runtimeB.handle(SLOW_TASK_ID)) }
+        // While the first delivery is parked inside execute(), the second
+        // delivery of the SAME task must stay blocked on that task's lock —
+        // it cannot pass the status check and must not start a second run.
+        assertFalse(
+            "expected the second delivery of the same task to stay blocked while the first runs",
+            second.isCompleted
+        )
+
+        executor.release.complete(Unit)
+        val firstOutcome = withTimeout(10_000) { first.await() }
+        val secondOutcome = withTimeout(10_000) { second.await() }
+        assertTrue(firstOutcome.success)
+        // The repeating task advanced to its next occurrence, so the second
+        // delivery finds it not due yet and re-arms instead of executing.
+        assertFalse(secondOutcome.success)
+        assertEquals(
+            "the same task occurrence must be executed exactly once",
+            1,
+            executor.executions.get()
         )
     }
 
@@ -163,8 +198,12 @@ class ProcessHandleLockSerializationReproTest {
         }
     }
 
+    private object NoopSink : AgentTaskNotificationSink {
+        override fun publish(context: Context, task: AgentTask, message: String): Boolean = true
+    }
+
     /** Records delivery order and wall-clock (monotonic) timestamps per task. */
-    private class TimestampingNotificationSink : com.ugk.pi.task.runtime.AgentTaskNotificationSink {
+    private class TimestampingNotificationSink : AgentTaskNotificationSink {
         val publishedTaskIds: MutableList<String> = Collections.synchronizedList(mutableListOf())
         val firstNotifyPublishNanos = AtomicLong(-1)
         val notifyDelivery = CountDownLatch(1)
@@ -180,13 +219,15 @@ class ProcessHandleLockSerializationReproTest {
     }
 
     /** Parks inside execute() until [release] completes, like a slow LLM/tool loop. */
-    private class BlockingPromptExecutor : com.ugk.pi.task.runtime.AgentTaskPromptExecutor {
+    private class BlockingPromptExecutor : AgentTaskPromptExecutor {
         val started = CountDownLatch(1)
         val release = CompletableDeferred<Unit>()
+        val executions = AtomicInteger()
 
         override suspend fun execute(task: AgentTask): AgentTaskActionExecutionResult {
             started.countDown()
             release.await()
+            executions.incrementAndGet()
             return AgentTaskActionExecutionResult(true, "执行完成")
         }
     }

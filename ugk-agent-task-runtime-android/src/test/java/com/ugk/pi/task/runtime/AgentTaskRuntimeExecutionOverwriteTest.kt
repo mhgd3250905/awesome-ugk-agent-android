@@ -40,7 +40,7 @@ class AgentTaskRuntimeExecutionOverwriteTest {
         val executor = BlockingPromptExecutor()
         val runtime = AndroidAgentTaskRuntime(
             dummyContext(), store, scheduler, NoopSink, executor,
-            FixedClock(1_600_000_000_000L)
+            FixedClock(1_600_000_000_000L), rearmExecutor = null
         )
 
         val execution = launch(Dispatchers.IO) { runtime.handle("task_1") }
@@ -74,7 +74,7 @@ class AgentTaskRuntimeExecutionOverwriteTest {
         val executor = BlockingPromptExecutor()
         val runtime = AndroidAgentTaskRuntime(
             dummyContext(), store, scheduler, NoopSink, executor,
-            FixedClock(1_600_000_000_000L)
+            FixedClock(1_600_000_000_000L), rearmExecutor = null
         )
 
         val execution = launch(Dispatchers.IO) { runtime.handle("task_1") }

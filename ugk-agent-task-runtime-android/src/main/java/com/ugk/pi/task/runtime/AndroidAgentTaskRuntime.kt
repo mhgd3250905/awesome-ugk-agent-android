@@ -16,6 +16,7 @@ import android.content.pm.PackageManager
 import android.net.Uri
 import android.os.Build
 import android.os.PersistableBundle
+import android.util.Log
 import com.ugk.pi.android.AgentTask
 import com.ugk.pi.android.AgentTaskAction
 import com.ugk.pi.android.AgentTaskClock
@@ -29,6 +30,7 @@ import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.Job
 import kotlinx.coroutines.SupervisorJob
+import kotlinx.coroutines.asCoroutineDispatcher
 import kotlinx.coroutines.cancel
 import kotlinx.coroutines.launch
 import kotlinx.coroutines.sync.Mutex
@@ -36,6 +38,9 @@ import kotlinx.coroutines.sync.withLock
 import kotlinx.serialization.builtins.ListSerializer
 import kotlinx.serialization.json.Json
 import java.util.concurrent.ConcurrentHashMap
+import java.util.concurrent.Executor
+import java.util.concurrent.Executors
+import java.util.concurrent.atomic.AtomicBoolean
 
 /**
  * A durable task store backed by one app-private SharedPreferences record.
@@ -415,159 +420,304 @@ fun interface AgentTaskRuntimeOwner {
     fun createAgentTaskRuntime(context: Context): AndroidAgentTaskRuntime
 }
 
+/** One SCHEDULED task the platform refused to re-arm during a restore pass. */
+data class AgentTaskRestoreFailure(
+    val taskId: String,
+    val reason: String
+)
+
+/**
+ * Aggregate outcome of one restore pass over the persisted SCHEDULED tasks.
+ * A task that fails to re-arm is isolated: it shows up in [failures] while
+ * every other task is still re-armed.
+ */
+data class AgentTaskRestoreResult(
+    val rearmedTaskIds: List<String>,
+    val failures: List<AgentTaskRestoreFailure>
+) {
+    val failureCount: Int get() = failures.size
+}
+
+/**
+ * Shared background executor for the construction-time re-arm pass. A single
+ * daemon thread keeps the pass off the main thread without dedicating one
+ * thread per runtime instance (alarm and job entries each build a fresh
+ * instance).
+ */
+private val PROCESS_REARM_EXECUTOR: Executor by lazy {
+    Executors.newSingleThreadExecutor { runnable ->
+        Thread(runnable, "ugk-agent-task-rearm").apply { isDaemon = true }
+    }
+}
+
+/** Guards the default (non-injected) re-arm pass to once per process. */
+private val PROCESS_REARM_STARTED = AtomicBoolean(false)
+
 class AndroidAgentTaskRuntime(
     context: Context,
     private val store: AgentTaskStore = AndroidAgentTaskStore(context),
     private val scheduler: AgentTaskScheduler = AlarmManagerAgentTaskScheduler(context),
     private val notificationSink: AgentTaskNotificationSink = DefaultAgentTaskNotificationSink,
     private val promptExecutor: AgentTaskPromptExecutor? = null,
-    private val clock: AgentTaskClock = SystemAgentTaskClock
+    private val clock: AgentTaskClock = SystemAgentTaskClock,
+    /**
+     * Executor for the idempotent construction-time re-arm pass over the
+     * persisted SCHEDULED tasks. The default runs that pass once per process
+     * on a private background thread; injecting an executor runs it on every
+     * construction (tests inject a direct executor for deterministic
+     * verification); null disables the pass entirely.
+     */
+    private val rearmExecutor: Executor? = PROCESS_REARM_EXECUTOR
 ) {
     private val appContext = context.applicationContext
 
+    init {
+        // A persisted SCHEDULED task is only armed while its platform trigger
+        // (alarm / job) exists, and those triggers are one-shot: the next
+        // occurrence is only armed after handle() commits its write-back. If
+        // the process dies mid-execution, the record stays SCHEDULED with no
+        // armed trigger at all, and a pure-notification host has no recovery
+        // entry point besides device boot. Converging the declared intent
+        // with the platform state when this process first initializes a
+        // runtime heals those broken chains. Re-scheduling is replace
+        // semantics (same alarm requestCode / JobScheduler job id), so the
+        // pass is idempotent, and it cannot fold a stale snapshot over an
+        // in-flight execution of the same task thanks to the per-task lock.
+        scheduleInitialRearm()
+    }
+
+    private fun scheduleInitialRearm() {
+        val executor = rearmExecutor ?: return
+        if (executor === PROCESS_REARM_EXECUTOR &&
+            !PROCESS_REARM_STARTED.compareAndSet(false, true)
+        ) {
+            return
+        }
+        CoroutineScope(SupervisorJob() + executor.asCoroutineDispatcher()).launch {
+            // A self-healing pass must never take the constructor (or the
+            // process) down; per-task scheduling failures are already
+            // isolated and reported inside the convergence.
+            runReceiverTask { convergeScheduledTasks() }
+        }
+    }
+
     /**
-     * Runs one due task occurrence under the process-wide handle lock.
+     * Runs one due task occurrence under its per-task handle lock.
+     *
+     * The lock is keyed by task id and shared by every runtime instance in
+     * the process: two deliveries of the SAME task (an alarm plus a job, or
+     * a double fire) still serialize their check-then-act transition, while
+     * unrelated tasks run concurrently — a prompt execution that runs for
+     * minutes must not delay another task's notification delivery.
      *
      * [promptExecutor] runs while this lock is held and the lock is not
      * reentrant: an executor must not (directly, or by waiting on a coroutine
-     * that does) call [handle] on any [AndroidAgentTaskRuntime] in the same
-     * process, or the two calls deadlock.
+     * that does) call [handle] for the SAME task id, or the two calls
+     * deadlock. Handles of other task ids are no longer blocked.
      */
     suspend fun handle(
         taskId: String,
         reschedule: Boolean = true
-    ): AgentTaskActionExecutionResult = PROCESS_HANDLE_LOCK.withLock {
-        val task = store.get(taskId)
-            ?: return@withLock AgentTaskActionExecutionResult(false, "任务不存在：$taskId")
-        if (task.status != AgentTaskStatus.SCHEDULED) {
-            return@withLock AgentTaskActionExecutionResult(false, "任务当前状态不可执行：${task.status}")
-        }
-
-        val now = clock.nowMillis()
-        val nextRunAt = task.nextRunAtMillis
-            ?: run {
-                if (reschedule) scheduler.cancel(taskId)
-                return@withLock AgentTaskActionExecutionResult(false, "任务没有下一次执行时间，已取消无效调度。")
+    ): AgentTaskActionExecutionResult {
+        val handleLock = taskHandleLock(taskId)
+        return handleLock.withLock {
+            val task = store.get(taskId)
+                ?: return@withLock AgentTaskActionExecutionResult(false, "任务不存在：$taskId")
+            if (task.status != AgentTaskStatus.SCHEDULED) {
+                return@withLock AgentTaskActionExecutionResult(false, "任务当前状态不可执行：${task.status}")
             }
-        if (nextRunAt > now + EARLY_ALARM_GRACE_MILLIS) {
-            if (reschedule) scheduler.schedule(task)
-            return@withLock AgentTaskActionExecutionResult(false, "任务尚未到期，已重新安排。")
-        }
 
-        var notifySuccessfulPrompt = false
-        var deliveryFailed = false
-        val result = try {
-            when (val action = task.action) {
-                is AgentTaskAction.NotifyUser -> {
-                    if (notificationSink.publish(appContext, task, action.message)) {
-                        AgentTaskActionExecutionResult(true, action.message)
-                    } else {
-                        deliveryFailed = true
-                        AgentTaskActionExecutionResult(
-                            false,
-                            "通知未发送：请授予通知权限后重试。"
-                        )
+            val now = clock.nowMillis()
+            val nextRunAt = task.nextRunAtMillis
+                ?: run {
+                    if (reschedule) scheduler.cancel(taskId)
+                    return@withLock AgentTaskActionExecutionResult(false, "任务没有下一次执行时间，已取消无效调度。")
+                }
+            if (nextRunAt > now + EARLY_ALARM_GRACE_MILLIS) {
+                if (reschedule) scheduler.schedule(task)
+                return@withLock AgentTaskActionExecutionResult(false, "任务尚未到期，已重新安排。")
+            }
+
+            var notifySuccessfulPrompt = false
+            var deliveryFailed = false
+            val result = try {
+                when (val action = task.action) {
+                    is AgentTaskAction.NotifyUser -> {
+                        if (notificationSink.publish(appContext, task, action.message)) {
+                            AgentTaskActionExecutionResult(true, action.message)
+                        } else {
+                            deliveryFailed = true
+                            AgentTaskActionExecutionResult(
+                                false,
+                                "通知未发送：请授予通知权限后重试。"
+                            )
+                        }
+                    }
+
+                    is AgentTaskAction.RunAgentPrompt -> {
+                        val execution = promptExecutor?.execute(task)
+                            ?: AgentTaskActionExecutionResult(
+                                false,
+                                "当前宿主尚未安装后台 Agent Prompt 执行器。"
+                            )
+                        notifySuccessfulPrompt = execution.success &&
+                            action.notifyPolicy == com.ugk.pi.android.AgentTaskNotifyPolicy.ALWAYS_NOTIFY
+                        execution
                     }
                 }
+            } catch (error: CancellationException) {
+                // JobService may be stopped by the OS. Keep the task scheduled so
+                // JobScheduler can retry it instead of turning cancellation into a
+                // terminal FAILED task.
+                throw error
+            } catch (error: Throwable) {
+                AgentTaskActionExecutionResult(false, "定时任务执行失败，请稍后重试。")
+            }
 
-                is AgentTaskAction.RunAgentPrompt -> {
-                    val execution = promptExecutor?.execute(task)
-                        ?: AgentTaskActionExecutionResult(
-                            false,
-                            "当前宿主尚未安装后台 Agent Prompt 执行器。"
-                        )
-                    notifySuccessfulPrompt = execution.success &&
-                        action.notifyPolicy == com.ugk.pi.android.AgentTaskNotifyPolicy.ALWAYS_NOTIFY
-                    execution
+            // The action above can run for seconds to minutes (a prompt execution
+            // is an LLM/tool loop) while the foreground conversation shares this
+            // process, so the snapshot read at the top of handle() is stale by
+            // now. The control-plane tools in the schedule skill (cancel, update)
+            // write without holding this task's handle lock, so writing back a
+            // record derived from that stale snapshot would resurrect a task that
+            // was just cancelled — and re-arm its platform trigger — or silently
+            // roll back a concurrent update. Re-read the record and fold the
+            // execution result into whatever is current instead.
+            val current = store.get(taskId)
+            val updated: AgentTask? = when {
+                current == null -> {
+                    // The task was deleted while executing; writing any record
+                    // back would revive it. The execution did happen, so the
+                    // result notification below still fires.
+                    null
+                }
+                current.status != AgentTaskStatus.SCHEDULED -> {
+                    // Cancelled (or otherwise terminal) while executing: keep the
+                    // user's decision instead of overwriting it back to
+                    // SCHEDULED/COMPLETED, and never re-arm the platform trigger.
+                    null
+                }
+                // A denied notification is a delivery problem, not a task
+                // failure: repeating tasks survive it and advance to the next run.
+                deliveryFailed -> current.afterDeliveryFailure(now)
+                else -> current.afterExecution(now, result.success)
+            }
+            // A millisecond-scale race remains between this re-read and the
+            // upsert (the cross-module cancel tool does not take the task handle
+            // lock). That is accepted: the window shrinks from the whole
+            // execution duration to one store round-trip, a cancel landing inside
+            // it merely loses one already-started run's write-back, and closing
+            // it fully would need either a lock shared with the tool module or a
+            // compare-and-swap store API — both beyond this fix.
+            // updated != null already implies current != null: the when above
+            // returns null for every current == null branch, so no extra
+            // null-check is needed here.
+            if (updated != null) {
+                store.upsert(updated)
+                if (reschedule) {
+                    if (updated.status == AgentTaskStatus.SCHEDULED) {
+                        scheduler.schedule(updated)
+                    } else if (current?.action !is AgentTaskAction.RunAgentPrompt) {
+                        // A JobService's current job is consumed by jobFinished().
+                        // Canceling that same job from inside handle() can trigger
+                        // onStopJob while the result is being committed.
+                        scheduler.cancel(updated.id)
+                    }
                 }
             }
-        } catch (error: CancellationException) {
-            // JobService may be stopped by the OS. Keep the task scheduled so
-            // JobScheduler can retry it instead of turning cancellation into a
-            // terminal FAILED task.
-            throw error
-        } catch (error: Throwable) {
-            AgentTaskActionExecutionResult(false, "定时任务执行失败，请稍后重试。")
-        }
-
-        // The action above can run for seconds to minutes (a prompt execution
-        // is an LLM/tool loop) while the foreground conversation shares this
-        // process, so the snapshot read at the top of handle() is stale by
-        // now. The control-plane tools in the schedule skill (cancel, update)
-        // write without holding PROCESS_HANDLE_LOCK, so writing back a record
-        // derived from that stale snapshot would resurrect a task that was
-        // just cancelled — and re-arm its platform trigger — or silently roll
-        // back a concurrent update. Re-read the record and fold the execution
-        // result into whatever is current instead.
-        val current = store.get(taskId)
-        val updated: AgentTask? = when {
-            current == null -> {
-                // The task was deleted while executing; writing any record
-                // back would revive it. The execution did happen, so the
-                // result notification below still fires.
-                null
+            if (!result.success || notifySuccessfulPrompt) {
+                // current may differ from the stale snapshot read at the top of
+                // handle() (concurrent cancel/update); prefer its title for the
+                // notification. task is only a fallback for a deleted record.
+                notificationSink.publish(appContext, current ?: task, result.message)
             }
-            current.status != AgentTaskStatus.SCHEDULED -> {
-                // Cancelled (or otherwise terminal) while executing: keep the
-                // user's decision instead of overwriting it back to
-                // SCHEDULED/COMPLETED, and never re-arm the platform trigger.
-                null
+            if (updated == null || updated.status != AgentTaskStatus.SCHEDULED) {
+                // The task ended terminal (or was cancelled/deleted while it
+                // ran): drop its lock entry so the map only tracks tasks that can
+                // still fire. Leaving the entry behind would also be harmless —
+                // the map is bounded by the task ids this process has seen, and
+                // task ids are never reused — so the early-return paths above
+                // skip this tidy-up without any correctness impact.
+                TASK_HANDLE_LOCKS.remove(taskId, handleLock)
             }
-            // A denied notification is a delivery problem, not a task
-            // failure: repeating tasks survive it and advance to the next run.
-            deliveryFailed -> current.afterDeliveryFailure(now)
-            else -> current.afterExecution(now, result.success)
+            result
         }
-        // A millisecond-scale race remains between this re-read and the
-        // upsert (the cross-module cancel tool does not take the process
-        // handle lock). That is accepted: the window shrinks from the whole
-        // execution duration to one store round-trip, a cancel landing inside
-        // it merely loses one already-started run's write-back, and closing
-        // it fully would need either a lock shared with the tool module or a
-        // compare-and-swap store API — both beyond this fix.
-        // updated != null already implies current != null: the when above
-        // returns null for every current == null branch, so no extra
-        // null-check is needed here.
-        if (updated != null) {
-            store.upsert(updated)
-            if (reschedule) {
-                if (updated.status == AgentTaskStatus.SCHEDULED) {
-                    scheduler.schedule(updated)
-                } else if (current?.action !is AgentTaskAction.RunAgentPrompt) {
-                    // A JobService's current job is consumed by jobFinished().
-                    // Canceling that same job from inside handle() can trigger
-                    // onStopJob while the result is being committed.
-                    scheduler.cancel(updated.id)
-                }
-            }
-        }
-        if (!result.success || notifySuccessfulPrompt) {
-            // current may differ from the stale snapshot read at the top of
-            // handle() (concurrent cancel/update); prefer its title for the
-            // notification. task is only a fallback for a deleted record.
-            notificationSink.publish(appContext, current ?: task, result.message)
-        }
-        result
     }
 
-    suspend fun restoreScheduledTasks() {
-        // The boot restore may run while a firing alarm handles the same
-        // task on another runtime instance; sharing the handle lock keeps the
-        // restore from re-arming stale snapshots.
-        PROCESS_HANDLE_LOCK.withLock {
-            store.list()
-                .filter { it.status == AgentTaskStatus.SCHEDULED && it.nextRunAtMillis != null }
-                .forEach { scheduler.schedule(it) }
-        }
+    /**
+     * Re-arms every persisted SCHEDULED task on its platform route (device
+     * boot, package replacement, or the construction-time convergence pass).
+     *
+     * Each task is re-armed under its per-task handle lock — the restore may
+     * run while a firing alarm handles the same task on another runtime
+     * instance — and scheduling failures are isolated per task: the platform
+     * refusing one task (for example the prompt route's
+     * IllegalStateException when JobScheduler returns RESULT_FAILURE) is
+     * logged and reported in the result instead of aborting the re-arm of
+     * every task stored after it.
+     */
+    suspend fun restoreScheduledTasks(): AgentTaskRestoreResult =
+        convergeScheduledTasks()
+
+    private suspend fun convergeScheduledTasks(): AgentTaskRestoreResult {
+        val rearmedTaskIds = mutableListOf<String>()
+        val failures = mutableListOf<AgentTaskRestoreFailure>()
+        store.list()
+            .filter { it.status == AgentTaskStatus.SCHEDULED && it.nextRunAtMillis != null }
+            .forEach { persisted ->
+                taskHandleLock(persisted.id).withLock {
+                    // Re-read under the lock: the list snapshot may predate a
+                    // write-back from an in-flight handle of this very task.
+                    val current = store.get(persisted.id)
+                    if (current == null ||
+                        current.status != AgentTaskStatus.SCHEDULED ||
+                        current.nextRunAtMillis == null
+                    ) {
+                        return@withLock
+                    }
+                    try {
+                        scheduler.schedule(current)
+                        rearmedTaskIds += current.id
+                    } catch (cancellation: CancellationException) {
+                        throw cancellation
+                    } catch (@Suppress("TooGenericExceptionCaught") error: Throwable) {
+                        // One task's platform scheduling failure may only
+                        // affect that task: record it, keep re-arming the rest.
+                        val failure = AgentTaskRestoreFailure(
+                            taskId = current.id,
+                            reason = error.message ?: error.javaClass.simpleName
+                        )
+                        failures += failure
+                        Log.w(LOG_TAG, "Failed to re-arm scheduled task ${current.id}.", error)
+                    }
+                }
+            }
+        return AgentTaskRestoreResult(rearmedTaskIds, failures)
     }
 
     private companion object {
+        private const val LOG_TAG = "AndroidAgentTaskRuntime"
+
         // Alarm broadcasts and JobService entries each build a fresh runtime
         // instance (see [taskRuntime]); mutual exclusion for the
         // check-then-act execution transition must therefore be process-wide
-        // instead of per-instance.
-        val PROCESS_HANDLE_LOCK = Mutex()
-        const val EARLY_ALARM_GRACE_MILLIS = 5_000L
+        // instead of per-instance. The lock is keyed per task, though: a
+        // prompt execution runs for minutes and must not delay an unrelated
+        // task's notification delivery behind a process-wide mutex.
+        private val TASK_HANDLE_LOCKS = ConcurrentHashMap<String, Mutex>()
+
+        /**
+         * Returns the stable process-wide lock of one task id.
+         * [ConcurrentHashMap.computeIfAbsent] is atomic, so every concurrent
+         * handle/restore/convergence for one task id observes the same lock
+         * object. Entries of tasks that ended terminal are dropped again by
+         * [handle]; leaking an entry would be harmless (the map is bounded by
+         * the task ids this process has seen).
+         */
+        private fun taskHandleLock(taskId: String): Mutex =
+            TASK_HANDLE_LOCKS.computeIfAbsent(taskId) { Mutex() }
+
+        private const val EARLY_ALARM_GRACE_MILLIS = 5_000L
     }
 }
 

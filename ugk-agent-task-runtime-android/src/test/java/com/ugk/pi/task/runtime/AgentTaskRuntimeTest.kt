@@ -148,8 +148,8 @@ class AgentTaskRuntimeTest {
         val clock = FixedClock(1_600_000_000_000L)
         // Alarm and job deliveries each build their own runtime instance; the
         // shared store must keep the check-then-act transition exclusive.
-        val runtimeA = AndroidAgentTaskRuntime(dummyContext(), store, scheduler, NoopAgentTaskNotificationSink, executor, clock)
-        val runtimeB = AndroidAgentTaskRuntime(dummyContext(), store, scheduler, NoopAgentTaskNotificationSink, executor, clock)
+        val runtimeA = AndroidAgentTaskRuntime(dummyContext(), store, scheduler, NoopAgentTaskNotificationSink, executor, clock, rearmExecutor = null)
+        val runtimeB = AndroidAgentTaskRuntime(dummyContext(), store, scheduler, NoopAgentTaskNotificationSink, executor, clock, rearmExecutor = null)
 
         val first = launch(Dispatchers.IO) { runtimeA.handle("task_1") }
         val second = launch(Dispatchers.IO) { runtimeB.handle("task_1") }
@@ -164,7 +164,7 @@ class AgentTaskRuntimeTest {
         store.upsert(repeatingNotifyTask())
         val scheduler = RecordingAgentTaskScheduler()
         val sink = RecordingAgentTaskNotificationSink(deliverySucceeds = false)
-        val runtime = AndroidAgentTaskRuntime(dummyContext(), store, scheduler, sink, null, FixedClock(1_600_000_000_000L))
+        val runtime = AndroidAgentTaskRuntime(dummyContext(), store, scheduler, sink, null, FixedClock(1_600_000_000_000L), rearmExecutor = null)
 
         val result = runtime.handle("task_1")
 
