@@ -76,6 +76,18 @@ class TerminalAgentPluginCompositionTest {
     }
 
     @Test
+    fun toolNamesMatchesTheActuallyExposedToolSet() {
+        val plugin = plugin(RecordingExecutor())
+        // Hosts (capability interlocks) derive their terminal tool set from
+        // TOOL_NAMES; a tool added to tools() without updating the constant
+        // would silently bypass those gates.
+        assertEquals(
+            TerminalAgentPlugin.TOOL_NAMES,
+            plugin.tools().map { it.name }.toSet()
+        )
+    }
+
+    @Test
     fun normalAuthorizationKeepsConfirmationBeforeBashExecution() = runBlocking {
         val executor = RecordingExecutor()
         val plugin = plugin(executor)

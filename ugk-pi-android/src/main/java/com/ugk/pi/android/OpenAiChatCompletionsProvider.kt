@@ -29,12 +29,9 @@ class OpenAiChatCompletionsProvider(
         // maxStreamedBytes is only plumbed into the default transport; a
         // custom non-JavaNetHttpTransport must configure its own cap, and a
         // silently ignored explicit value here would hide that.
-        require(
-            transport == null ||
-                transport is JavaNetHttpTransport ||
-                maxStreamedBytes == DEFAULT_MAX_STREAMED_BYTES
-        ) {
-            "maxStreamedBytes is not applied to a custom HttpTransport; configure the cap on the transport itself"
+        require(transport == null || maxStreamedBytes == DEFAULT_MAX_STREAMED_BYTES) {
+            "maxStreamedBytes is only applied to the default transport; " +
+                "configure the cap on the supplied HttpTransport itself"
         }
     }
 
