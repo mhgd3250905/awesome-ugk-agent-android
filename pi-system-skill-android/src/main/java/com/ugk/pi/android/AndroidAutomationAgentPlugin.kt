@@ -17,7 +17,8 @@ class AndroidAutomationAgentPlugin(
     private val accessibilityServiceComponent: ComponentName,
     private val accessibilityStateProvider: AndroidAccessibilityServiceStateProvider,
     private val shouldBypassConfirmation: () -> Boolean = { false },
-    private val screenAutomationBackend: ScreenAutomationBackend? = null
+    private val screenAutomationBackend: ScreenAutomationBackend? = null,
+    private val toolDecorator: AgentToolDecorator = AgentToolDecorator.Identity
 ) : AgentCapabilityPlugin {
     /** Keeps the pre-screen-backend constructor available to compiled hosts. */
     constructor(
@@ -33,6 +34,24 @@ class AndroidAutomationAgentPlugin(
         accessibilityStateProvider = accessibilityStateProvider,
         shouldBypassConfirmation = shouldBypassConfirmation,
         screenAutomationBackend = null
+    )
+
+    /** Keeps the pre-decorator constructor available to compiled hosts. */
+    constructor(
+        context: Context,
+        confirmationPresenter: UserConfirmationDialogPresenter,
+        accessibilityServiceComponent: ComponentName,
+        accessibilityStateProvider: AndroidAccessibilityServiceStateProvider,
+        shouldBypassConfirmation: () -> Boolean,
+        screenAutomationBackend: ScreenAutomationBackend?
+    ) : this(
+        context = context,
+        confirmationPresenter = confirmationPresenter,
+        accessibilityServiceComponent = accessibilityServiceComponent,
+        accessibilityStateProvider = accessibilityStateProvider,
+        shouldBypassConfirmation = shouldBypassConfirmation,
+        screenAutomationBackend = screenAutomationBackend,
+        toolDecorator = AgentToolDecorator.Identity
     )
 
     private val appContext = context.applicationContext ?: context
@@ -52,15 +71,19 @@ class AndroidAutomationAgentPlugin(
             add(UserConfirmationDialogTool(confirmationPresenter))
         }
         add(
-            UserConfirmationRequiredTool(
-                AndroidLaunchAppTool(appContext),
-                shouldBypassConfirmation = shouldBypassConfirmation
+            toolDecorator.decorate(
+                UserConfirmationRequiredTool(
+                    AndroidLaunchAppTool(appContext),
+                    shouldBypassConfirmation = shouldBypassConfirmation
+                )
             )
         )
         add(
-            UserConfirmationRequiredTool(
-                AndroidAppIntentTool(appContext),
-                shouldBypassConfirmation = shouldBypassConfirmation
+            toolDecorator.decorate(
+                UserConfirmationRequiredTool(
+                    AndroidAppIntentTool(appContext),
+                    shouldBypassConfirmation = shouldBypassConfirmation
+                )
             )
         )
         add(
@@ -72,44 +95,56 @@ class AndroidAutomationAgentPlugin(
         addAll(clipboardTools(appContext, shouldBypassConfirmation))
 
         val backend = screenAutomationBackend ?: return@buildList
-        add(ScreenReadUiTreeTool(backend))
-        add(ScreenFindUiElementTool(backend))
+        add(toolDecorator.decorate(ScreenReadUiTreeTool(backend)))
+        add(toolDecorator.decorate(ScreenFindUiElementTool(backend)))
         add(
-            UserConfirmationRequiredTool(
-                ScreenPerformActionTool(backend),
-                shouldBypassConfirmation = shouldBypassConfirmation
+            toolDecorator.decorate(
+                UserConfirmationRequiredTool(
+                    ScreenPerformActionTool(backend),
+                    shouldBypassConfirmation = shouldBypassConfirmation
+                )
             )
         )
         add(
-            UserConfirmationRequiredTool(
-                ScreenGestureTool(backend),
-                shouldBypassConfirmation = shouldBypassConfirmation
+            toolDecorator.decorate(
+                UserConfirmationRequiredTool(
+                    ScreenGestureTool(backend),
+                    shouldBypassConfirmation = shouldBypassConfirmation
+                )
             )
         )
         add(
-            UserConfirmationRequiredTool(
-                ScreenPressKeyTool(backend),
-                shouldBypassConfirmation = shouldBypassConfirmation
+            toolDecorator.decorate(
+                UserConfirmationRequiredTool(
+                    ScreenPressKeyTool(backend),
+                    shouldBypassConfirmation = shouldBypassConfirmation
+                )
             )
         )
         add(
-            UserConfirmationRequiredTool(
-                ScreenGlobalActionTool(backend),
-                shouldBypassConfirmation = shouldBypassConfirmation
+            toolDecorator.decorate(
+                UserConfirmationRequiredTool(
+                    ScreenGlobalActionTool(backend),
+                    shouldBypassConfirmation = shouldBypassConfirmation
+                )
             )
         )
         val visualBackend = backend as? ScreenVisualAutomationBackend
         if (visualBackend != null) {
             add(
-                UserConfirmationRequiredTool(
-                    ScreenCaptureVisualTool(visualBackend),
-                    shouldBypassConfirmation = shouldBypassConfirmation
+                toolDecorator.decorate(
+                    UserConfirmationRequiredTool(
+                        ScreenCaptureVisualTool(visualBackend),
+                        shouldBypassConfirmation = shouldBypassConfirmation
+                    )
                 )
             )
             add(
-                UserConfirmationRequiredTool(
-                    ScreenVisualGestureTool(visualBackend),
-                    shouldBypassConfirmation = shouldBypassConfirmation
+                toolDecorator.decorate(
+                    UserConfirmationRequiredTool(
+                        ScreenVisualGestureTool(visualBackend),
+                        shouldBypassConfirmation = shouldBypassConfirmation
+                    )
                 )
             )
         }

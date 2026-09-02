@@ -96,7 +96,8 @@ internal object DemoAgentRuntimeFactory {
                             AgentAccessibilityService.instance
                         },
                         ownPackageName = appContext.packageName
-                    )
+                    ),
+                    toolDecorator = toolDecorator
                 )
             )
             .register(

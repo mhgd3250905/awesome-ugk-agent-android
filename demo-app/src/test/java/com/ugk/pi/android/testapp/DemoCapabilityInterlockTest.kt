@@ -83,13 +83,135 @@ class DemoCapabilityInterlockTest {
         assertFalse(DemoScreenAutomationPolicy.isScreenWorkflowTool("screen_"))
     }
 
+    /**
+     * Capability ownership is process-level: while the first run owns it, a
+     * second instance sees its screen tools blocked but its terminal tools
+     * stay available; once the owning run ends, the second run can acquire.
+     */
+    @Test
+    fun ownershipIsProcessWideBlocksScreenToolsOfOtherRunsAndIsAcquirableAfterRelease() = runBlocking {
+        val first = DemoCapabilityInterlock(DemoScreenAutomationPolicy::isScreenWorkflowTool)
+        val second = DemoCapabilityInterlock(DemoScreenAutomationPolicy::isScreenWorkflowTool)
+        val screenDelegate = RecordingTool("screen_read_ui_tree")
+        val terminalDelegate = RecordingTool("terminal_bash_execute")
+        val guardedScreenOnSecond = AgentToolInterlock(screenDelegate, second.toolInterlockPolicy())
+        val guardedTerminalOnSecond = AgentToolInterlock(terminalDelegate, second.toolInterlockPolicy())
+
+        first.onRunStarted()
+        first.onEvent(workflowStarted())
+        assertTrue(first.isCapabilityOwned())
+
+        val blockedScreen = guardedScreenOnSecond.execute(
+            ToolCall("screen-2", "screen_read_ui_tree", JsonObject(emptyMap())),
+            ToolExecutionContext(sessionId = "session")
+        )
+        assertTrue(blockedScreen.isError)
+        assertEquals(
+            "CAPABILITY_INTERLOCKED",
+            blockedScreen.metadata["code"]?.toString()?.trim('"')
+        )
+        assertEquals(0, screenDelegate.calls)
+
+        val allowedTerminal = guardedTerminalOnSecond.execute(
+            ToolCall("terminal-2", "terminal_bash_execute", JsonObject(emptyMap())),
+            ToolExecutionContext(sessionId = "session")
+        )
+        assertFalse(allowedTerminal.isError)
+        assertEquals(1, terminalDelegate.calls)
+
+        first.onRunFinished()
+        assertFalse(first.isCapabilityOwned())
+
+        second.onRunStarted()
+        second.onEvent(
+            AgentEvent.ToolStarted(
+                ToolCall("screen-3", "screen_read_ui_tree", JsonObject(emptyMap()))
+            )
+        )
+        assertTrue(second.isCapabilityOwned())
+
+        // Release the process-level state so other tests start clean.
+        second.onRunFinished()
+        assertFalse(second.isCapabilityOwned())
+    }
+
+    /** A starting run must never steal ownership that another active run holds. */
+    @Test
+    fun runStartDoesNotClearOwnershipHeldByAnotherActiveRun() = runBlocking {
+        val foreground = DemoCapabilityInterlock(DemoScreenAutomationPolicy::isScreenWorkflowTool)
+        val background = DemoCapabilityInterlock(DemoScreenAutomationPolicy::isScreenWorkflowTool)
+        val foregroundTerminal = AgentToolInterlock(
+            RecordingTool("terminal_bash_execute"),
+            foreground.toolInterlockPolicy()
+        )
+        val backgroundTerminal = AgentToolInterlock(
+            RecordingTool("terminal_bash_execute"),
+            background.toolInterlockPolicy()
+        )
+
+        foreground.onRunStarted()
+        foreground.onEvent(workflowStarted())
+        assertTrue(foreground.isCapabilityOwned())
+
+        // The concurrent background run starts without touching the live owner.
+        background.onRunStarted()
+        assertTrue(foreground.isCapabilityOwned())
+
+        // Ownership still belongs to the foreground run: its terminal stays
+        // blocked while the background run's terminal is untouched.
+        val foregroundBlocked = foregroundTerminal.execute(
+            ToolCall("terminal-foreground", "terminal_bash_execute", JsonObject(emptyMap())),
+            ToolExecutionContext(sessionId = "session")
+        )
+        val backgroundAllowed = backgroundTerminal.execute(
+            ToolCall("terminal-background", "terminal_bash_execute", JsonObject(emptyMap())),
+            ToolExecutionContext(sessionId = "session")
+        )
+        assertTrue(foregroundBlocked.isError)
+        assertFalse(backgroundAllowed.isError)
+
+        // The background run cannot take ownership while it is held; only
+        // after the foreground run's terminal boundary can it acquire.
+        background.onEvent(workflowStarted())
+        assertFalse(background.isCapabilityOwned())
+        foreground.onRunFinished()
+        background.onEvent(workflowStarted())
+        assertTrue(background.isCapabilityOwned())
+
+        background.onRunFinished()
+        assertFalse(background.isCapabilityOwned())
+    }
+
+    /**
+     * The foreground instance is reused across sequential runs; a new run on
+     * the same instance retires its previous run's unreleased ownership.
+     */
+    @Test
+    fun runStartOnSameInstanceRetiresUnreleasedPreviousRunOwnership() {
+        val interlock = DemoCapabilityInterlock(DemoScreenAutomationPolicy::isScreenWorkflowTool)
+
+        interlock.onRunStarted()
+        interlock.onEvent(workflowStarted())
+        assertTrue(interlock.isCapabilityOwned())
+
+        interlock.onRunStarted()
+        assertFalse(interlock.isCapabilityOwned())
+
+        interlock.onEvent(workflowStarted())
+        assertTrue(interlock.isCapabilityOwned())
+
+        interlock.onRunFinished()
+        assertFalse(interlock.isCapabilityOwned())
+    }
+
     private fun workflowStarted(): AgentEvent.ToolStarted = AgentEvent.ToolStarted(
         ToolCall("screen-1", "screen_read_ui_tree", JsonObject(emptyMap()))
     )
 
-    private class RecordingTool : AgentTool {
-        var calls = 0
+    private class RecordingTool(
         override val name: String = "terminal_bash_execute"
+    ) : AgentTool {
+        var calls = 0
         override val description: String = "delegate"
         override val inputSchema: JsonObject = JsonObject(emptyMap())
 
