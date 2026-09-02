@@ -3,7 +3,6 @@ package com.ugk.pi.android
 import kotlinx.serialization.json.Json
 import kotlinx.serialization.json.JsonArray
 import kotlinx.serialization.json.JsonElement
-import kotlinx.serialization.json.JsonNull
 import kotlinx.serialization.json.JsonObject
 import kotlinx.serialization.json.JsonPrimitive
 import kotlinx.serialization.json.buildJsonArray
@@ -22,15 +21,23 @@ import kotlinx.serialization.json.putJsonObject
 class OpenAiChatCompletionsProvider(
     private val apiKey: String,
     private val model: String,
-    private val transport: HttpTransport = JavaNetHttpTransport(),
-    private val endpoint: String = "https://api.openai.com/v1/chat/completions"
+    private val transport: HttpTransport? = null,
+    private val endpoint: String = "https://api.openai.com/v1/chat/completions",
+    private val maxStreamedBytes: Int = DEFAULT_MAX_STREAMED_BYTES
 ) : LLMProvider {
+    /**
+     * Falls back to a [JavaNetHttpTransport] that honors [maxStreamedBytes]
+     * when the host does not supply its own transport.
+     */
+    private val effectiveTransport: HttpTransport =
+        transport ?: JavaNetHttpTransport(maxStreamedBytes = maxStreamedBytes)
+
     private val json = Json {
         ignoreUnknownKeys = true
     }
 
     override suspend fun generate(request: ModelRequest): ModelResponse {
-        val httpResponse = transport.post(
+        val httpResponse = effectiveTransport.post(
             HttpRequest(
                 url = endpoint,
                 headers = mapOf(
@@ -60,7 +67,7 @@ class OpenAiChatCompletionsProvider(
             body = requestBody(request, stream = true).toString()
         )
 
-        val rawLinesFlow = transport.postStream(httpRequest)
+        val rawLinesFlow = effectiveTransport.postStream(httpRequest)
         emitAll(parseOpenAiSseStream(rawLinesFlow))
     }
 
@@ -156,9 +163,9 @@ class OpenAiChatCompletionsProvider(
                 emit(ModelStreamChunk.ThinkingDelta(reasoning))
             }
 
-            // 正文内容增量
-            val content = delta["content"]?.jsonPrimitive?.contentOrNull
-            if (!content.isNullOrEmpty()) {
+            // 正文内容增量（兼容纯字符串与 content-parts 数组两种网关形态）
+            val content = contentText(delta["content"])
+            if (content.isNotEmpty()) {
                 accumulatedContent.append(content)
                 emit(ModelStreamChunk.ContentDelta(content))
             }
@@ -212,6 +219,29 @@ class OpenAiChatCompletionsProvider(
     private fun parseToolArgumentsOrNull(accumulated: String): JsonObject? {
         if (accumulated.isBlank()) return JsonObject(emptyMap())
         return runCatching { json.parseToJsonElement(accumulated) }.getOrNull() as? JsonObject
+    }
+
+    /**
+     * Extracts assistant text from a `content` field. OpenAI-compatible
+     * gateways may serialize it as a plain string or as an array of typed
+     * content parts: a primitive yields its string, an array yields its
+     * `type == "text"` parts concatenated in order (other part types are
+     * ignored), and any other shape (object, null) degrades to an empty
+     * string instead of failing the whole request.
+     */
+    private fun contentText(content: JsonElement?): String {
+        return when (content) {
+            null -> ""
+            is JsonPrimitive -> content.contentOrNull ?: ""
+            is JsonArray -> content.joinToString(separator = "") { it.textContentOrNull() }
+            else -> ""
+        }
+    }
+
+    private fun JsonElement.textContentOrNull(): String {
+        val part = this as? JsonObject ?: return ""
+        if ((part["type"] as? JsonPrimitive)?.contentOrNull != "text") return ""
+        return (part["text"] as? JsonPrimitive)?.contentOrNull ?: ""
     }
 
     private fun requestBody(request: ModelRequest, stream: Boolean = false): JsonObject {
@@ -315,7 +345,7 @@ class OpenAiChatCompletionsProvider(
             ?.jsonObject
             ?: error("OpenAI response missing choices[0].message")
 
-        val content = message["content"]?.jsonPrimitive?.contentOrNull ?: ""
+        val content = contentText(message["content"])
         val toolCalls = message["tool_calls"]
             ?.jsonArray
             ?.mapNotNull { it.toToolCallOrNull() }
@@ -332,12 +362,13 @@ class OpenAiChatCompletionsProvider(
     private fun JsonElement.toToolCallOrNull(): ToolCall? {
         val objectValue = jsonObject
         val function = objectValue["function"]?.jsonObject ?: return null
-        val arguments = function["arguments"]?.jsonPrimitive?.contentOrNull ?: "{}"
-        val input = when (val parsed = json.parseToJsonElement(arguments)) {
-            is JsonObject -> parsed
-            JsonNull -> JsonObject(emptyMap())
-            else -> JsonObject(mapOf("value" to parsed))
-        }
+        // Same policy as the streaming path (parseToolArgumentsOrNull):
+        // missing or blank arguments are a legitimate no-argument call;
+        // anything that does not parse as a JSON object is dropped instead
+        // of being fabricated into {"value": ...} — the model never chose
+        // that shape.
+        val arguments = function["arguments"]?.jsonPrimitive?.contentOrNull
+        val input = parseToolArgumentsOrNull(arguments ?: "") ?: return null
 
         return ToolCall(
             id = objectValue["id"]?.jsonPrimitive?.contentOrNull ?: return null,

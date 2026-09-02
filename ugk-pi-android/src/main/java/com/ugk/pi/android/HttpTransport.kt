@@ -46,12 +46,14 @@ interface HttpTransport {
 class JavaNetHttpTransport(
     val connectTimeoutMillis: Int = 15_000,
     val readTimeoutMillis: Int = 180_000,
-    val maxResponseBytes: Int = 4 * 1024 * 1024
+    val maxResponseBytes: Int = 4 * 1024 * 1024,
+    val maxStreamedBytes: Int = DEFAULT_MAX_STREAMED_BYTES
 ) : HttpTransport {
     init {
         require(connectTimeoutMillis >= 0) { "connectTimeoutMillis must be greater than or equal to 0" }
         require(readTimeoutMillis >= 0) { "readTimeoutMillis must be greater than or equal to 0" }
         require(maxResponseBytes > 0) { "maxResponseBytes must be greater than 0" }
+        require(maxStreamedBytes > 0) { "maxStreamedBytes must be greater than 0" }
     }
 
     override fun postStream(request: HttpRequest): Flow<String> = channelFlow {
@@ -82,9 +84,19 @@ class JavaNetHttpTransport(
                 }
 
                 BufferedInputStream(connection.inputStream, 8 * 1024).use { input ->
+                    var totalStreamedBytes = 0L
                     while (true) {
                         val line = input.readUtf8Line(maxResponseBytes) ?: break
-                        send(line)
+                        // The per-line cap above cannot bound a stream of many
+                        // small SSE events: only the SUM of all line bytes
+                        // does. A hostile or broken endpoint that pushes past
+                        // maxStreamedBytes fails here instead of accumulating
+                        // unbounded data in the host.
+                        totalStreamedBytes += line.byteCount
+                        if (totalStreamedBytes > maxStreamedBytes) {
+                            throw IOException("HTTP stream exceeds maxStreamedBytes=$maxStreamedBytes")
+                        }
+                        send(line.text)
                     }
                 }
                 close()
@@ -148,14 +160,20 @@ class JavaNetHttpTransport(
      * UTF-8 decoding so the bound holds for multi-byte characters too, and a
      * line that would exceed it fails instead of buffering unbounded data.
      * The stream must support mark/reset for the CRLF lookahead
-     * (see [BufferedInputStream]).
+     * (see [BufferedInputStream]). Returns the decoded text together with
+     * the wire byte count of the line content so the caller can also bound
+     * the total across lines.
      */
-    private fun InputStream.readUtf8Line(maxBytes: Int): String? {
+    private fun InputStream.readUtf8Line(maxBytes: Int): StreamedLine? {
         val line = ByteArrayOutputStream(minOf(maxBytes, 8 * 1024))
         while (true) {
             val byte = read()
             if (byte < 0) {
-                return if (line.size() == 0) null else line.toString(Charsets.UTF_8.name())
+                return if (line.size() == 0) {
+                    null
+                } else {
+                    StreamedLine(line.toString(Charsets.UTF_8.name()), line.size())
+                }
             }
             if (byte == '\n'.code || byte == '\r'.code) {
                 if (byte == '\r'.code) {
@@ -164,7 +182,7 @@ class JavaNetHttpTransport(
                     mark(1)
                     if (read() != '\n'.code) reset()
                 }
-                return line.toString(Charsets.UTF_8.name())
+                return StreamedLine(line.toString(Charsets.UTF_8.name()), line.size())
             }
             if (line.size() >= maxBytes) {
                 throw IOException("HTTP response line exceeds maxResponseBytes=$maxBytes")
@@ -172,4 +190,17 @@ class JavaNetHttpTransport(
             line.write(byte)
         }
     }
+
+    /** One streamed line with the wire byte count of its content. */
+    private class StreamedLine(val text: String, val byteCount: Int)
 }
+
+/**
+ * Default total byte cap for one streamed (SSE) response: the sum of all
+ * line content bytes across the whole stream. Generous enough for large
+ * legitimate answers (the SSE/JSON envelope roughly doubles to triples the
+ * plain content size) while bounding what a hostile or broken endpoint can
+ * push into the host. Hosts can override it via
+ * [JavaNetHttpTransport.maxStreamedBytes] or the provider constructors.
+ */
+internal const val DEFAULT_MAX_STREAMED_BYTES = 8 * 1024 * 1024

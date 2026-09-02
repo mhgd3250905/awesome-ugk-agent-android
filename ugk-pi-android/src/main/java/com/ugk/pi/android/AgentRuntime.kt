@@ -235,7 +235,14 @@ class AgentRuntime(
         var modelRequestIteration = 0
         var consecutiveIncompleteResponses = 0
         var incompleteResponseCorrection: AgentMessage.System? = null
-        var transientInputAttachment: AgentMessage.User? = if (inputImages.isEmpty()) {
+        // The original multimodal input is kept as an immutable snapshot so an
+        // incomplete-response retry can re-attach it: the retry prompt asks
+        // the model to reproduce the complete answer from the original
+        // inputs, which is contradictory when the images are no longer
+        // visible. Normal tool-iteration requests keep the one-shot
+        // semantics, and total re-sends stay bounded by
+        // MAX_INCOMPLETE_RESPONSE_RETRIES.
+        val inputAttachmentSnapshot: AgentMessage.User? = if (inputImages.isEmpty()) {
             null
         } else {
             AgentMessage.User(
@@ -244,6 +251,7 @@ class AgentRuntime(
                 images = inputImages
             )
         }
+        var transientInputAttachment: AgentMessage.User? = inputAttachmentSnapshot
         var transientModelMessages: List<AgentMessage> = emptyList()
 
         while (completedIterations < maxIterations) {
@@ -341,6 +349,11 @@ class AgentRuntime(
                     incompleteResponseCorrection = AgentMessage.System(
                         incompleteResponseRetryPrompt(response.content)
                     )
+                    // Re-arm the original input attachment for the retry
+                    // request (see inputAttachmentSnapshot): the retry demands
+                    // reproducing the answer from the original inputs, so the
+                    // multimodal input must be visible again.
+                    transientInputAttachment = inputAttachmentSnapshot
                     continue
                 }
                 transientModelMessages = emptyList()
@@ -364,7 +377,7 @@ class AgentRuntime(
             try {
                 response.toolCalls.forEach { call ->
                     emit(AgentEvent.ToolStarted(call))
-                    val result = executeTool(
+                    val executed = executeTool(
                         call = call,
                         session = session,
                         input = input,
@@ -372,6 +385,20 @@ class AgentRuntime(
                             emit(AgentEvent.ToolProgress(call, progress))
                         }
                     )
+                    // The runtime owns the tool_use/tool_result envelope
+                    // integrity: toolCallId is only the tool's echo metadata.
+                    // A result echoing a foreign id would otherwise append a
+                    // tool_result that matches no open tool_use and poison the
+                    // transcript permanently (prepareTranscript rejects it on
+                    // every later request). The tool's business result stays
+                    // valid, so normalize the envelope id to the executed call
+                    // — keeping content, metadata, isError, images and
+                    // transientModelContent intact — instead of rejecting it.
+                    val result = if (executed.toolCallId == call.id) {
+                        executed
+                    } else {
+                        executed.copy(toolCallId = call.id)
+                    }
                     // Tool 附件只供紧邻的下一次模型请求使用。持久化 transcript
                     // 和事件保持纯文本，避免截图在 AgentSession 中累积或进入诊断输出。
                     // 临时附件和敏感文本只发送到下一次模型请求；持久化会话和事件只保留元数据，

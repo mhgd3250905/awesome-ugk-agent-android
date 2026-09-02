@@ -125,7 +125,7 @@ class AgentRuntimeTranscriptPreparationTest {
     }
 
     @Test
-    fun `input attachment survives policy rewrite but is consumed by only the first request`() = runBlocking {
+    fun `input attachment survives policy rewrite and is re-armed for the incomplete-response retry`() = runBlocking {
         val image = AgentImageContent(base64Data = "AQID", mimeType = "image/png")
         val longInput = "long user request " + "x".repeat(2_000)
         val requests = mutableListOf<ModelRequest>()
@@ -168,9 +168,17 @@ class AgentRuntimeTranscriptPreparationTest {
             requests[0].messages.filterIsInstance<AgentMessage.User>()
                 .any { it.content.endsWith("short prepared request") }
         )
-        assertTrue(
-            "input images must not be resent on an incomplete-response retry",
-            requests[1].messages.filterIsInstance<AgentMessage.User>().all { it.images.isEmpty() }
+        // Design change (2026-09 review round 4): the incomplete-response
+        // retry prompt demands reproducing the complete answer from the
+        // original inputs, which is contradictory when multimodal input is no
+        // longer visible. The retry request therefore re-attaches the original
+        // input images; total re-sends are bounded by
+        // MAX_INCOMPLETE_RESPONSE_RETRIES and normal tool-iteration requests
+        // keep the one-shot semantics.
+        assertEquals(
+            "incomplete-response retry must re-attach the input images",
+            listOf(image),
+            requests[1].messages.filterIsInstance<AgentMessage.User>().flatMap { it.images }
         )
     }
 

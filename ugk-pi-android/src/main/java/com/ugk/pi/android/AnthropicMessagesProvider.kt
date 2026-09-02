@@ -37,11 +37,19 @@ class AnthropicMessagesProvider(
     private val apiKey: String,
     private val model: String,
     private val baseUrl: String,
-    private val transport: HttpTransport = JavaNetHttpTransport(),
+    private val transport: HttpTransport? = null,
     private val maxTokens: Int = 32_768,
     private val anthropicVersion: String = "2023-06-01",
-    private val retryPolicy: AnthropicRetryPolicy = AnthropicRetryPolicy()
+    private val retryPolicy: AnthropicRetryPolicy = AnthropicRetryPolicy(),
+    private val maxStreamedBytes: Int = DEFAULT_MAX_STREAMED_BYTES
 ) : LLMProvider {
+    /**
+     * Falls back to a [JavaNetHttpTransport] that honors [maxStreamedBytes]
+     * when the host does not supply its own transport.
+     */
+    private val effectiveTransport: HttpTransport =
+        transport ?: JavaNetHttpTransport(maxStreamedBytes = maxStreamedBytes)
+
     private val json = Json {
         ignoreUnknownKeys = true
     }
@@ -78,7 +86,7 @@ class AnthropicMessagesProvider(
             body = requestBody(request, stream = true).toString()
         )
 
-        val rawLinesFlow = transport.postStream(httpRequest)
+        val rawLinesFlow = effectiveTransport.postStream(httpRequest)
         emitAll(parseSseStream(rawLinesFlow))
     }
 
@@ -244,7 +252,7 @@ class AnthropicMessagesProvider(
 
         while (attempt <= retryPolicy.maxAttempts) {
             try {
-                val response = transport.post(request)
+                val response = effectiveTransport.post(request)
                 if (!response.statusCode.isRetryableStatusCode() || attempt == retryPolicy.maxAttempts) {
                     return response
                 }
