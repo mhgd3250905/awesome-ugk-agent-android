@@ -445,4 +445,5 @@ Core API/JVM 边界：
 - 命令与结果（`JAVA_HOME=E:\Android\Android Studio\jbr`，`--rerun-tasks` 强制重跑）：
   - 全模块 JVM（第 3 节八模块命令 + `:demo-app:testDebugUnitTest`）：`BUILD SUCCESSFUL`，合计 `553` tests、`3` skipped（既有 Windows symlink 限制用例）、0 failure、0 error；分模块：Core 152、File 13、Schedule 14、Task Runtime 26、System 42、Agent Skill Runtime 83、Terminal Runtime 17（新增 JVM 测试源集）、Terminal Skill 39、Demo 167。基线（`a2e451b`）为 `506/3/0`。
   - `:demo-app:compileDebugKotlin`、`:demo-app:compileDebugAndroidTestKotlin`：通过（`local_http_server` token URL 的仪器测试断言已同步更新，无 token 请求断言 404）。
-- 边界与未执行：本轮未操作设备/AVD（`LocalHttpServerManagerInstrumentedTest` 与 probe 仪器用例仅编译验证，token handler 在设备上的实际运行待下次 connected 回归）；未跑 `-CheckPackages`、Release 矩阵或真实 Provider/API；不关闭任何 Gate。负 exitCode 设备侧验证（第 28 节遗留）状态不变。
+  - `:demo-app:connectedDebugAndroidTest`（AVD `codex_api35`，API 35 x86_64，page size 4 KB）：`28/28` 通过、0 failure、0 skipped，含更新后的 `LocalHttpServerManagerInstrumentedTest`（token 路径 200、无 token 404、进程组停止）与全部终端/无障碍集成用例。
+- 边界与未执行：probe A/B 仪器用例未跑（无 local_http 用法，不受 token 影响）；未跑 `-CheckPackages`、Release 矩阵或真实 Provider/API；不关闭任何 Gate。负 exitCode 设备侧验证（第 28 节遗留）状态不变。
