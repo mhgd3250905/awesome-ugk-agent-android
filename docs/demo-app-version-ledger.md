@@ -1,11 +1,11 @@
 # demo-app 版本与变更台账
 
-更新时间：2026-09-02
-当前保存版本：`1.0.4`（`versionCode 104`）
+更新时间：2026-09-03
+当前保存版本：`1.0.5`（`versionCode 105`）
 版本范围：仅 `:demo-app`；SDK/AAR 模块版本继续独立维护。
-当前阶段：在 `1.0.2`（更名 `com.ugk.pi.agent` 并上线 Play 封闭测试，commit `6f88115`，标签 `demo-app-v1.0.2@6f88115`）之上交付悬浮窗软键盘避让（`1.0.3 / 103`，commit `032589c`）与 Play 应用内更新提示（`1.0.4 / 104`，功能 commit `11d9945`、版本 commit `4e4bbe4`）；`1.0.3`、`1.0.4` 均已发布到 Play 内部测试轨道。版本边界标签为 `demo-app-v1.0.4@4e4bbe4`；远端状态以 Git 实测为准。
+当前阶段：在 `1.0.4`（Play 应用内更新提示，功能 commit `11d9945`、版本 commit `4e4bbe4`）之上交付悬浮窗 IME 贴顶钳位高度压缩（`1.0.5 / 105`，功能 commit `c703f91`、版本 commit `11d764a`）；`1.0.3`、`1.0.4` 已发布到 Play 内部测试轨道，自 `1.0.5` 起运行 `1.0.4` 的测试人员可见 Play 应用内更新弹窗；`1.0.5` 的 Play 轨道发布状态在本次补记时点无外部观察证据，以 Play Console 实测为准。版本边界标签为 `demo-app-v1.0.5@11d764a`；远端状态以 Git 实测为准。
 
-> 文首元数据、版本规则和 `1.0.4` 记录描述当前保存点；其后的版本条目是不可改写的历史记录。
+> 文首元数据、版本规则和 `1.0.5` 记录描述当前保存点；其后的版本条目是不可改写的历史记录。
 > 历史条目中的“当前”仅指该条目记录时点，不是今天的版本或验证状态。
 
 ## 版本规则
@@ -13,9 +13,25 @@
 - `versionCode` 只递增，不因重新打包或覆盖安装回退。
 - `versionName` 使用面向测试交付的 SemVer 风格；聊天、会话和悬浮窗等一组可感知能力完成后提升 minor 版本。
 - 稳定性修复、生命周期恢复和验收证据整理使用 patch 版本递增，不与新的用户可感知 UI 能力混用。
-- 本阶段版本边界标签名为 `demo-app-v1.0.4@4e4bbe4`；`demo-app-v1.0.3@032589c`、`demo-app-v1.0.2@6f88115`、`demo-app-v0.9.4`、`demo-app-v0.9.3`（指向 `1170268`）、`demo-app-v0.9.2`、`demo-app-v0.9.1`、`demo-app-v0.9.0`、`demo-app-v0.8.0`、`demo-app-v0.7.1`、`demo-app-v0.7.0`、`demo-app-v0.6.0`、`demo-app-v0.5.0`、`demo-app-v0.4.0` 和 `demo-app-v0.3.0` 保留为历史 Demo 交付标签，不代表 Terminal Runtime 已达到最终发布状态。
+- 本阶段版本边界标签名为 `demo-app-v1.0.5@11d764a`；`demo-app-v1.0.4@4e4bbe4`、`demo-app-v1.0.3@032589c`、`demo-app-v1.0.2@6f88115`、`demo-app-v0.9.4`、`demo-app-v0.9.3`（指向 `1170268`）、`demo-app-v0.9.2`、`demo-app-v0.9.1`、`demo-app-v0.9.0`、`demo-app-v0.8.0`、`demo-app-v0.7.1`、`demo-app-v0.7.0`、`demo-app-v0.6.0`、`demo-app-v0.5.0`、`demo-app-v0.4.0` 和 `demo-app-v0.3.0` 保留为历史 Demo 交付标签，不代表 Terminal Runtime 已达到最终发布状态。
 - Debug APK 允许本机从被 Git 忽略的配置读取 API 默认值，不能作为对外分发包；API Key 不进入源码、文档或提交。
 - 真机迭代使用固定 Debug 签名和 `adb install -r -d`，不以卸载、清数据作为常规版本升级步骤；本阶段不操作真机。
+
+## 1.0.5 · 2026-09-03 · 悬浮窗贴顶钳位下的 IME 高度压缩
+
+> 本条目为 2026-09-03 补记：`c703f91` / `11d764a` 提交时未同步台账，条目内容以 commit message、Git diff 与补记当日实测测试结果为据。
+
+### 变更范围
+
+- `AgentFloatingWindow` IME 避让增强（commit `c703f91`）：展开态悬浮窗已贴住 48dp 顶部钳位且窗口较高时，旧避让逻辑静默接受残余重叠、底部输入行被键盘遮挡。`avoidanceDecision` 改为返回 `(y, height)`：先按原逻辑平移；平移被钳位且仍有真实重叠时压缩高度，使窗口底部落在 IME 上方 8dp（受最小/最大高度约束、绝不增高、minHeight 兜底）。键盘关闭精确恢复用户原始高度与位置；拖动保持高度基线（手指只拥有位置），resize 采纳新高度。涉及 `AgentFloatingWindow.kt`、`ImeAvoidance.kt`，`ImeAvoidanceTest` 新增用例。
+- Demo 版本由 `1.0.4 / versionCode 104` 提升到 `1.0.5 / versionCode 105`（commit `11d764a`）；自本版起，运行 `1.0.4` 的测试人员可见 Play 应用内更新弹窗（`1.0.4` 之后有新版本可推）。不改变依赖、权限、Terminal v1 scope 或主界面聊天 UI 基线。
+
+### 验收证据与边界
+
+- `:demo-app:testDebugUnitTest` 于 HEAD `11d764a` 补记当日实测 `160/160`（0 failure / 0 error / 0 skipped，`--max-workers=1`）；较 `1.0.4` 的 `153` 新增 7 例 IME 用例。
+- commit message 自述真机（Android 16）+ 模拟器验证：贴顶高窗压缩（2403→1302 / 1913→1234，顶保持钳位）、键盘关闭精确恢复、矮窗仍仅平移、IME 打开时 resize 采纳新高度、收起再展开保留用户高度、三连开关零漂移、0 crash；`ImeAvoidanceTest` 19/19。该真机验证未随提交记录台账，本条目不将其作为独立复核过的证据。
+- 发布记录：`11d764a` 标题为面向内部测试发布的版本提交，但本次补记无 Play Console 外部观察证据；发布状态以 Play Console 实测为准。
+- 版本边界标签为 `demo-app-v1.0.5@11d764a`；远端状态以 Git 实测为准。
 
 ## 1.0.4 · 2026-09-02 · Play 应用内更新提示（FLEXIBLE）
 
