@@ -136,6 +136,46 @@ class ProcessHandlePerTaskLockTest {
         )
     }
 
+    @Test
+    fun `construction-time convergence skips a task whose handle is in flight`() = runBlocking {
+        val store = FakeStore()
+        store.upsert(slowPromptTask())
+        store.upsert(notifyTask())
+        val scheduler = RecordingScheduler()
+        val executor = BlockingPromptExecutor()
+        val handlingRuntime = AndroidAgentTaskRuntime(
+            dummyContext(), store, scheduler, NoopSink, executor, FixedClock(1_600_000_000_000L),
+            rearmExecutor = null
+        )
+        val promptResult = CompletableDeferred<AgentTaskActionExecutionResult>()
+        launch(Dispatchers.IO) { promptResult.complete(handlingRuntime.handle(SLOW_TASK_ID)) }
+        assertTrue(executor.started.await(5, TimeUnit.SECONDS))
+
+        // A cold-start convergence (direct executor = immediate pass) runs
+        // while the prompt handle is parked inside execute(): it must skip
+        // the busy task instead of re-arming a RUNNING job under it, and
+        // still re-arm the unrelated notification task.
+        AndroidAgentTaskRuntime(
+            dummyContext(), store, scheduler, NoopSink, executor, FixedClock(1_600_000_000_000L),
+            rearmExecutor = java.util.concurrent.Executor { it.run() }
+        )
+
+        executor.release.complete(Unit)
+        val promptOutcome = withTimeout(10_000) { promptResult.await() }
+        assertTrue(promptOutcome.success)
+
+        val rearmedIds = synchronized(scheduler.scheduled) { scheduler.scheduled.map { it.id } }
+        assertTrue(
+            "expected the convergence to re-arm the unrelated notification task",
+            NOTIFY_TASK_ID in rearmedIds
+        )
+        assertEquals(
+            "the busy prompt task must be armed exactly once (by its own write-back), never by the convergence",
+            1,
+            rearmedIds.count { it == SLOW_TASK_ID }
+        )
+    }
+
     private companion object {
         const val SLOW_TASK_ID = "task_slow_prompt"
         const val NOTIFY_TASK_ID = "task_notify"

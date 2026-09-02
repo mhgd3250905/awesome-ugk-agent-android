@@ -106,6 +106,16 @@ internal class DemoCapabilityInterlock(
             toolName: String,
             workflowToolMatcher: (String) -> Boolean
         ): AgentToolInterlockDecision? = synchronized(lock) {
+            if (blockingCapability == null) {
+                // Acquire at decision time, atomically with the check: a
+                // workflow tool must never slip through the window between
+                // the ToolStarted event acquisition and this evaluation
+                // where the previous owner just released.
+                if (workflowToolMatcher(toolName)) {
+                    acquireLocked(requester)
+                }
+                return null
+            }
             val capability = blockingCapability ?: return null
             val requesterIsOwner = owner === requester
             val blocked = when {
@@ -124,6 +134,10 @@ internal class DemoCapabilityInterlock(
         }
 
         fun acquire(by: DemoCapabilityInterlock) = synchronized(lock) {
+            acquireLocked(by)
+        }
+
+        private fun acquireLocked(by: DemoCapabilityInterlock) {
             if (blockingCapability == null) {
                 owner = by
                 blockingCapability = SCREEN_CAPABILITY
@@ -146,15 +160,10 @@ internal class DemoCapabilityInterlock(
         const val SCREEN_CAPABILITY = "android-screen-automation"
 
         /**
-         * Terminal capability tools as wired by [DemoAgentRuntimeFactory] via
-         * TerminalAgentPlugin's D-025 decorator seam. The owning run's calls
-         * to these stay blocked for the whole screen workflow.
+         * Terminal capability tools as exposed by TerminalAgentPlugin (the
+         * single source of truth for the names). The owning run's calls to
+         * these stay blocked for the whole screen workflow.
          */
-        val TERMINAL_TOOL_NAMES = setOf(
-            "terminal_bash_execute",
-            "local_http_server_start",
-            "local_http_server_stop",
-            "local_http_server_status"
-        )
+        val TERMINAL_TOOL_NAMES = com.ugk.pi.terminal.skill.TerminalAgentPlugin.TOOL_NAMES
     }
 }

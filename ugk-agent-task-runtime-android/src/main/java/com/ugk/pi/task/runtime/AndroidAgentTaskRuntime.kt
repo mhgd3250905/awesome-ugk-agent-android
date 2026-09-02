@@ -32,6 +32,7 @@ import kotlinx.coroutines.Job
 import kotlinx.coroutines.SupervisorJob
 import kotlinx.coroutines.asCoroutineDispatcher
 import kotlinx.coroutines.cancel
+import kotlinx.coroutines.delay
 import kotlinx.coroutines.launch
 import kotlinx.coroutines.sync.Mutex
 import kotlinx.coroutines.sync.withLock
@@ -494,10 +495,22 @@ class AndroidAgentTaskRuntime(
             return
         }
         CoroutineScope(SupervisorJob() + executor.asCoroutineDispatcher()).launch {
+            if (executor === PROCESS_REARM_EXECUTOR) {
+                // Cold start often constructs this runtime from inside an
+                // alarm or job delivery, and that delivery's handle() is
+                // about to run for the very tasks being converged. Re-arming
+                // a RUNNING job with the same job id replaces it and cancels
+                // the in-flight run (onStopJob), so the default pass yields
+                // the early seconds to those deliveries and then skips any
+                // task whose handle lock is still held (its own write-back
+                // re-arms it). Injected executors keep deterministic,
+                // immediate convergence for tests.
+                delay(INITIAL_REARM_DELAY_MILLIS)
+            }
             // A self-healing pass must never take the constructor (or the
             // process) down; per-task scheduling failures are already
             // isolated and reported inside the convergence.
-            runReceiverTask { convergeScheduledTasks() }
+            runReceiverTask { convergeScheduledTasks(skipBusyTasks = true) }
         }
     }
 
@@ -655,41 +668,63 @@ class AndroidAgentTaskRuntime(
      * IllegalStateException when JobScheduler returns RESULT_FAILURE) is
      * logged and reported in the result instead of aborting the re-arm of
      * every task stored after it.
+     *
+     * [skipBusyTasks] (used by the construction-time pass) leaves every task
+     * whose handle lock is currently held to its in-flight delivery instead
+     * of waiting: re-arming a RUNNING prompt job with the same job id would
+     * replace and cancel the in-flight run, and the delivery's own write-back
+     * re-arms the task anyway. The boot/replace restore keeps the blocking
+     * behavior: after a reboot nothing is in flight, so waiting is harmless
+     * and converges everything.
      */
     suspend fun restoreScheduledTasks(): AgentTaskRestoreResult =
         convergeScheduledTasks()
 
-    private suspend fun convergeScheduledTasks(): AgentTaskRestoreResult {
+    private suspend fun convergeScheduledTasks(skipBusyTasks: Boolean = false): AgentTaskRestoreResult {
         val rearmedTaskIds = mutableListOf<String>()
         val failures = mutableListOf<AgentTaskRestoreFailure>()
         store.list()
             .filter { it.status == AgentTaskStatus.SCHEDULED && it.nextRunAtMillis != null }
             .forEach { persisted ->
-                taskHandleLock(persisted.id).withLock {
+                val handleLock = taskHandleLock(persisted.id)
+                val lockAcquired = if (skipBusyTasks) {
+                    handleLock.tryLock()
+                } else {
+                    handleLock.lock()
+                    true
+                }
+                if (!lockAcquired) {
+                    // An in-flight delivery owns this task; its write-back
+                    // re-arms it. Touching it here could replace a RUNNING
+                    // job and cancel the very execution we are converging.
+                    return@forEach
+                }
+                try {
                     // Re-read under the lock: the list snapshot may predate a
                     // write-back from an in-flight handle of this very task.
                     val current = store.get(persisted.id)
-                    if (current == null ||
-                        current.status != AgentTaskStatus.SCHEDULED ||
-                        current.nextRunAtMillis == null
+                    if (current != null &&
+                        current.status == AgentTaskStatus.SCHEDULED &&
+                        current.nextRunAtMillis != null
                     ) {
-                        return@withLock
+                        try {
+                            scheduler.schedule(current)
+                            rearmedTaskIds += current.id
+                        } catch (cancellation: CancellationException) {
+                            throw cancellation
+                        } catch (@Suppress("TooGenericExceptionCaught") error: Throwable) {
+                            // One task's platform scheduling failure may only
+                            // affect that task: record it, keep re-arming the rest.
+                            val failure = AgentTaskRestoreFailure(
+                                taskId = current.id,
+                                reason = error.message ?: error.javaClass.simpleName
+                            )
+                            failures += failure
+                            Log.w(LOG_TAG, "Failed to re-arm scheduled task ${current.id}.", error)
+                        }
                     }
-                    try {
-                        scheduler.schedule(current)
-                        rearmedTaskIds += current.id
-                    } catch (cancellation: CancellationException) {
-                        throw cancellation
-                    } catch (@Suppress("TooGenericExceptionCaught") error: Throwable) {
-                        // One task's platform scheduling failure may only
-                        // affect that task: record it, keep re-arming the rest.
-                        val failure = AgentTaskRestoreFailure(
-                            taskId = current.id,
-                            reason = error.message ?: error.javaClass.simpleName
-                        )
-                        failures += failure
-                        Log.w(LOG_TAG, "Failed to re-arm scheduled task ${current.id}.", error)
-                    }
+                } finally {
+                    handleLock.unlock()
                 }
             }
         return AgentTaskRestoreResult(rearmedTaskIds, failures)
@@ -697,6 +732,14 @@ class AndroidAgentTaskRuntime(
 
     private companion object {
         private const val LOG_TAG = "AndroidAgentTaskRuntime"
+
+        /**
+         * Startup grace for the default construction-time re-arm pass: cold
+         * start deliveries (alarm broadcast / JobService) begin their handle()
+         * within milliseconds of constructing the runtime, and re-arming a
+         * RUNNING job under them would replace and cancel it.
+         */
+        private const val INITIAL_REARM_DELAY_MILLIS = 5_000L
 
         // Alarm broadcasts and JobService entries each build a fresh runtime
         // instance (see [taskRuntime]); mutual exclusion for the

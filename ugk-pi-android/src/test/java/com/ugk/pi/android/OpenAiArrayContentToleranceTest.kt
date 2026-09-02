@@ -207,4 +207,101 @@ class OpenAiArrayContentToleranceTest {
             assertTrue("content must degrade to an empty string, was: '${response.content}'", response.content.isEmpty())
         }
     }
+
+    @Test
+    fun `reasoning_content arrays degrade like content arrays`() = runBlocking {
+        val streamLine = "data: " + buildJsonObject {
+            putJsonArray("choices") {
+                add(
+                    buildJsonObject {
+                        putJsonObject("delta") {
+                            putJsonArray("reasoning_content") {
+                                add(
+                                    buildJsonObject {
+                                        put("type", "text")
+                                        put("text", "think ")
+                                    }
+                                )
+                                add(
+                                    buildJsonObject {
+                                        put("type", "text")
+                                        put("text", "step")
+                                    }
+                                )
+                            }
+                        }
+                    }
+                )
+            }
+        }.toString()
+        val streamProvider = OpenAiChatCompletionsProvider(
+            apiKey = "test-key",
+            model = "test-model",
+            endpoint = "https://example.com/v1/chat/completions",
+            transport = object : HttpTransport {
+                override suspend fun post(request: HttpRequest): HttpResponse =
+                    throw UnsupportedOperationException("streaming tests must not call post()")
+
+                override fun postStream(request: HttpRequest): kotlinx.coroutines.flow.Flow<String> =
+                    kotlinx.coroutines.flow.flowOf(
+                        streamLine,
+                        "data: [DONE]"
+                    )
+            }
+        )
+        val streamResponse = streamProvider.generateStream(
+            ModelRequest(
+                sessionId = "s1",
+                messages = listOf(AgentMessage.User("hello")),
+                tools = emptyList()
+            )
+        ).toList()
+        assertTrue(
+            "stream reasoning must tolerate a content-parts array",
+            streamResponse.filterIsInstance<ModelStreamChunk.ThinkingDelta>()
+                .any { it.delta.contains("think") }
+        )
+
+        val nonStreamBody = buildJsonObject {
+            putJsonArray("choices") {
+                add(
+                    buildJsonObject {
+                        put("finish_reason", "stop")
+                        putJsonObject("message") {
+                            put("content", "answer")
+                            putJsonArray("reasoning_content") {
+                                add(
+                                    buildJsonObject {
+                                        put("type", "text")
+                                        put("text", "reasoned")
+                                    }
+                                )
+                            }
+                        }
+                    }
+                )
+            }
+        }.toString()
+        val nonStreamProvider = OpenAiChatCompletionsProvider(
+            apiKey = "test-key",
+            model = "test-model",
+            endpoint = "https://example.com/v1/chat/completions",
+            transport = object : HttpTransport {
+                override suspend fun post(request: HttpRequest): HttpResponse =
+                    HttpResponse(statusCode = 200, body = nonStreamBody)
+
+                override fun postStream(request: HttpRequest): kotlinx.coroutines.flow.Flow<String> =
+                    throw UnsupportedOperationException("non-stream tests must not call postStream()")
+            }
+        )
+        val response = nonStreamProvider.generate(
+            ModelRequest(
+                sessionId = "s1",
+                messages = listOf(AgentMessage.User("hello")),
+                tools = emptyList()
+            )
+        )
+        assertEquals("answer", response.content)
+        assertEquals("reasoned", response.reasoningContent)
+    }
 }

@@ -25,6 +25,19 @@ class OpenAiChatCompletionsProvider(
     private val endpoint: String = "https://api.openai.com/v1/chat/completions",
     private val maxStreamedBytes: Int = DEFAULT_MAX_STREAMED_BYTES
 ) : LLMProvider {
+    init {
+        // maxStreamedBytes is only plumbed into the default transport; a
+        // custom non-JavaNetHttpTransport must configure its own cap, and a
+        // silently ignored explicit value here would hide that.
+        require(
+            transport == null ||
+                transport is JavaNetHttpTransport ||
+                maxStreamedBytes == DEFAULT_MAX_STREAMED_BYTES
+        ) {
+            "maxStreamedBytes is not applied to a custom HttpTransport; configure the cap on the transport itself"
+        }
+    }
+
     /**
      * Falls back to a [JavaNetHttpTransport] that honors [maxStreamedBytes]
      * when the host does not supply its own transport.
@@ -156,8 +169,9 @@ class OpenAiChatCompletionsProvider(
 
             val delta = firstChoice["delta"]?.jsonObject ?: return@collect
 
-            // 思考链增量（Reasoning / CoT，OpenAI 协议常用 reasoning_content）
-            val reasoning = delta["reasoning_content"]?.jsonPrimitive?.contentOrNull
+            // 思考链增量（Reasoning / CoT，OpenAI 协议常用 reasoning_content）。
+            // contentText 容错处理部分网关用 content-parts 数组回传的形态。
+            val reasoning = contentText(delta["reasoning_content"])
             if (!reasoning.isNullOrEmpty()) {
                 accumulatedReasoning.append(reasoning)
                 emit(ModelStreamChunk.ThinkingDelta(reasoning))
@@ -355,7 +369,7 @@ class OpenAiChatCompletionsProvider(
             content = content,
             toolCalls = toolCalls,
             stopReason = choice["finish_reason"]?.jsonPrimitive?.contentOrNull,
-            reasoningContent = message["reasoning_content"]?.jsonPrimitive?.contentOrNull
+            reasoningContent = contentText(message["reasoning_content"]).takeIf { it.isNotEmpty() }
         )
     }
 

@@ -119,6 +119,7 @@ class TerminalAgentPlugin private constructor(
 
     override val id: String = "terminal-bash"
 
+
     override fun tools(): List<AgentTool> = listOf(
         exposedTool,
         localHttpServerStartTool,
@@ -162,8 +163,21 @@ class TerminalAgentPlugin private constructor(
         val localHttpServerController: LocalHttpServerController
     )
 
-    private companion object {
-        fun createComponents(context: Context, policy: TerminalToolPolicy): Components {
+    companion object {
+        /**
+         * The exact tool names this plugin exposes. Hosts that gate the
+         * terminal capability (for example a capability interlock) must
+         * derive their name set from here instead of duplicating it, so a
+         * tool added here cannot silently bypass the host's gate.
+         */
+        val TOOL_NAMES: Set<String> = setOf(
+            "terminal_bash_execute",
+            "local_http_server_start",
+            "local_http_server_stop",
+            "local_http_server_status"
+        )
+
+        private fun createComponents(context: Context, policy: TerminalToolPolicy): Components {
             val runtimeAgentInstructions = TerminalAgentInstructions.load(context)
             val runtime = BashRuntime(context)
             return Components(
