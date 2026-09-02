@@ -1,11 +1,13 @@
 package com.ugk.pi.android.testapp
 
 import android.annotation.SuppressLint
+import androidx.annotation.RequiresApi
 import android.content.Context
 import android.graphics.Canvas
 import android.graphics.Color
 import android.graphics.Paint
 import android.graphics.PixelFormat
+import android.graphics.Rect
 import android.graphics.RectF
 import android.graphics.Typeface
 import android.os.Build
@@ -16,8 +18,10 @@ import android.view.Gravity
 import android.view.MotionEvent
 import android.view.View
 import android.view.ViewGroup
+import android.view.WindowInsets
 import android.view.WindowManager
 import android.view.ViewConfiguration
+import android.view.ViewTreeObserver
 import android.view.inputmethod.InputMethodManager
 import android.widget.EditText
 import android.widget.FrameLayout
@@ -73,6 +77,11 @@ class AgentFloatingWindow(private val context: Context) : ConfirmationOverlayHos
     private var collapsedX = dp(16)
     private var collapsedY = dp(180)
     private var externalAutomationMode = false
+    private var preImeY: Int? = null
+    private var imeBaseVisibleBottom: Int? = null
+    private var imeLayoutListener: ViewTreeObserver.OnGlobalLayoutListener? = null
+    private var imeApplyPending: Runnable? = null
+    private var overlayGestureActive = false
 
     var onSendMessage: ((String) -> Boolean)? = null
     var onStopAgent: (() -> Unit)? = null
@@ -90,7 +99,7 @@ class AgentFloatingWindow(private val context: Context) : ConfirmationOverlayHos
         x = expandedX
         y = expandedY
         softInputMode = WindowManager.LayoutParams.SOFT_INPUT_STATE_UNCHANGED or
-                WindowManager.LayoutParams.SOFT_INPUT_ADJUST_RESIZE
+                WindowManager.LayoutParams.SOFT_INPUT_ADJUST_NOTHING
     }
 
     private val collapsedParams = WindowManager.LayoutParams().apply {
@@ -118,6 +127,7 @@ class AgentFloatingWindow(private val context: Context) : ConfirmationOverlayHos
         collapsedX = collapsedParams.x
         collapsedY = collapsedParams.y
         hideCollapsed()
+        preImeY = null
         expandedParams.width = clampExpandedWidth(expandedParams.width)
         expandedParams.height = clampExpandedHeight(expandedParams.height)
         expandedParams.x = clampX(collapsedX, expandedParams.width)
@@ -129,6 +139,7 @@ class AgentFloatingWindow(private val context: Context) : ConfirmationOverlayHos
         val view = buildExpandedView()
         if (addViewSafely(view, expandedParams)) {
             expandedView = view
+            attachImeAvoidance(view)
             renderSnapshot()
         } else {
             collapsedX = expandedX
@@ -237,6 +248,7 @@ class AgentFloatingWindow(private val context: Context) : ConfirmationOverlayHos
         if (active && expandedView != null && pendingConfirmation == null) {
             collapseToBubble()
         }
+        if (expandedView == null) preImeY = null
         updateExpandedWindowFlags(forceFocusable = pendingConfirmation != null)
     }
 
@@ -275,6 +287,14 @@ class AgentFloatingWindow(private val context: Context) : ConfirmationOverlayHos
             val imm = context.getSystemService(Context.INPUT_METHOD_SERVICE) as InputMethodManager
             imm.hideSoftInputFromWindow(field.windowToken, 0)
         }
+        // Persist the user-intended position: the window may currently sit
+        // at an IME avoidance offset that must not leak into later expands.
+        expandedY = preImeY ?: expandedY
+        preImeY = null
+        detachImeAvoidance()
+        // A programmatic removal ends any in-flight touch gesture: no UP/CANCEL
+        // will arrive for a detached view, so the suppression flag must reset here.
+        overlayGestureActive = false
         expandedView?.let(::removeViewSafely)
         expandedView = null
         contentContainer = null
@@ -288,7 +308,9 @@ class AgentFloatingWindow(private val context: Context) : ConfirmationOverlayHos
 
     private fun collapseToBubble() {
         expandedX = expandedParams.x
-        expandedY = expandedParams.y
+        // Collapse from the user-intended position, not the IME-avoided one.
+        expandedY = preImeY ?: expandedParams.y
+        preImeY = null
         collapsedX = clampX(expandedX, collapsedParams.width)
         collapsedY = clampY(expandedY, collapsedParams.height)
         hideExpanded()
@@ -633,6 +655,7 @@ class AgentFloatingWindow(private val context: Context) : ConfirmationOverlayHos
                         touchX = event.rawX
                         touchY = event.rawY
                         view.isPressed = true
+                        overlayGestureActive = true
                         return true
                     }
                     MotionEvent.ACTION_MOVE -> {
@@ -643,6 +666,9 @@ class AgentFloatingWindow(private val context: Context) : ConfirmationOverlayHos
                             initialHeight + (event.rawY - touchY).toInt()
                         )
                         if (nextWidth != expandedParams.width || nextHeight != expandedParams.height) {
+                            // Only an actual resize is a user-intent position change; a bare
+                            // tap on the handle must not drop the pre-IME restore anchor.
+                            preImeY = null
                             expandedParams.width = nextWidth
                             expandedParams.height = nextHeight
                             expandedParams.x = clampX(expandedParams.x, nextWidth)
@@ -659,6 +685,8 @@ class AgentFloatingWindow(private val context: Context) : ConfirmationOverlayHos
                     }
                     MotionEvent.ACTION_UP, MotionEvent.ACTION_CANCEL -> {
                         view.isPressed = false
+                        overlayGestureActive = false
+                        reapplyImeAvoidanceAfterUserGesture()
                         return true
                     }
                 }
@@ -701,6 +729,206 @@ class AgentFloatingWindow(private val context: Context) : ConfirmationOverlayHos
                 Log.w(TAG, "Unable to update Agent overlay focus mode", it)
             }
         }
+    }
+
+    /**
+     * Keeps the expanded panel readable while typing. Overlay windows do
+     * not receive reliable system resize behavior, so the IME is detected
+     * here and the window is shifted locally instead.
+     *
+     * API 30+ reads dispatched IME window insets, which the system sends to
+     * this overlay because its own composer EditText is the IME target.
+     * API 24-29 falls back to the visible display frame difference, which
+     * does not reflect the IME for this window type on every shell and is
+     * best effort only.
+     */
+    private fun attachImeAvoidance(root: View) {
+        detachImeAvoidance()
+        if (Build.VERSION.SDK_INT >= 30) {
+            attachImeAvoidanceModern(root)
+        } else {
+            val listener = ViewTreeObserver.OnGlobalLayoutListener { handleImeGlobalLayout() }
+            imeLayoutListener = listener
+            root.viewTreeObserver.addOnGlobalLayoutListener(listener)
+        }
+    }
+
+    /**
+     * Every onApply dispatch merely caches the insets and re-arms a debounced
+     * apply: during an IME animation the per-frame insets are computed from a
+     * stale window frame for this overlay and would collapse the keyboard-top
+     * estimate if applied directly (the shift is not idempotent against a
+     * stale inset). Once dispatches settle (no new frame for
+     * [IME_SETTLE_DELAY_MS]), the cached insets match the current window
+     * frame, so the single apply lands on the true IME top; the window's own
+     * move re-dispatches and the next settle converges the target. No
+     * WindowInsetsAnimation.Callback may be attached here: registering one
+     * makes the system strip the ime inset values from this overlay's
+     * dispatches entirely.
+     */
+    @RequiresApi(30)
+    private fun attachImeAvoidanceModern(root: View) {
+        root.setOnApplyWindowInsetsListener { _, insets ->
+            scheduleImeAvoidanceApply(root, insets)
+            // Return the insets unconsumed so child dispatch continues
+            // with the default behavior.
+            insets
+        }
+    }
+
+    @RequiresApi(30)
+    private fun scheduleImeAvoidanceApply(root: View, insets: WindowInsets) {
+        imeApplyPending?.let { root.removeCallbacks(it) }
+        val task = Runnable {
+            imeApplyPending = null
+            handleImeInsets(insets)
+        }
+        imeApplyPending = task
+        root.postDelayed(task, IME_SETTLE_DELAY_MS)
+    }
+
+    private fun detachImeAvoidance() {
+        if (Build.VERSION.SDK_INT >= 30) {
+            imeApplyPending?.let { task -> expandedView?.removeCallbacks(task) }
+            imeApplyPending = null
+            expandedView?.setOnApplyWindowInsetsListener(null)
+        } else {
+            val listener = imeLayoutListener
+            if (listener != null) {
+                expandedView?.viewTreeObserver?.takeIf { it.isAlive }
+                    ?.removeOnGlobalLayoutListener(listener)
+            }
+        }
+        imeLayoutListener = null
+        imeBaseVisibleBottom = null
+    }
+
+    /** API 30+ path: IME state read from the insets dispatched to this overlay. */
+    private fun handleImeInsets(insets: WindowInsets) {
+        // A drag or resize gesture owns the position until the finger lifts.
+        if (overlayGestureActive) return
+        if (!insets.isVisible(WindowInsets.Type.ime())) {
+            restoreFromImeAvoidance()
+            return
+        }
+        val imeBottom = insets.getInsets(WindowInsets.Type.ime()).bottom
+        if (imeBottom <= 0) {
+            // IME visible but the inset value is stripped for this overlay on
+            // most dispatches (only the visibility flag is reliable). A zero
+            // inset also covers a panel already sitting fully above the IME,
+            // where the estimate simply computes no shift needed.
+            applyImeAvoidance(estimatedImeTopParent())
+            return
+        }
+        applyImeAvoidance(
+            ImeAvoidance.imeTopParent(expandedParams.y, expandedParams.height, imeBottom)
+        )
+    }
+
+    /**
+     * Fallback IME top when the system strips the ime inset values: typical
+     * IMEs occupy a stable fraction of the display, so a proportional
+     * estimate keeps the composer visible instead of freezing the panel
+     * under the keyboard.
+     */
+    private fun estimatedImeTopParent(): Int =
+        context.resources.displayMetrics.heightPixels * IME_HEIGHT_FRACTION_NUMERATOR /
+            IME_HEIGHT_FRACTION_DENOMINATOR
+
+    /** API 24-29 fallback path; depends on visibleDisplayFrame reflecting the IME. */
+    private fun handleImeGlobalLayout() {
+        val root = expandedView ?: return
+        // A drag or resize gesture owns the position until the finger lifts.
+        if (overlayGestureActive) return
+        val rect = Rect()
+        root.getWindowVisibleDisplayFrame(rect)
+        val base = imeBaseVisibleBottom
+        if (base == null) {
+            imeBaseVisibleBottom = rect.bottom
+            return
+        }
+        if (base - rect.bottom > dp(IME_VISIBLE_THRESHOLD_DP)) {
+            applyImeAvoidance(rect.bottom)
+        } else {
+            // Refresh the baseline while no IME is considered visible so
+            // system bar changes do not register as a keyboard.
+            imeBaseVisibleBottom = rect.bottom
+            restoreFromImeAvoidance()
+        }
+    }
+
+    private fun applyImeAvoidance(imeTop: Int) {
+        val root = expandedView ?: return
+        val targetY = ImeAvoidance.targetY(
+            windowTop = expandedParams.y,
+            windowHeight = expandedParams.height,
+            imeTop = imeTop,
+            minY = dp(48),
+            margin = dp(IME_AVOIDANCE_MARGIN_DP)
+        )
+        if (targetY == expandedParams.y) return
+        if (preImeY == null) preImeY = expandedY
+        expandedY = targetY
+        expandedParams.y = targetY
+        runCatching {
+            windowManager.updateViewLayout(root, expandedParams)
+        }.onFailure {
+            Log.w(TAG, "Unable to shift Agent overlay above the IME", it)
+        }
+    }
+
+    private fun restoreFromImeAvoidance() {
+        val root = expandedView ?: return
+        val restore = preImeY ?: return
+        preImeY = null
+        val targetY = clampY(restore, expandedParams.height)
+        if (targetY == expandedParams.y) return
+        expandedY = targetY
+        expandedParams.y = targetY
+        runCatching {
+            windowManager.updateViewLayout(root, expandedParams)
+        }.onFailure {
+            Log.w(TAG, "Unable to restore Agent overlay position after the IME", it)
+        }
+    }
+
+    /**
+     * Re-runs avoidance right after a drag or resize gesture releases the
+     * window: the gesture suspends automatic shifts so the finger keeps
+     * full control, and this closes the gap when the released position
+     * still overlaps a visible IME.
+     */
+    private fun reapplyImeAvoidanceAfterUserGesture() {
+        val root = expandedView ?: return
+        if (Build.VERSION.SDK_INT >= 30) {
+            // Same decisions as handleImeInsets, polled from the latest
+            // dispatched insets: exact value when present, estimate when the
+            // system strips the ime inset value for this overlay.
+            val insets = root.rootWindowInsets ?: return
+            if (!insets.isVisible(WindowInsets.Type.ime())) {
+                // The IME closed mid-gesture: its restore dispatch was
+                // swallowed by the gesture guard, so restore here.
+                restoreFromImeAvoidance()
+                return
+            }
+            val imeBottom = insets.getInsets(WindowInsets.Type.ime()).bottom
+            if (imeBottom <= 0) {
+                applyImeAvoidance(estimatedImeTopParent())
+                return
+            }
+            applyImeAvoidance(
+                ImeAvoidance.imeTopParent(expandedParams.y, expandedParams.height, imeBottom)
+            )
+            return
+        }
+        val base = imeBaseVisibleBottom
+        val rect = Rect()
+        root.getWindowVisibleDisplayFrame(rect)
+        if (base == null || base - rect.bottom <= dp(IME_VISIBLE_THRESHOLD_DP)) {
+            restoreFromImeAvoidance()
+            return
+        }
+        applyImeAvoidance(rect.bottom)
     }
 
     private fun renderSnapshot() {
@@ -1155,6 +1383,7 @@ class AgentFloatingWindow(private val context: Context) : ConfirmationOverlayHos
                         touchX = event.rawX
                         touchY = event.rawY
                         dragging = false
+                        if (params === expandedParams) overlayGestureActive = true
                         return true
                     }
                     MotionEvent.ACTION_MOVE -> {
@@ -1162,6 +1391,9 @@ class AgentFloatingWindow(private val context: Context) : ConfirmationOverlayHos
                         val dy = event.rawY - touchY
                         if (!dragging && (kotlin.math.abs(dx) > touchSlop() || kotlin.math.abs(dy) > touchSlop())) {
                             dragging = true
+                            // A confirmed drag makes the finger the intent;
+                            // the pre-IME baseline must no longer restore it.
+                            if (params === expandedParams) preImeY = null
                         }
                         if (dragging) {
                             params.x = clampX(initialX + dx.toInt(), params.width)
@@ -1182,10 +1414,20 @@ class AgentFloatingWindow(private val context: Context) : ConfirmationOverlayHos
                         return true
                     }
                     MotionEvent.ACTION_UP -> {
+                        if (params === expandedParams) {
+                            overlayGestureActive = false
+                            reapplyImeAvoidanceAfterUserGesture()
+                        }
                         if (!dragging) onClick()
                         return true
                     }
-                    MotionEvent.ACTION_CANCEL -> return true
+                    MotionEvent.ACTION_CANCEL -> {
+                        if (params === expandedParams) {
+                            overlayGestureActive = false
+                            reapplyImeAvoidanceAfterUserGesture()
+                        }
+                        return true
+                    }
                 }
                 return true
             }
@@ -1254,5 +1496,10 @@ class AgentFloatingWindow(private val context: Context) : ConfirmationOverlayHos
 
     private companion object {
         const val TAG = "AgentFloatingWindow"
+        const val IME_AVOIDANCE_MARGIN_DP = 8
+        const val IME_VISIBLE_THRESHOLD_DP = 96
+        const val IME_SETTLE_DELAY_MS = 150L
+        const val IME_HEIGHT_FRACTION_NUMERATOR = 58
+        const val IME_HEIGHT_FRACTION_DENOMINATOR = 100
     }
 }
