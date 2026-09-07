@@ -50,7 +50,50 @@ internal object DemoAgentRuntimeFactory {
 
         // File-backed skills live in the app-private agent-skills directory;
         // packaged skills are seeded once and never overwrite user changes.
-        val skillRepository = SkillRepository(File(appContext.filesDir, "agent-skills"))
+        // The ids contributed by the statically registered plugins are passed
+        // as reserved: a skill_save under such an id would otherwise collide
+        // at skill-assembly time and fail every later run with
+        // "Duplicate skill id" (unrecoverable by the agent itself).
+        val importedFilePlugin = DemoImportedFilePlugin(
+            DemoFileImportStore(appContext).workspaceRoot
+        )
+        val schedulePlugin = ScheduleTaskAgentPlugin(
+            store = scheduleStore,
+            scheduler = scheduleScheduler,
+            supportsBackgroundPromptExecution = supportsBackgroundPromptExecution
+        )
+        val automationPlugin = AndroidAutomationAgentPlugin(
+            context = appContext,
+            confirmationPresenter = confirmationPresenter,
+            accessibilityServiceComponent = ComponentName(
+                appContext,
+                AgentAccessibilityService::class.java
+            ),
+            accessibilityStateProvider = AgentAccessibilityService.runtimeStateProvider,
+            shouldBypassConfirmation = shouldBypassConfirmation,
+            screenAutomationBackend = AccessibilityScreenAutomationBackend(
+                serviceProvider = AccessibilityServiceProvider {
+                    AgentAccessibilityService.instance
+                },
+                ownPackageName = appContext.packageName
+            ),
+            toolDecorator = toolDecorator
+        )
+        val terminalPlugin = TerminalAgentPlugin(
+            context = appContext,
+            shouldBypassConfirmation = shouldBypassConfirmation,
+            toolDecorator = toolDecorator
+        )
+        val reservedSkillIds = listOf(
+            importedFilePlugin,
+            schedulePlugin,
+            automationPlugin,
+            terminalPlugin
+        ).flatMap { it.skills() }.map { it.id }.toSet()
+        val skillRepository = SkillRepository(
+            rootDir = File(appContext.filesDir, "agent-skills"),
+            reservedSkillIds = reservedSkillIds
+        )
         val memoryRoot = File(appContext.filesDir, "agent-memory")
         // Named embed roots: `x-ugk-embed-files` entries like
         // `memory:preferences.md` resolve here, so the packaged agent-memory
@@ -69,44 +112,10 @@ internal object DemoAgentRuntimeFactory {
                     autoCompaction = config?.autoCompaction ?: true
                 )
             )
-            .register(
-                DemoImportedFilePlugin(
-                    DemoFileImportStore(appContext).workspaceRoot
-                )
-            )
-            .register(
-                ScheduleTaskAgentPlugin(
-                    store = scheduleStore,
-                    scheduler = scheduleScheduler,
-                    supportsBackgroundPromptExecution = supportsBackgroundPromptExecution
-                )
-            )
-            .register(
-                AndroidAutomationAgentPlugin(
-                    context = appContext,
-                    confirmationPresenter = confirmationPresenter,
-                    accessibilityServiceComponent = ComponentName(
-                        appContext,
-                        AgentAccessibilityService::class.java
-                    ),
-                    accessibilityStateProvider = AgentAccessibilityService.runtimeStateProvider,
-                    shouldBypassConfirmation = shouldBypassConfirmation,
-                    screenAutomationBackend = AccessibilityScreenAutomationBackend(
-                        serviceProvider = AccessibilityServiceProvider {
-                            AgentAccessibilityService.instance
-                        },
-                        ownPackageName = appContext.packageName
-                    ),
-                    toolDecorator = toolDecorator
-                )
-            )
-            .register(
-                TerminalAgentPlugin(
-                    context = appContext,
-                    shouldBypassConfirmation = shouldBypassConfirmation,
-                    toolDecorator = toolDecorator
-                )
-            )
+            .register(importedFilePlugin)
+            .register(schedulePlugin)
+            .register(automationPlugin)
+            .register(terminalPlugin)
             .register(
                 AgentSkillRuntimePlugin(
                     repository = skillRepository,

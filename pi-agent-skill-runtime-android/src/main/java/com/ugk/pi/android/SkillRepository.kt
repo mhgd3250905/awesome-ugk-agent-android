@@ -68,7 +68,18 @@ private data class NormalizedSkillRequest(
  * expected to stay small, so results are not cached; each call re-reads the
  * directory from disk.
  */
-class SkillRepository(private val rootDir: File) {
+class SkillRepository(
+    private val rootDir: File,
+    /**
+     * Skill ids the HOST already contributes through statically registered
+     * capability plugins. A file skill saved under such an id would collide
+     * with the plugin skill at runtime skill-assembly time and fail every
+     * later run with "Duplicate skill id" — with the skill tools themselves
+     * unreachable, so the agent could not even clean it up. Saving one of
+     * these names fails with [SKILL_NAME_RESERVED_CODE] instead.
+     */
+    private val reservedSkillIds: Set<String> = emptySet()
+) {
 
     private val mutationLock = Any()
 
@@ -102,6 +113,13 @@ class SkillRepository(private val rootDir: File) {
             return@synchronized SkillSaveOutcome.Failed(
                 code = "PROTECTED_SKILL",
                 message = "Skill '${request.name}' is built in and cannot be saved or overwritten."
+            )
+        }
+        if (request.name in reservedSkillIds) {
+            return@synchronized SkillSaveOutcome.Failed(
+                code = SKILL_NAME_RESERVED_CODE,
+                message = "Skill '${request.name}' is reserved by a host-provided skill and " +
+                    "cannot be saved; choose a different name."
             )
         }
 
@@ -540,6 +558,7 @@ class SkillRepository(private val rootDir: File) {
     companion object {
         const val SKILL_FILE_NAME = "SKILL.md"
         const val MAX_SKILL_FILE_BYTES = 128L * 1024L
+        const val SKILL_NAME_RESERVED_CODE = "SKILL_NAME_RESERVED"
     }
 }
 
