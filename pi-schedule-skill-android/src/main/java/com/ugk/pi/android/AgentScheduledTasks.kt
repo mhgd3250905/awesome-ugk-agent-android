@@ -3,6 +3,7 @@ package com.ugk.pi.android
 import kotlinx.coroutines.CancellationException
 import kotlinx.serialization.SerialName
 import kotlinx.serialization.Serializable
+import kotlinx.serialization.json.JsonElement
 import kotlinx.serialization.json.JsonObject
 import kotlinx.serialization.json.JsonPrimitive
 import kotlinx.serialization.json.booleanOrNull
@@ -390,7 +391,7 @@ class AgentTaskUpdateTool(
 
         val now = clock.nowMillis()
         val schedule = if (call.input["schedule"] != null) {
-            when (val parsed = parseSchedule(call.input["schedule"]?.jsonObject, now)) {
+            when (val parsed = parseSchedule(call.input["schedule"], now)) {
                 is ScheduleParseResult.Error -> return errorResult(call, name, parsed.code, parsed.message)
                 is ScheduleParseResult.Success -> parsed.schedule
             }
@@ -399,7 +400,7 @@ class AgentTaskUpdateTool(
         }
         val action = if (call.input["action"] != null) {
             when (val parsed = parseAction(
-                call.input["action"]?.jsonObject,
+                call.input["action"],
                 supportsBackgroundPromptExecution
             )) {
                 is ActionParseResult.Error -> return errorResult(call, name, parsed.code, parsed.message)
@@ -489,12 +490,12 @@ private fun parseTaskCreate(
     val title = call.input.string("title")?.takeIf { it.isNotBlank() }
         ?: return TaskParseResult.Error("MISSING_TITLE", "title is required.")
     val now = clock.nowMillis()
-    val schedule = when (val parsed = parseSchedule(call.input["schedule"]?.jsonObject, now)) {
+    val schedule = when (val parsed = parseSchedule(call.input["schedule"], now)) {
         is ScheduleParseResult.Error -> return TaskParseResult.Error(parsed.code, parsed.message)
         is ScheduleParseResult.Success -> parsed.schedule
     }
     val action = when (val parsed = parseAction(
-        call.input["action"]?.jsonObject,
+        call.input["action"] as? JsonObject,
         supportsBackgroundPromptExecution
     )) {
         is ActionParseResult.Error -> return TaskParseResult.Error(parsed.code, parsed.message)
@@ -514,7 +515,13 @@ private fun parseTaskCreate(
     return TaskParseResult.Success(task)
 }
 
-private fun parseSchedule(input: JsonObject?, nowMillis: Long): ScheduleParseResult {
+private fun parseSchedule(input: JsonElement?, nowMillis: Long): ScheduleParseResult {
+    // A model can emit "schedule": "every day" — a non-object value must
+    // surface as a structured INVALID_SCHEDULE error, not as an
+    // IllegalArgumentException from jsonObject escaping the tool.
+    if (input != null && input !is JsonObject) {
+        return ScheduleParseResult.Error("INVALID_SCHEDULE", "schedule must be a JSON object.")
+    }
     if (input == null) return ScheduleParseResult.Error("MISSING_SCHEDULE", "schedule is required.")
     return when (input.string("type")) {
         "ONE_SHOT" -> {
@@ -551,9 +558,12 @@ private fun parseSchedule(input: JsonObject?, nowMillis: Long): ScheduleParseRes
 }
 
 private fun parseAction(
-    input: JsonObject?,
+    input: JsonElement?,
     supportsBackgroundPromptExecution: Boolean
 ): ActionParseResult {
+    if (input != null && input !is JsonObject) {
+        return ActionParseResult.Error("INVALID_ACTION", "action must be a JSON object.")
+    }
     if (input == null) return ActionParseResult.Error("MISSING_ACTION", "action is required.")
     return when (input.string("type")) {
         "NOTIFY_USER" -> {
