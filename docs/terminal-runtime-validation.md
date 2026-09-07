@@ -462,7 +462,13 @@ Core API/JVM 边界：
   - `demo-app`：见 `docs/demo-app-version-ledger.md` 1.0.6 条目（会话 store 互斥、flush 出锁、草稿一致性、`reservedSkillIds` 接线）。
 - 已知取证边界：会话 store `delete`/`append` 竞态属结构性数据竞争（代码级实证），设备端 200 轮交错压测在未修复代码上未能确定性复现复活（窗口微秒级），修复以互斥正确性论证 + 新增交错回归用例守护。
 - 门禁验收（2026-09-08，`JAVA_HOME=E:\Android\Android Studio\jbr`）：
-  - 全模块 JVM（`--rerun-tasks` 强制重跑）：`BUILD SUCCESSFUL`，合计 `580` tests / `3` skipped（既有 Windows symlink 用例）/ 0 failure / 0 error；分模块：Core 166、File 13、Schedule 15、Task Runtime 30、System 42、Agent Skill Runtime 89、Terminal Runtime 18、Terminal Skill 28、Demo 167。基线 `560/3/0`，净增 20 例。
+  - 全模块 JVM（`--rerun-tasks` 强制重跑）：`BUILD SUCCESSFUL`，合计 `585` tests / `3` skipped（既有 Windows symlink 用例）/ 0 failure / 0 error；分模块：Core 169、File 13、Schedule 16、Task Runtime 29、System 42、Agent Skill Runtime 89、Terminal Runtime 19、Terminal Skill 41、Demo 167。基线 `560/3/0`，净增 25 例。
   - `:demo-app:connectedDebugAndroidTest`（AVD `round5_api35`，API 35 x86_64，page size 4 KB）：`30/30` 通过、0 failure（基线 28 + 新增 2）。
   - `:demo-app:assembleDebug` 通过；APK 元数据 `versionCode 106 / versionName 1.0.6`（见版本台账 1.0.6 条目）。
+- 独立审查（六维度，只读）结论：有条件 PASS（0 BLOCKING / 0 MAJOR / 3 MINOR / 5 NOTE）。按清单修复后复验：
+  - `agent_task_create` 的 `action` 非对象入参统一返回 `INVALID_ACTION`（原先被 `as? JsonObject` 折叠成 `MISSING_ACTION`，与 update 路径不一致），补先红后绿用例；
+  - 两个 Provider 的流式"非 SSE 容错分支"对完整 error JSON body 直接抛出 API error（原先被 `runCatching` 吞掉后降级为空白 Completed，经 3 次 incomplete 重试以笼统失败收场并重打 3 次 API），补先红后绿用例；
+  - 文档分模块计数修正（即本节数字）；
+  - 同批落实审查建议：BOM 处理改 `﻿` 可见转义；`isTokenServed` 补 `-`/`_` 开头 token 用例；补 OpenAI 侧 `postStream` 默认回退用例；`toAnthropicMessage` 的 Assistant 分支标注"通常由合并路径先消费"（Kotlin when 穷尽性要求保留）。
+  - 审查确认不修的已知项：无 `index` 交错续传为已声明的固有限制（注释声明）；自家 server 极慢冷启动超 10s 时 `PORT_IN_USE` 措辞可能误导（行为正确）。
 - 边界与未执行：未操作真机、未调用真实 Provider/API、未跑 `-CheckPackages` 与 Release 矩阵；arm64（尤其 16 KB）Gate 状态不变。

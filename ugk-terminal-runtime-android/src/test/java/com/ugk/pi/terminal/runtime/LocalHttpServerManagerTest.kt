@@ -157,6 +157,21 @@ class LocalHttpServerManagerTest {
         assertFalse(LocalHttpServerManager.isTokenServed(server.port, "good-token"))
     }
 
+    @Test
+    fun tokenAttributionCheckHandlesDashAndUnderscoreLeadingTokens() {
+        // The unpadded URL-safe Base64 alphabet includes '-' and '_', and
+        // random bytes can produce a token starting with either.
+        val server = FakeHttpServer { path ->
+            if (path == "/-_dashy_token-9/" ) 200 else 404
+        }
+        try {
+            assertTrue(LocalHttpServerManager.isTokenServed(server.port, "-_dashy_token-9"))
+            assertFalse(LocalHttpServerManager.isTokenServed(server.port, "x-_dashy_token-9"))
+        } finally {
+            server.stop()
+        }
+    }
+
     /** Minimal single-thread HTTP responder for the attribution helper. */
     private class FakeHttpServer(private val statusFor: (String) -> Int) {
         val port: Int

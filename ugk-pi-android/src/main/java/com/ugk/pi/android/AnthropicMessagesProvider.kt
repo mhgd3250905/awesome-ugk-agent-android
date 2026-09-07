@@ -120,6 +120,12 @@ class AnthropicMessagesProvider(
 
             // 容错：如果后端不支持 SSE，直接返回了完整 JSON 字符串
             if (line.startsWith("{") && line.endsWith("}")) {
+                // A full error body must fail the stream: parseResponse now
+                // throws for API errors, and swallowing that here would
+                // degrade into the blank end-of-stream completion below.
+                fullBodyApiErrorMessageOrNull(line)?.let { message ->
+                    throw IllegalStateException("Anthropic API error: $message")
+                }
                 val parsed = runCatching { parseResponse(line) }.getOrNull()
                 if (parsed != null) {
                     if (!parsed.reasoningContent.isNullOrBlank()) {
@@ -437,6 +443,10 @@ class AnthropicMessagesProvider(
                 }
             }
 
+
+            // Adjacent assistants are normally merged by toAnthropicMessages
+            // before reaching this serializer; this branch keeps the mapping
+            // total for a standalone assistant message.
             is AgentMessage.Assistant -> buildJsonObject {
                 put("role", "assistant")
                 putJsonArray("content") {
@@ -510,6 +520,13 @@ class AnthropicMessagesProvider(
     private fun parseToolInputOrNull(accumulated: String): JsonObject? {
         if (accumulated.isBlank()) return JsonObject(emptyMap())
         return runCatching { json.parseToJsonElement(accumulated) }.getOrNull() as? JsonObject
+    }
+
+    private fun fullBodyApiErrorMessageOrNull(body: String): String? {
+        val root = runCatching { json.parseToJsonElement(body).jsonObject }.getOrNull() ?: return null
+        val errorObj = root["error"] as? JsonObject ?: return null
+        return errorObj["message"]?.jsonPrimitive?.contentOrNull
+            ?: errorObj["type"]?.jsonPrimitive?.contentOrNull
     }
 
     private fun parseResponse(body: String): ModelResponse {

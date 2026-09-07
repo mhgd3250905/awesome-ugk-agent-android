@@ -495,7 +495,7 @@ private fun parseTaskCreate(
         is ScheduleParseResult.Success -> parsed.schedule
     }
     val action = when (val parsed = parseAction(
-        call.input["action"] as? JsonObject,
+        call.input["action"],
         supportsBackgroundPromptExecution
     )) {
         is ActionParseResult.Error -> return TaskParseResult.Error(parsed.code, parsed.message)

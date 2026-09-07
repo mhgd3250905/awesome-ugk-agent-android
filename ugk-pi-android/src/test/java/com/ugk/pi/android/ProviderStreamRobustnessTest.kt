@@ -183,6 +183,35 @@ class ProviderStreamRobustnessTest {
         assertEquals("end_turn", response.stopReason)
     }
 
+    @Test
+    fun `openai provider consumes a whole sse body returned by a post-only transport`() = runBlocking {
+        val body = buildString {
+            append("""data: {"choices":[{"delta":{"content":"hello openai"}}]}""")
+            append("\n\n")
+            append("""data: {"choices":[{"finish_reason":"stop"}]}""")
+            append("\n\n")
+            append("data: [DONE]\n\n")
+        }
+        val provider = OpenAiChatCompletionsProvider(
+            apiKey = "k",
+            model = "m",
+            transport = PostOnlyTransport(body)
+        )
+
+        var content = ""
+        var completedResponse: ModelResponse? = null
+        provider.generateStream(modelRequest()).collect { chunk ->
+            when (chunk) {
+                is ModelStreamChunk.ContentDelta -> content += chunk.delta
+                is ModelStreamChunk.Completed -> completedResponse = chunk.response
+                else -> Unit
+            }
+        }
+
+        assertEquals("hello openai", content)
+        assertEquals("stop", completedResponse!!.stopReason)
+    }
+
     // ------------------------------------------------------------------
     // C4: 200 + error JSON body must surface the API error
     // ------------------------------------------------------------------
@@ -233,6 +262,49 @@ class ProviderStreamRobustnessTest {
         override suspend fun post(request: HttpRequest): HttpResponse = HttpResponse(200, body)
         override fun postStream(request: HttpRequest): Flow<String> =
             throw UnsupportedOperationException("non-stream tests must not call postStream()")
+    }
+
+    // ------------------------------------------------------------------
+    // Review follow-up: a non-SSE backend answering the streaming request
+    // with a full error JSON body must surface the API error instead of
+    // degrading into a blank end-of-stream completion.
+    // ------------------------------------------------------------------
+
+    @Test
+    fun `anthropic stream with full error json body fails instead of completing blank`() = runBlocking {
+        val provider = AnthropicMessagesProvider(
+            apiKey = "k",
+            model = "m",
+            baseUrl = "https://example.test",
+            transport = PostOnlyTransport(
+                """{"type":"error","error":{"type":"overloaded_error","message":"Overloaded"}}"""
+            )
+        )
+
+        try {
+            provider.generateStream(modelRequest()).toList()
+            fail("expected the error body to fail the stream")
+        } catch (expected: IllegalStateException) {
+            assertTrue(expected.message.orEmpty().contains("Overloaded"))
+        }
+    }
+
+    @Test
+    fun `openai stream with full error json body fails instead of completing blank`() = runBlocking {
+        val provider = OpenAiChatCompletionsProvider(
+            apiKey = "k",
+            model = "m",
+            transport = PostOnlyTransport(
+                """{"error":{"message":"insufficient_quota","type":"insufficient_quota"}}"""
+            )
+        )
+
+        try {
+            provider.generateStream(modelRequest()).toList()
+            fail("expected the error body to fail the stream")
+        } catch (expected: IllegalStateException) {
+            assertTrue(expected.message.orEmpty().contains("insufficient_quota"))
+        }
     }
 
     // ------------------------------------------------------------------

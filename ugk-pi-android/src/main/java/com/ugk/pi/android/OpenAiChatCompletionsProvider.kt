@@ -125,6 +125,12 @@ class OpenAiChatCompletionsProvider(
 
             // 容错：如果后端不支持流式，直接返回了完整 JSON 响应
             if (line.startsWith("{") && line.endsWith("}")) {
+                // A full error body must fail the stream: parseResponse now
+                // throws for API errors, and swallowing that here would
+                // degrade into the blank end-of-stream completion below.
+                fullBodyApiErrorMessageOrNull(line)?.let { message ->
+                    throw IllegalStateException("OpenAI stream error: $message")
+                }
                 val parsed = runCatching { parseResponse(line) }.getOrNull()
                 if (parsed != null) {
                     if (!parsed.reasoningContent.isNullOrBlank()) {
@@ -374,6 +380,13 @@ class OpenAiChatCompletionsProvider(
                 put("arguments", input.toString())
             }
         }
+    }
+
+    private fun fullBodyApiErrorMessageOrNull(body: String): String? {
+        val root = runCatching { json.parseToJsonElement(body).jsonObject }.getOrNull() ?: return null
+        val errorObj = root["error"] as? JsonObject ?: return null
+        return errorObj["message"]?.jsonPrimitive?.contentOrNull
+            ?: errorObj["type"]?.jsonPrimitive?.contentOrNull
     }
 
     private fun parseResponse(body: String): ModelResponse {

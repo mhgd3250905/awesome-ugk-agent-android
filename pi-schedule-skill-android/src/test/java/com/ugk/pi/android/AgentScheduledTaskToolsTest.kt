@@ -374,6 +374,37 @@ class AgentScheduledTaskToolsTest {
         assertEquals("INVALID_SCHEDULE", result.metadata["code"]!!.jsonPrimitive.content)
     }
 
+    @Test
+    fun createWithNonObjectActionReturnsStructuredErrorInsteadOfThrowing() = runBlocking {
+        val store = InMemoryAgentTaskStore()
+        val scheduler = RecordingAgentTaskScheduler()
+        val tools = agentScheduledTaskTools(
+            store = store,
+            scheduler = scheduler,
+            clock = FixedClock(1_000L),
+            idGenerator = SequentialTaskIdGenerator("task")
+        ).associateBy { it.name }
+
+        // A wrong-typed action must surface as INVALID_ACTION (type error),
+        // not MISSING_ACTION (which the as? JsonObject collapse produced) and
+        // not as a raw IllegalArgumentException from jsonObject.
+        val result = tools["agent_task_create"]!!.execute(
+            call(
+                "agent_task_create",
+                "title" to JsonPrimitive("每日提醒"),
+                "schedule" to buildJsonObject {
+                    put("type", JsonPrimitive("ONE_SHOT"))
+                    put("startAfterSeconds", JsonPrimitive(1800))
+                },
+                "action" to JsonPrimitive("notify me")
+            ),
+            context()
+        )
+
+        assertTrue(result.isError)
+        assertEquals("INVALID_ACTION", result.metadata["code"]!!.jsonPrimitive.content)
+    }
+
     private fun context(): ToolExecutionContext = ToolExecutionContext(sessionId = "session-1")
 
     private fun call(name: String, vararg values: Pair<String, Any>): ToolCall {
