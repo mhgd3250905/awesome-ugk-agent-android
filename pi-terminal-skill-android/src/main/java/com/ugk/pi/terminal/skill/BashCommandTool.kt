@@ -251,8 +251,23 @@ class BashCommandTool(
     override suspend fun execute(call: ToolCall, context: ToolExecutionContext): ToolResult {
         val script = call.input.string("script")?.takeIf { it.isNotBlank() }
             ?: return error(call, "MISSING_SCRIPT", "script is required.")
-        val timeoutMillis = (call.input["timeoutMillis"] as? JsonPrimitive)?.longOrNull
-            ?: policy.defaultTimeoutMillis
+        // A wrong-typed timeoutMillis (object/array/boolean or a non-numeric
+        // string) must surface as INVALID_TIMEOUT instead of silently running
+        // with the default timeout the model never chose.
+        val timeoutMillis = when (val rawTimeout = call.input["timeoutMillis"]) {
+            null -> policy.defaultTimeoutMillis
+            is JsonPrimitive -> rawTimeout.longOrNull
+                ?: return error(
+                    call,
+                    "INVALID_TIMEOUT",
+                    "timeoutMillis must be an integer number of milliseconds."
+                )
+            else -> return error(
+                call,
+                "INVALID_TIMEOUT",
+                "timeoutMillis must be an integer number of milliseconds."
+            )
+        }
         if (timeoutMillis !in 1..policy.maxTimeoutMillis) {
             return error(
                 call,

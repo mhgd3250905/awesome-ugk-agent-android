@@ -3,6 +3,7 @@ package com.ugk.pi.terminal.runtime
 import java.io.File
 import java.util.Base64
 import org.junit.Assert.assertEquals
+import org.junit.Assert.assertFalse
 import org.junit.Assert.assertNotEquals
 import org.junit.Assert.assertNull
 import org.junit.Assert.assertTrue
@@ -136,5 +137,61 @@ class LocalHttpServerManagerTest {
         val output = process.inputStream.bufferedReader().readText()
         val exitCode = process.waitFor()
         assertTrue("py_compile failed (exit=$exitCode): $output", exitCode == 0)
+    }
+
+    @Test
+    fun tokenAttributionCheckRequiresOurTokenPathToAnswer200() {
+        val server = FakeHttpServer { path ->
+            if (path == "/good-token/" || path == "/good-token") 200 else 404
+        }
+        try {
+            assertTrue(LocalHttpServerManager.isTokenServed(server.port, "good-token"))
+            assertFalse(
+                "a foreign responder must not count as our server",
+                LocalHttpServerManager.isTokenServed(server.port, "wrong-token")
+            )
+        } finally {
+            server.stop()
+        }
+        // Nothing listening anymore: attribution must fail.
+        assertFalse(LocalHttpServerManager.isTokenServed(server.port, "good-token"))
+    }
+
+    /** Minimal single-thread HTTP responder for the attribution helper. */
+    private class FakeHttpServer(private val statusFor: (String) -> Int) {
+        val port: Int
+        private val serverSocket: java.net.ServerSocket
+        private val thread: Thread
+
+        init {
+            serverSocket = java.net.ServerSocket(0, 4, java.net.InetAddress.getByName("127.0.0.1"))
+            port = serverSocket.localPort
+            thread = Thread {
+                while (!serverSocket.isClosed) {
+                    val client = runCatching { serverSocket.accept() }.getOrNull() ?: break
+                    runCatching {
+                        val reader = client.getInputStream().bufferedReader()
+                        val requestLine = reader.readLine().orEmpty()
+                        while (true) {
+                            val line = reader.readLine() ?: break
+                            if (line.isEmpty()) break
+                        }
+                        val path = requestLine.split(" ").getOrNull(1) ?: "/"
+                        val body = "ok"
+                        val status = statusFor(path)
+                        client.getOutputStream().write(
+                            ("HTTP/1.0 $status X\r\nContent-Length: ${body.length}\r\n" +
+                                "Connection: close\r\n\r\n$body").toByteArray()
+                        )
+                    }
+                    runCatching { client.close() }
+                }
+            }.apply { isDaemon = true; start() }
+        }
+
+        fun stop() {
+            runCatching { serverSocket.close() }
+            thread.join(1_000)
+        }
     }
 }
