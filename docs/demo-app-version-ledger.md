@@ -29,7 +29,7 @@
 
 ### 验收证据与边界
 
-- 全模块 JVM 门禁（`--rerun-tasks`）：`580` tests / `3` skipped（既有 Windows symlink 限制用例）/ 0 failure / 0 error，较基线 `560` 净增 20 例（含先红后绿回归用例）。
+- 全模块 JVM 门禁（`--rerun-tasks`，含独立审查条件修复后的最终重跑）：`585` tests / `3` skipped（既有 Windows symlink 限制用例）/ 0 failure / 0 error，较基线 `560` 净增 25 例（含先红后绿回归用例）。
 - `:demo-app:connectedDebugAndroidTest`（AVD `round5_api35`，API 35 x86_64，4 KB）：`30/30` 通过、0 failure（基线 `28` + 新增 `DemoConversationStoreConcurrencyInstrumentedTest` 2 例）。
 - 本条目验收以分支 HEAD 实测为准；未操作真机、未调用真实 Provider/API、未跑 Release 矩阵，不关闭任何 Gate。
 
