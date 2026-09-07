@@ -17,6 +17,22 @@
 - Debug APK 允许本机从被 Git 忽略的配置读取 API 默认值，不能作为对外分发包；API Key 不进入源码、文档或提交。
 - 真机迭代使用固定 Debug 签名和 `adb install -r -d`，不以卸载、清数据作为常规版本升级步骤；本阶段不操作真机。
 
+## 1.0.6 · 2026-09-08 · 第五轮 P0 审查修复（SDK 协议/并发/技能边界/demo 数据完整性）
+
+### 变更范围
+
+- 本版本属于第五轮 P0 审查修复批次（分支 `fix/p0-review-round5-20260908`，基于 `main@b0f1859`）。demo-app 侧改动三处：
+  - `DemoConversationStore`：`create` / `delete` / `rename` 纳入 store 监视器，`rename` 改为单临界区读改写（原先 `get()`→`save()` 之间的后台定时结果可被陈旧快照整会话覆盖丢失）；`appendMessagesAndFlush` / `saveAndFlush` 的同步落盘等待移出 store 监视器（原先前台 save/append 会阻塞在后台 flush 的磁盘 commit 上）。
+  - `MainActivity`：切换/新建会话时输入框与 `floatingWindow.clear()` 触发的 `runtime.draft` 清空保持一致（原先把 A 会话草稿发进 B 会话的数据不一致路径）。
+  - `DemoAgentRuntimeFactory`：把静态插件 skill id 集合传给 `SkillRepository` 的新 `reservedSkillIds` 参数，`skill_save` 撞名时返回 `SKILL_NAME_RESERVED` 结构化错误（原先一次确认过的 `skill_save` 可让之后每次 run 在技能组装阶段永久失败且无法自愈）。
+- Demo 版本由 `1.0.5 / versionCode 105` 提升到 `1.0.6 / versionCode 106`。不改变依赖、权限、Terminal v1 scope 或聊天 UI 基线。
+
+### 验收证据与边界
+
+- 全模块 JVM 门禁（`--rerun-tasks`）：`580` tests / `3` skipped（既有 Windows symlink 限制用例）/ 0 failure / 0 error，较基线 `560` 净增 20 例（含先红后绿回归用例）。
+- `:demo-app:connectedDebugAndroidTest`（AVD `round5_api35`，API 35 x86_64，4 KB）：`30/30` 通过、0 failure（基线 `28` + 新增 `DemoConversationStoreConcurrencyInstrumentedTest` 2 例）。
+- 本条目验收以分支 HEAD 实测为准；未操作真机、未调用真实 Provider/API、未跑 Release 矩阵，不关闭任何 Gate。
+
 ## 1.0.5 · 2026-09-03 · 悬浮窗贴顶钳位下的 IME 高度压缩
 
 > 本条目为 2026-09-03 补记：`c703f91` / `11d764a` 提交时未同步台账，条目内容以 commit message、Git diff 与补记当日实测测试结果为据。
