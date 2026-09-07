@@ -94,7 +94,7 @@ class AgentRuntimeTest {
     }
 
     @Test
-    fun `uncaught run exception releases the session gate for a subsequent run`() = runBlocking {
+    fun `run exception from pendingUserMessages ends as a Failed event and releases the session gate`() = runBlocking {
         val call = ToolCall(
             id = "exception-tool-call",
             name = "echo",
@@ -115,19 +115,19 @@ class AgentRuntimeTest {
             llmProvider = provider,
             toolRegistry = ToolRegistry().register(EchoTool())
         )
-        var thrown: IllegalStateException? = null
 
-        try {
-            runtime.run(
-                session = session,
-                input = AgentRunInput(content = "first"),
-                pendingUserMessages = { error("pending message source failed") }
-            ).toList()
-        } catch (error: IllegalStateException) {
-            thrown = error
-        }
+        // The run contract ends every failure with a Failed event (an
+        // event-collecting host would otherwise never learn about the
+        // failure); it must NOT throw out of the flow.
+        val events = runtime.run(
+            session = session,
+            input = AgentRunInput(content = "first"),
+            pendingUserMessages = { error("pending message source failed") }
+        ).toList()
 
-        assertEquals("pending message source failed", thrown?.message)
+        val failure = events.filterIsInstance<AgentEvent.Failed>().single()
+        assertEquals("pending message source failed", failure.message)
+        // The gate must still be released: a subsequent run proceeds.
         assertEquals(
             AgentEvent.Completed("recovered"),
             runtime.run(session, "second").toList().last()

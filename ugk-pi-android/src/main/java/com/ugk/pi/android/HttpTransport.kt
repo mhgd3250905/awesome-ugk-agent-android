@@ -32,14 +32,20 @@ interface HttpTransport {
 
     /**
      * 以流式长连接发起 POST 请求，逐行发射响应数据（如 SSE 协议行）。
-     * 默认回退实现：调用普通 post 并在成功后一次性发射响应体。
+     * 默认回退实现：调用普通 post，并把整个响应体按行切分后逐行发射。
+     * 两个 Provider 的流式解析器都按“每次 collect 一行”消费；只实现
+     * [post] 的自定义传输会把完整 SSE body 一次性交回，这里必须保持
+     * 与 [JavaNetHttpTransport] 相同的 CR/LF/CRLF 行语义，否则所有事件
+     * 都会被解析器丢弃。
      */
     fun postStream(request: HttpRequest): Flow<String> = flow {
         val response = post(request)
         if (response.statusCode !in 200..299) {
             throw IllegalStateException("HTTP request failed: ${response.statusCode} ${response.body}")
         }
-        emit(response.body)
+        response.body.lineSequence().forEach { line ->
+            emit(line)
+        }
     }
 }
 

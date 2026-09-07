@@ -91,6 +91,11 @@ class OpenAiChatCompletionsProvider(
             val argsBuilder: StringBuilder = StringBuilder()
         )
         val toolDrafts = mutableMapOf<Int, ToolCallDraft>()
+        // Index of the draft a previous tool_calls chunk was appended to.
+        // Some OpenAI-compatible gateways omit the `index` field entirely;
+        // their continuation chunks (arguments only, no id/name) belong to
+        // this active call instead of being fabricated into a new draft.
+        var lastActiveToolIndex: Int? = null
         var currentStopReason: String? = null
         var completedEmitted = false
 
@@ -157,6 +162,17 @@ class OpenAiChatCompletionsProvider(
             val dataElement = runCatching { json.parseToJsonElement(dataStr) }.getOrNull() ?: return@collect
             val dataObj = dataElement as? JsonObject ?: return@collect
 
+            // OpenAI-compatible gateways push mid-stream failures (rate
+            // limits, content filters, upstream disconnects) as a data event
+            // carrying an `error` object. Dropping it here would finish a
+            // truncated answer as a normal completion, so surface the error.
+            dataObj["error"]?.let { errorElement ->
+                val message = (errorElement as? JsonObject)
+                    ?.get("message")?.jsonPrimitive?.contentOrNull
+                    ?: dataStr
+                throw IllegalStateException("OpenAI stream error: $message")
+            }
+
             val choices = dataObj["choices"]?.jsonArray ?: return@collect
             val firstChoice = choices.firstOrNull()?.jsonObject ?: return@collect
             val finishReason = firstChoice["finish_reason"]?.jsonPrimitive?.contentOrNull
@@ -185,10 +201,25 @@ class OpenAiChatCompletionsProvider(
             val toolCallsArray = delta["tool_calls"]?.jsonArray
             toolCallsArray?.forEach { toolElement ->
                 val toolObj = toolElement.jsonObject
-                val index = toolObj["index"]?.jsonPrimitive?.contentOrNull?.toIntOrNull() ?: toolDrafts.size
-                val draft = toolDrafts.getOrPut(index) { ToolCallDraft() }
-
+                val explicitIndex = toolObj["index"]?.jsonPrimitive?.contentOrNull?.toIntOrNull()
                 val id = toolObj["id"]?.jsonPrimitive?.contentOrNull
+                // The spec requires `index` on streamed tool_calls, but some
+                // gateways omit it. Without it: a chunk carrying an id joins
+                // the draft with that id (or starts a new call); an arguments
+                // continuation chunk extends the most recently active draft.
+                // Falling back to toolDrafts.size for continuations would
+                // fabricate a phantom draft whose blank id gets the real
+                // arguments dropped while the first call runs with `{}`.
+                val index = when {
+                    explicitIndex != null -> explicitIndex
+                    !id.isNullOrBlank() ->
+                        toolDrafts.entries.firstOrNull { it.value.id == id }?.key
+                            ?: toolDrafts.size
+                    else -> lastActiveToolIndex ?: toolDrafts.size
+                }
+                val draft = toolDrafts.getOrPut(index) { ToolCallDraft() }
+                lastActiveToolIndex = index
+
                 if (!id.isNullOrBlank()) {
                     draft.id = id
                 }
@@ -347,6 +378,15 @@ class OpenAiChatCompletionsProvider(
 
     private fun parseResponse(body: String): ModelResponse {
         val root = json.parseToJsonElement(body).jsonObject
+        // A 200 body can still be an API error object (quota exhaustion,
+        // gateway overload). Parsing it as a message would yield a blank
+        // "successful" response and mask the real failure.
+        (root["error"] as? JsonObject)?.let { errorObj ->
+            val message = errorObj["message"]?.jsonPrimitive?.contentOrNull
+                ?: errorObj["type"]?.jsonPrimitive?.contentOrNull
+                ?: body.take(200)
+            throw IllegalStateException("OpenAI API error: $message")
+        }
         val choice = root["choices"]
             ?.jsonArray
             ?.firstOrNull()

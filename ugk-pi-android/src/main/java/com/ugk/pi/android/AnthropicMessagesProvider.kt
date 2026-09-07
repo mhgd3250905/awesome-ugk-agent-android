@@ -323,6 +323,7 @@ class AnthropicMessagesProvider(
         val result = mutableListOf<JsonObject>()
         val runToolResults = mutableListOf<AgentMessage.Tool>()
         val runUsers = mutableListOf<AgentMessage.User>()
+        var assistantBlocks = mutableListOf<JsonObject>()
 
         // The Messages API enforces strict user/assistant alternation, so one
         // run of consecutive Tool and User messages must be serialized as a
@@ -352,18 +353,74 @@ class AnthropicMessagesProvider(
             runUsers.clear()
         }
 
+        // Adjacent assistant messages are equally rejected by the Messages
+        // API (and a transcript holding them would 400 on every later
+        // request), so they merge into one assistant message whose content
+        // blocks are concatenated in order.
+        fun flushAssistant() {
+            if (assistantBlocks.isEmpty()) return
+            val blocks = assistantBlocks
+            result += buildJsonObject {
+                put("role", "assistant")
+                putJsonArray("content") {
+                    blocks.forEach { block -> add(block) }
+                }
+            }
+            assistantBlocks = mutableListOf()
+        }
+
         forEach { message ->
             when (message) {
-                is AgentMessage.Tool -> runToolResults += message
-                is AgentMessage.User -> runUsers += message
+                is AgentMessage.Tool -> {
+                    flushAssistant()
+                    runToolResults += message
+                }
+                is AgentMessage.User -> {
+                    flushAssistant()
+                    runUsers += message
+                }
+                is AgentMessage.Assistant -> {
+                    flushRun()
+                    assistantBlocks += message.assistantContentBlocks()
+                }
                 else -> {
                     flushRun()
+                    flushAssistant()
                     result += message.toAnthropicMessage()
                 }
             }
         }
         flushRun()
+        flushAssistant()
         return result
+    }
+
+    private fun AgentMessage.Assistant.assistantContentBlocks(): List<JsonObject> {
+        val blocks = mutableListOf<JsonObject>()
+        // Thinking is never replayed: the Messages API requires a signature
+        // on returned thinking blocks and rejects them when the request does
+        // not enable thinking, while AgentMessage.Assistant does not carry
+        // signatures.
+        if (content.isNotBlank()) {
+            blocks += buildJsonObject {
+                put("type", "text")
+                put("text", content)
+            }
+        } else if (toolCalls.isEmpty()) {
+            // Blank tool-less assistant messages can still sit in a
+            // transcript (legacy data or host-appended entries). Serialized
+            // as-is they would produce an empty content array, which the
+            // Messages API rejects for every later request of the session,
+            // so repair them at this serialization boundary.
+            blocks += buildJsonObject {
+                put("type", "text")
+                put("text", BLANK_ASSISTANT_PLACEHOLDER)
+            }
+        }
+        toolCalls.forEach { call ->
+            blocks += call.toAnthropicToolUse()
+        }
+        return blocks
     }
 
     private fun AgentMessage.toAnthropicMessage(): JsonObject {
@@ -383,34 +440,7 @@ class AnthropicMessagesProvider(
             is AgentMessage.Assistant -> buildJsonObject {
                 put("role", "assistant")
                 putJsonArray("content") {
-                    // Thinking is never replayed: the Messages API requires a
-                    // signature on returned thinking blocks and rejects them
-                    // when the request does not enable thinking, while
-                    // AgentMessage.Assistant does not carry signatures.
-                    if (content.isNotBlank()) {
-                        add(
-                            buildJsonObject {
-                                put("type", "text")
-                                put("text", content)
-                            }
-                        )
-                    } else if (toolCalls.isEmpty()) {
-                        // Blank tool-less assistant messages can still sit in
-                        // a transcript (legacy data or host-appended entries).
-                        // Serialized as-is they would produce an empty
-                        // content array, which the Messages API rejects for
-                        // every later request of the session, so repair them
-                        // at this serialization boundary.
-                        add(
-                            buildJsonObject {
-                                put("type", "text")
-                                put("text", BLANK_ASSISTANT_PLACEHOLDER)
-                            }
-                        )
-                    }
-                    toolCalls.forEach { call ->
-                        add(call.toAnthropicToolUse())
-                    }
+                    assistantContentBlocks().forEach { block -> add(block) }
                 }
             }
 
@@ -484,6 +514,15 @@ class AnthropicMessagesProvider(
 
     private fun parseResponse(body: String): ModelResponse {
         val root = json.parseToJsonElement(body).jsonObject
+        // A 200 body can still be an API error object (e.g. an `error` payload
+        // from an overloaded gateway). Parsing it as a message would yield a
+        // blank "successful" response and mask the real failure.
+        (root["error"] as? JsonObject)?.let { errorObj ->
+            val message = errorObj["message"]?.jsonPrimitive?.contentOrNull
+                ?: errorObj["type"]?.jsonPrimitive?.contentOrNull
+                ?: body.take(200)
+            throw IllegalStateException("Anthropic API error: $message")
+        }
         val contentBlocks = root["content"]?.jsonArray ?: JsonArray(emptyList())
         val text = contentBlocks
             .mapNotNull { block ->
