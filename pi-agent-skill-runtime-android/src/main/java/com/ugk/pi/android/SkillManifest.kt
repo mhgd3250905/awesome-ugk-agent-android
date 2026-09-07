@@ -97,7 +97,7 @@ object SkillManifestParser {
         // A UTF-8 BOM (Windows-editor authored files) is not whitespace, so
         // trim() keeps it glued to the first delimiter and the file would be
         // permanently invalid. Strip it at this single parsing chokepoint.
-        val lines = text.removePrefix("﻿").lines()
+        val lines = text.removePrefix("\uFEFF").lines()
         if (lines.firstOrNull()?.trim() != FRONTMATTER_DELIMITER) {
             return SkillManifestParseResult.Invalid(
                 "SKILL.md must start with a '---' frontmatter block."

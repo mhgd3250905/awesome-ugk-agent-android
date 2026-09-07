@@ -469,6 +469,6 @@ Core API/JVM 边界：
   - `agent_task_create` 的 `action` 非对象入参统一返回 `INVALID_ACTION`（原先被 `as? JsonObject` 折叠成 `MISSING_ACTION`，与 update 路径不一致），补先红后绿用例；
   - 两个 Provider 的流式"非 SSE 容错分支"对完整 error JSON body 直接抛出 API error（原先被 `runCatching` 吞掉后降级为空白 Completed，经 3 次 incomplete 重试以笼统失败收场并重打 3 次 API），补先红后绿用例；
   - 文档分模块计数修正（即本节数字）；
-  - 同批落实审查建议：BOM 处理改 `﻿` 可见转义；`isTokenServed` 补 `-`/`_` 开头 token 用例；补 OpenAI 侧 `postStream` 默认回退用例；`toAnthropicMessage` 的 Assistant 分支标注"通常由合并路径先消费"（Kotlin when 穷尽性要求保留）。
+  - 同批落实审查建议：BOM 处理改为 `\uFEFF` 可见转义；`isTokenServed` 补 `-`/`_` 开头 token 用例；补 OpenAI 侧 `postStream` 默认回退用例；`toAnthropicMessage` 的 Assistant 分支标注"通常由合并路径先消费"（Kotlin when 穷尽性要求保留）。
   - 审查确认不修的已知项：无 `index` 交错续传为已声明的固有限制（注释声明）；自家 server 极慢冷启动超 10s 时 `PORT_IN_USE` 措辞可能误导（行为正确）。
 - 边界与未执行：未操作真机、未调用真实 Provider/API、未跑 `-CheckPackages` 与 Release 矩阵；arm64（尤其 16 KB）Gate 状态不变。
