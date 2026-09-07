@@ -2161,6 +2161,13 @@ class MainActivity : ComponentActivity() {
             }
         runState = runCoordinator.snapshot().state
         floatingWindow.clear()
+        // floatingWindow.clear() resets the composer draft through
+        // onDraftChanged; the field must follow, otherwise the visible text
+        // of the previous conversation would silently become this
+        // conversation's next message (sendMessage reads the field).
+        if (::inputField.isInitialized) {
+            inputField.setText("")
+        }
         syncTranscript()
         renderConversation()
         updateCapabilityBanner()
@@ -2181,6 +2188,9 @@ class MainActivity : ComponentActivity() {
         conversationRuntime.rememberSession(conversation.id, session)
         runState = runCoordinator.snapshot().state
         floatingWindow.clear()
+        if (::inputField.isInitialized) {
+            inputField.setText("")
+        }
         syncTranscript()
         renderConversation()
     }
