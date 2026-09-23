@@ -33,11 +33,44 @@ Demo 当前已开启 `NOTIFY_USER` 和 `RUN_AGENT_PROMPT`：
 - “10 分钟后提醒我休息”会创建一个 `ONE_SHOT` 任务，到期后发送 Android 通知。
 - “10 分钟后检查微信是否有新消息”应创建 `RUN_AGENT_PROMPT`；到点后系统启动 `AgentTaskJobService`，恢复任务关联的会话，使用 `AgentRunSource.SCHEDULED_TASK` 调用 AgentRuntime 的完整模型/Tool 循环，并把用户任务和最终结果写回同一会话。
 - `REPEATING_UNTIL` 会在每次到点处理后重新计算下一次执行时间，不在进程里维持常驻循环。
-- 设备重启或应用升级后，广播接收器从持久化 Store 恢复 `SCHEDULED` 任务；Prompt 任务重新交给 `JobScheduler`。除广播外，进程内首次初始化 Task Runtime 时也会在后台线程执行一次幂等 re-arm：对全部 `SCHEDULED` 任务按记录重新 schedule（同 alarm requestCode / 同 jobId 为替换语义），自愈"alarm 已消费但进程在 handle 写回前被杀"造成的断链。
+- 设备重启或应用升级后，广播接收器从持久化 Store 恢复 `SCHEDULED` 任务；Prompt 任务重新交给 `JobScheduler`。Job ID 通过 App 私有持久映射分配；不同 task ID 保持不同 Job ID，遇到哈希碰撞时探测空位。映射分配、平台 schedule/cancel 与释放在进程内串行化；平台已有 Job 的组件身份用于区分本 SDK 与宿主其他服务：外部 Job ID 参与占用检查，但不会被本 SDK 迁移或取消。若 SharedPreferences 删除失败，该 ID 在当前进程继续保留；被取消的执行中 Job 会保留到 JobService 清理回调，正常结束的终态 Prompt 任务在 `jobFinished()` 后释放映射。重复任务保留稳定 ID。除广播外，进程内首次初始化 Task Runtime 时也会在后台线程执行一次幂等 re-arm：对全部 `SCHEDULED` 任务按记录重新 schedule（同 task ID 的同 jobId 为替换语义），自愈"alarm 已消费但进程在 handle 写回前被杀"造成的断链。
 - Android 13（API 33）及以上需要用户授予通知权限；闹钟使用普通非精确调度，可能受到 Doze 和小米系统省电策略影响。
 - Prompt 任务要求有可用网络；没有网络时由 `JobScheduler` 等待可用网络，而不是由应用进程自建轮询线程。
 
 Demo 的后台执行器与前台使用同一套 Provider、Android Automation、视觉屏幕和剪贴板 Tool 注册图，但不创建 Activity。后台没有交互式确认窗口：只读观察可以执行；启动 App、点击、手势、视觉手势、剪贴板写入/清空和终端等受保护动作，只有用户显式开启“全授权”后才允许自动执行，否则任务会安全失败并通知用户。
+
+## JobScheduler Job ID 回归验证（2026-09-23）
+
+源码状态：本轮未提交工作树，基于 `b0f18590c0222de96a2decd784bd2b12aa3816d0`；范围仅限 Job ID 分配/释放与对应文档，不改变任务 Tool 契约。
+
+验证命令：
+
+```powershell
+.\gradlew.bat :ugk-agent-task-runtime-android:testDebugUnitTest --max-workers=1 --console=plain
+```
+
+模块结果：`BUILD SUCCESSFUL`。新增回归覆盖哈希冲突、旧 SDK Job ID 迁移、外部 JobService ID 占用/迁移/取消隔离、并发调度事务、偏好删除失败、执行中任务取消后的 ID 保留，以及终态任务完成后的 ID 释放和删除失败保留。
+
+完整单测和 Demo 构建命令：
+
+```powershell
+.\gradlew.bat `
+  :ugk-pi-android:testDebugUnitTest `
+  :pi-file-skill-android:testDebugUnitTest `
+  :pi-schedule-skill-android:testDebugUnitTest `
+  :ugk-agent-task-runtime-android:testDebugUnitTest `
+  :pi-system-skill-android:testDebugUnitTest `
+  :pi-agent-skill-runtime-android:testDebugUnitTest `
+  :ugk-terminal-runtime-android:testDebugUnitTest `
+  :pi-terminal-skill-android:testDebugUnitTest `
+  :demo-app:testDebugUnitTest `
+  :demo-app:assembleDebug `
+  --max-workers=1 --console=plain
+```
+
+结果：`BUILD SUCCESSFUL`；模块定向测试与全工程 JVM 单测均通过，Demo Debug APK 构建成功。
+
+验证边界：这些是 JVM 回归测试；没有在真机或 Robolectric 中驱动 Android `JobService`/`JobScheduler` 回调，因此不能据此声称设备级调度时序已经验证。被取消的执行中 Job 会在其取消协程的 `finally` 清理后解除进程内 ID 保留；若宿主进程在回调完成前退出，系统进程级 Job 状态也随之重建。
 
 ## 为什么 Prompt 任务使用 JobScheduler
 

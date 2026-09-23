@@ -26,6 +26,7 @@ import com.ugk.pi.android.AgentTaskStore
 import com.ugk.pi.android.SystemAgentTaskClock
 import com.ugk.pi.android.nextRunAtMillis
 import kotlinx.coroutines.CancellationException
+import kotlinx.coroutines.CoroutineStart
 import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.Job
@@ -158,10 +159,25 @@ internal fun AgentTask.triggerRoute(): AgentTaskTriggerRoute = when (action) {
  * Android can give them a real background execution window instead of asking
  * a short-lived BroadcastReceiver to run an LLM/tool loop.
  */
-class AlarmManagerAgentTaskScheduler(context: Context) : AgentTaskScheduler {
+class AlarmManagerAgentTaskScheduler(context: Context) : AgentTaskScheduler, TerminalTaskJobIdReleaser {
     private val appContext = context.applicationContext
     private val alarmManager = appContext.getSystemService(AlarmManager::class.java)
     private val jobScheduler = appContext.getSystemService(JobScheduler::class.java)
+    private val taskJobIds = StableTaskJobIdRegistry(
+        assignments = SharedPreferencesTaskJobIdAssignmentStore(
+            appContext.getSharedPreferences(TASK_JOB_ID_PREFERENCES, Context.MODE_PRIVATE)
+        ),
+        pendingJobs = {
+            val agentService = ComponentName(appContext, AgentTaskJobService::class.java)
+            jobScheduler.allPendingJobs.map { job ->
+                PendingTaskJob(
+                    taskId = job.extras.getString(AgentTaskJobService.EXTRA_TASK_ID),
+                    jobId = job.id,
+                    isAgentTaskJob = job.service == agentService
+                )
+            } + StableTaskJobIdRegistry.runningJobs()
+        }
+    )
 
     override suspend fun schedule(task: AgentTask) {
         val nextRunAt = task.nextRunAtMillis
@@ -201,7 +217,14 @@ class AlarmManagerAgentTaskScheduler(context: Context) : AgentTaskScheduler {
     }
 
     private fun cancelAgentJob(taskId: String) {
-        jobScheduler.cancel(stableJobId(taskId))
+        taskJobIds.withExclusiveAccess {
+            taskJobIds.jobIdsFor(taskId).forEach(jobScheduler::cancel)
+            // Release the persisted mapping only after the platform jobs are
+            // canceled. If cancellation throws, the ID stays reserved.
+            check(taskJobIds.release(taskId)) {
+                "Unable to remove the JobScheduler ID mapping for Agent task $taskId."
+            }
+        }
     }
 
     private fun scheduleNotificationAlarm(taskId: String, nextRunAt: Long) {
@@ -222,24 +245,35 @@ class AlarmManagerAgentTaskScheduler(context: Context) : AgentTaskScheduler {
     }
 
     private fun scheduleAgentJob(task: AgentTask, nextRunAt: Long) {
-        val delayMillis = (nextRunAt - System.currentTimeMillis()).coerceAtLeast(0L)
-        val extras = PersistableBundle().apply {
-            putString(AgentTaskJobService.EXTRA_TASK_ID, task.id)
+        taskJobIds.withExclusiveAccess {
+            val delayMillis = (nextRunAt - System.currentTimeMillis()).coerceAtLeast(0L)
+            val extras = PersistableBundle().apply {
+                putString(AgentTaskJobService.EXTRA_TASK_ID, task.id)
+            }
+            val job = JobInfo.Builder(
+                taskJobIds.idFor(task.id),
+                ComponentName(appContext, AgentTaskJobService::class.java)
+            )
+                .setMinimumLatency(delayMillis)
+                // Prompt execution normally needs a model network request. The
+                // job remains pending until any usable network is available.
+                .setRequiredNetworkType(JobInfo.NETWORK_TYPE_ANY)
+                .setPersisted(true)
+                .setExtras(extras)
+                .build()
+            check(jobScheduler.schedule(job) == JobScheduler.RESULT_SUCCESS) {
+                "Unable to schedule background Agent task ${task.id}."
+            }
         }
-        val job = JobInfo.Builder(
-            stableJobId(task.id),
-            ComponentName(appContext, AgentTaskJobService::class.java)
-        )
-            .setMinimumLatency(delayMillis)
-            // Prompt execution normally needs a model network request. The
-            // job remains pending until any usable network is available.
-            .setRequiredNetworkType(JobInfo.NETWORK_TYPE_ANY)
-            .setPersisted(true)
-            .setExtras(extras)
-            .build()
-        check(jobScheduler.schedule(job) == JobScheduler.RESULT_SUCCESS) {
-            "Unable to schedule background Agent task ${task.id}."
-        }
+    }
+
+    override fun beginTerminalJobIdRelease(
+        taskId: String,
+        runningJobId: Int
+    ): Set<Int> = taskJobIds.beginRelease(taskId, runningJobId)
+
+    override fun completeTerminalJobIdRelease(taskId: String, jobIds: Set<Int>) {
+        taskJobIds.completeRelease(taskId, jobIds)
     }
 
     private fun pendingIntent(taskId: String): PendingIntent {
@@ -261,8 +295,9 @@ class AlarmManagerAgentTaskScheduler(context: Context) : AgentTaskScheduler {
     private fun stableRequestCode(taskId: String): Int =
         taskId.hashCode() and Int.MAX_VALUE
 
-    private fun stableJobId(taskId: String): Int =
-        taskId.hashCode() and Int.MAX_VALUE
+    private companion object {
+        const val TASK_JOB_ID_PREFERENCES = "ugk_agent_task_job_ids"
+    }
 }
 
 fun interface AgentTaskNotificationSink {
@@ -680,6 +715,24 @@ class AndroidAgentTaskRuntime(
     suspend fun restoreScheduledTasks(): AgentTaskRestoreResult =
         convergeScheduledTasks()
 
+    /**
+     * Drops a terminal prompt task's durable JobScheduler mapping after its
+     * current one-shot job has run. A still-scheduled task keeps its mapping
+     * for the next occurrence.
+     */
+    internal suspend fun beginTerminalJobIdRelease(
+        taskId: String,
+        runningJobId: Int
+    ): Set<Int>? {
+        if (store.get(taskId)?.status == AgentTaskStatus.SCHEDULED) return null
+        val releaser = scheduler as? TerminalTaskJobIdReleaser ?: return null
+        return releaser.beginTerminalJobIdRelease(taskId, runningJobId)
+    }
+
+    internal fun completeTerminalJobIdRelease(taskId: String, jobIds: Set<Int>) {
+        (scheduler as? TerminalTaskJobIdReleaser)?.completeTerminalJobIdRelease(taskId, jobIds)
+    }
+
     private suspend fun convergeScheduledTasks(skipBusyTasks: Boolean = false): AgentTaskRestoreResult {
         val rearmedTaskIds = mutableListOf<String>()
         val failures = mutableListOf<AgentTaskRestoreFailure>()
@@ -772,17 +825,23 @@ class AndroidAgentTaskRuntime(
 class AgentTaskJobService : android.app.job.JobService() {
     private val serviceScope = CoroutineScope(SupervisorJob() + Dispatchers.IO)
     private val activeJobs = ConcurrentHashMap<Int, Job>()
-    private val stoppedJobIds = ConcurrentHashMap.newKeySet<Int>()
+    private val stoppedJobs = ConcurrentHashMap.newKeySet<Job>()
+    private val runningTokens = ConcurrentHashMap<Int, Any>()
 
     override fun onStartJob(params: android.app.job.JobParameters): Boolean {
         val taskId = params.extras.getString(EXTRA_TASK_ID)?.takeIf { it.isNotBlank() }
             ?: return false
-        activeJobs[params.jobId]?.cancel()
-        stoppedJobIds.remove(params.jobId)
+        activeJobs.remove(params.jobId)?.let { previousJob ->
+            val previousToken = runningTokens[params.jobId]
+            markStopped(params.jobId, previousJob, previousToken)
+        }
+        val runningToken = Any()
+        runningTokens[params.jobId] = runningToken
+        StableTaskJobIdRegistry.trackRunningJob(taskId, params.jobId, runningToken)
 
         var runtime: AndroidAgentTaskRuntime? = null
         lateinit var job: Job
-        job = serviceScope.launch {
+        job = serviceScope.launch(start = CoroutineStart.LAZY) {
             var shouldReschedule = false
             try {
                 runtime = taskRuntime(applicationContext)
@@ -800,30 +859,33 @@ class AgentTaskJobService : android.app.job.JobService() {
                 shouldReschedule = true
             } finally {
                 activeJobs.remove(params.jobId, job)
-                if (!stoppedJobIds.remove(params.jobId)) {
-                    finishJob(params, shouldReschedule, runtime)
+                if (stoppedJobs.remove(job)) {
+                    finishRunningExecution(params.jobId, runningToken)
+                } else {
+                    finishJob(params, taskId, shouldReschedule, runtime, runningToken)
                 }
             }
         }
         activeJobs[params.jobId] = job
+        job.start()
         return true
     }
 
     override fun onStopJob(params: android.app.job.JobParameters): Boolean {
-        stoppedJobIds += params.jobId
         val job = activeJobs.remove(params.jobId)
         if (job == null) {
-            stoppedJobIds.remove(params.jobId)
             return false
         }
-        job.cancel(CancellationException("Android stopped scheduled Agent task."))
+        markStopped(params.jobId, job, runningTokens[params.jobId])
         // The task remains SCHEDULED when cancellation propagates through
         // AndroidAgentTaskRuntime, so a true result safely requests a retry.
         return true
     }
 
     override fun onDestroy() {
-        stoppedJobIds.addAll(activeJobs.keys)
+        activeJobs.forEach { (jobId, job) ->
+            markStopped(jobId, job, runningTokens[jobId])
+        }
         serviceScope.cancel()
         activeJobs.clear()
         super.onDestroy()
@@ -831,22 +893,63 @@ class AgentTaskJobService : android.app.job.JobService() {
 
     private fun finishJob(
         params: android.app.job.JobParameters,
+        taskId: String,
         reschedule: Boolean,
-        runtime: AndroidAgentTaskRuntime?
+        runtime: AndroidAgentTaskRuntime?,
+        runningToken: Any
     ) {
         // Restore the next occurrence while JobService is still alive. Calling
         // jobFinished first lets Android tear down this service before a
         // repeating task can install its next JobInfo.
         serviceScope.launch {
             var shouldRetry = reschedule
+            var release: Set<Int>? = null
             if (!reschedule && runtime != null) {
                 runCatching { runtime.restoreScheduledTasks() }
                     .onFailure { shouldRetry = true }
+                if (!shouldRetry) {
+                    runCatching { runtime.beginTerminalJobIdRelease(taskId, params.jobId) }
+                        .onSuccess { release = it }
+                        .onFailure { shouldRetry = true }
+                }
             }
+            val shouldFinishRetry = shouldRetry
+            val releaseAfterFinish = release
             android.os.Handler(android.os.Looper.getMainLooper()).post {
-                jobFinished(params, shouldRetry)
+                var finished = false
+                try {
+                    jobFinished(params, shouldFinishRetry)
+                    finished = true
+                } finally {
+                    if (finished) {
+                        try {
+                            releaseAfterFinish?.let {
+                                runtime?.completeTerminalJobIdRelease(taskId, it)
+                            }
+                        } finally {
+                            finishRunningExecution(params.jobId, runningToken)
+                        }
+                    }
+                }
             }
         }
+    }
+
+    private fun markStopped(jobId: Int, job: Job, token: Any?) {
+        stoppedJobs.add(job)
+        job.invokeOnCompletion {
+            // A lazy coroutine canceled before entering its body has no
+            // finally block to clear the process-wide running-job reservation.
+            if (stoppedJobs.remove(job)) {
+                token?.let { finishRunningExecution(jobId, it) }
+            }
+        }
+        job.cancel(CancellationException("Android stopped scheduled Agent task."))
+    }
+
+    private fun finishRunningExecution(jobId: Int, token: Any) {
+        StableTaskJobIdRegistry.finishRunningJob(jobId, token)
+        runningTokens.remove(jobId, token)
     }
 
     companion object {
