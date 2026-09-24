@@ -14,21 +14,37 @@ object ScreenAutomationSkills {
         } else {
             AgentConfirmationPolicy.FULL_AUTHORIZATION_AGENT_INSTRUCTION
         }
-        val visualFallbackInstruction = if (includeVisualFallback) {
+        val observationStrategyInstructions = if (includeVisualFallback) {
             """
-
-                Visual fallback for missing or insufficient UI trees:
-                - Use screen_capture_visual only after screen_read_ui_tree or screen_find_ui_element cannot expose a reliable target. It returns a screenshot attachment plus a short-lived observationId, package, dimensions, rotation, and image dimensions. The screenshot is sent to the configured model, so do not capture unrelated or repeated frames.
-                - Ask the visual model to identify a visible target using a normalized 0..1 rectangle: left, top, right, bottom. Use the target center for tap/long_press and the target center as the start point for directional swipes. Never convert coordinates from memory or assume a fixed resolution.
-                - Use screen_visual_gesture with the exact latest observationId and the model's normalized rectangle. The backend rejects missing, stale, changed-package, or changed-screen observations. Its success only means AccessibilityService accepted the touch stream.
-                - After every visual gesture, call screen_read_ui_tree or screen_capture_visual and verify the visible state. Secure/DRM surfaces may be blank, animated screens may become stale, and visual coordinates cannot replace semantic text entry when no editable node exists.
+                Visual-first workflow (this backend supports screenshots):
+                - At the start of each screen observation cycle, call screen_capture_visual and use the attached current screenshot as the primary evidence for screen state and visible target selection. After a mutating screen action, capture a fresh screenshot to verify the result.
+                - The image is sent to the configured model and is attached only to the immediately following model request. If you query the tree for supporting evidence, carry the visual target description or selector into that query and use its fresh snapshot for semantic actions. If a later decision requires seeing a changed screen, capture a new image. Screenshot capture is a protected cross-app read; follow the exact confirmation flow. Avoid capturing an unchanged frame repeatedly or capturing screens unrelated to the task.
+                - Use the View structure tree as supporting evidence when text, content descriptions, editability, supported actions, scrollable containers, or target disambiguation are useful. Use screen_find_ui_element for a known selector and screen_read_ui_tree when hierarchy or broader context is needed; do not make a full tree read mandatory for every screen.
+                - For semantic text entry or a supported node action, obtain a fresh tree result and use its exact snapshotId and nodeId. Inspect enabled, visibleToUser, actions, clickable, scrollable, editable, text, contentDesc, viewId, and bounds. Any new read/find invalidates the previous node target. Never invent or reuse node IDs.
+                - If a node action returns STALE_SNAPSHOT, SNAPSHOT_REQUIRED, NODE_NOT_FOUND, WINDOW_UNAVAILABLE, TARGET_NOT_INTERACTABLE, or ACTION_NOT_SUPPORTED, read/find again and select a fresh target; never retry the same action input.
+                - Use screen_perform_action for supported click, long_click, scroll_forward, scroll_backward, focus, clear_focus, and set_text actions when the current tree confirms the intended node. Use set_text only when the value is explicitly known; an omitted text value never means clear the field. Press Enter only for an explicitly intended submit/search/send/go/done IME action.
+                - A truncated=true tree result does not prove that a visual target is absent. Narrow the selector or use a visible scrollable node; after scrolling, capture a new screenshot before making the next visual decision.
+                - For a visually identified target, return its normalized 0..1 rectangle (left, top, right, bottom) from the latest screenshot and call screen_visual_gesture with that exact observationId. Use the target center for tap/long_press and as the start point for directional swipes. Never convert coordinates from memory or assume a fixed resolution.
+                - The backend rejects missing or stale observations, changed packages, changed screen dimensions/rotation, and invalid bounds. Gesture success only means AccessibilityService accepted the touch stream; verify the visible result with a fresh screenshot.
+                - If a screenshot is unsupported, use the structure-tree workflow for the rest of the current task and do not capture again. For a transient screenshot failure or timeout, make at most one fresh capture attempt; after a second failure, use the tree for the rest of the current task. Secure/DRM surfaces may be blank; visual coordinates cannot replace semantic text entry when no editable node exists.
             """.trimIndent()
         } else {
-            ""
+            """
+                Structure-tree workflow (this backend does not provide screenshots):
+                - Use screen_find_ui_element when a text, content description, viewId, or type selector is known; use screen_read_ui_tree when the full visible hierarchy is needed. Both return a snapshotId.
+                - Every node action must use the exact snapshotId and nodeId from the same fresh result. Any new read/find replaces the session's latest snapshot. Never invent or reuse a nodeId.
+                - Inspect enabled, visibleToUser, actions, clickable, scrollable, editable, text, contentDesc, viewId, and bounds before choosing an operation. Do not click a disabled or invisible node.
+                - If a result is STALE_SNAPSHOT, SNAPSHOT_REQUIRED, NODE_NOT_FOUND, WINDOW_UNAVAILABLE, TARGET_NOT_INTERACTABLE, or ACTION_NOT_SUPPORTED, read/find again and select a fresh target. SNAPSHOT_REQUIRED means no action ran; the next call must read/find before retrying with new values.
+                - Prefer a unique viewId, then exact/unique text or content description, then type plus surrounding context. If multiple matches remain, use more context, scroll, or ask the user; do not guess.
+                - A truncated=true result does not prove a target is absent. Narrow the query, increase max_nodes within the tool cap, or scroll a visible container and read again.
+                - Prefer screen_perform_action with scroll_forward or scroll_backward on the nearest scrollable element. After each scroll, read/find again because the prior snapshot is invalid. Stop only when repeated reads show no change or the target is found.
+                - If no reliable node action exists, use screen_gesture only with coordinates grounded in current reported dimensions and visible bounds. Never assume a fixed screen size or tap an unverified coordinate.
+                - For editable fields, use focus if needed, set_text only with explicitly supplied text, and press Enter only when the intended IME action is submit/search/send/go/done. Verify after each mutating step.
+            """.trimIndent()
         }
         return AndroidSkill(
             id = "android-accessibility-screen-automation",
-            description = "Use the host AccessibilityService to inspect Android UI structure, identify visible targets, and perform verified screen actions.",
+            description = "Use the host AccessibilityService to observe Android screens visually, use UI structure as supporting context, and perform verified screen actions.",
             triggers = listOf(
                 "screen",
                 "ui",
@@ -86,57 +102,22 @@ object ScreenAutomationSkills {
                 3. App discovery and launch are separate: use find_android_app followed by the protected launch tool.
                    Do not use terminal_bash_execute, am, pm, package-name guessing, or icon searching to launch an app.
 
-                Snapshot-first targeting (mandatory):
-                - Use screen_find_ui_element when a text, exact text, content description, exact content description,
-                  viewId, or type selector is known and
-                  screen_read_ui_tree when you need the full visible hierarchy. Both return a snapshotId.
-                - Every element is identified by the exact nodeId from that same result. Call screen_perform_action with
-                  both the exact snapshotId and nodeId; never invent, shorten, or reuse a nodeId from an older read.
-                - Any new screen_read_ui_tree or screen_find_ui_element replaces the session's latest snapshot. If the
-                  result is STALE_SNAPSHOT, SNAPSHOT_REQUIRED, NODE_NOT_FOUND, WINDOW_UNAVAILABLE, TARGET_NOT_INTERACTABLE, or the target is
-                  ambiguous, read/find again and select a fresh, unique target before retrying.
-                - SNAPSHOT_REQUIRED means no screen action was executed. Never retry the same screen_perform_action input;
-                  the next tool call must be screen_read_ui_tree or screen_find_ui_element, followed by a new action using
-                  both values from that fresh result.
-                - Inspect the element's actions, clickable, scrollable, editable, enabled, visibleToUser, text,
-                  contentDesc, viewId, and bounds before choosing an operation. Do not click a disabled or invisible node.
-                - A truncated=true result is not proof that a target is absent. Increase max_nodes within the tool cap,
-                  narrow the query with screen_find_ui_element, or scroll a visible scrollable container and read again.
-
-                Target selection and scrolling:
-                - Prefer a unique viewId, then an exact/unique text or content description, then a type plus surrounding
-                  context. If more than one match remains, do not guess; use more context, scroll, or ask the user.
-                - Prefer screen_perform_action with scroll_forward or scroll_backward on the nearest element whose
-                  scrollable=true. After each scroll, read/find again because the previous snapshot is no longer valid.
-                - scroll_forward reveals content farther down in the usual Android list direction; scroll_backward moves
-                  toward earlier content. Stop only after repeated reads show no change or the target is found.
-
-                Node actions:
-                - Use screen_perform_action for click, long_click, scroll_forward, scroll_backward, focus, clear_focus,
-                  and set_text. Use set_text only when text is explicitly known; the text field is required and an omitted
-                  text must never be interpreted as clearing a field.
-                - For editable fields, prefer focus when needed, set_text, then screen_press_key with key=enter only when
-                  the intended control is a submit/search/send/go/done IME action. Read the screen after each mutating step.
-                - If the target exposes no reliable node action or the app returns too little/blocked UI structure, use
-                  screen_gesture as a last resort. Gestures use the latest reported screenWidth/screenHeight; x and y are
-                  the start point, and swipe endpoints are derived and kept in bounds. Never assume a fixed 1080x2400
-                  screen or tap an unverified coordinate.
+                $observationStrategyInstructions
 
                 Confirmation and verification:
                 - screen_read_ui_tree and screen_find_ui_element are read-only and do not need confirmation.
                 - $confirmationInstruction Full authorization never bypasses target validation.
-                - After every accepted click, long click, text entry, scroll, gesture, key press, or global action, call a
-                  read/find tool and verify the observed state. A success=true result means Android accepted the request;
-                  it does not prove that the user-visible operation completed.
-                - If a semantic screen tool returns success=false, recover only with screen_read_ui_tree or
-                  screen_find_ui_element (or get_android_accessibility_status when accessibility is unavailable). If
-                  screen_capture_visual or screen_visual_gesture returns success=false, follow its visual error code;
-                  when the observation is missing or stale, capture a fresh visual observation. Do not use
-                  terminal_bash_execute, relaunch the app, or guess coordinates to recover.
+                - After every accepted click, long click, text entry, scroll, gesture, key press, or global action, verify
+                  the visible state using a fresh screenshot when visual capture is available, or a fresh read/find
+                  result otherwise. A success=true result means Android accepted the request; it does not prove that
+                  the user-visible operation completed. If neither screenshot nor structure tree exposes the result,
+                  report that it could not be verified.
+                - If a screen tool returns success=false, follow its structured error and recovery hint. Refresh a stale
+                  visual observation before another visual gesture. Do not use terminal_bash_execute, relaunch the app,
+                  or guess coordinates to recover from a screen-tool failure.
                 - Use screen_global_action only for back, home, recents, notifications, quick_settings, power_dialog,
                   lock_screen, or take_screenshot. Confirm these actions separately and report their exact result.
                 - Never use terminal commands, coordinate guessing, or a stale snapshot to bypass a failed target check.
-                $visualFallbackInstruction
             """.trimIndent(),
             methods = listOf(
                 AndroidSkillMethod(
@@ -166,7 +147,11 @@ object ScreenAutomationSkills {
                 AndroidSkillMethod(
                     toolName = "screen_gesture",
                     purpose = "Dispatches a bounded tap, long press, or directional swipe by screen coordinates.",
-                    whenToUse = "Use only when the accessibility tree cannot expose a reliable target or action.",
+                    whenToUse = if (includeVisualFallback) {
+                        "Use only when a fresh visual observation is unavailable and the target bounds are independently grounded in a current UI snapshot."
+                    } else {
+                        "Use when the accessibility tree cannot expose a reliable node action and coordinates are grounded in current visible bounds."
+                    },
                     resultSemantics = "Coordinates are checked against the current screen size; success means the gesture callback completed, not that the target state changed."
                 ),
                 AndroidSkillMethod(
@@ -185,7 +170,7 @@ object ScreenAutomationSkills {
                     AndroidSkillMethod(
                         toolName = "screen_capture_visual",
                         purpose = "Captures the current external screen and attaches it to the next model request for visual target identification.",
-                        whenToUse = "After the accessibility tree cannot expose a reliable visible target; it requires confirmation because screen content leaves the device.",
+                        whenToUse = "At the start of each screen observation cycle and after mutating actions when visual verification is needed; it requires confirmation because screen content is sent to the configured model.",
                         resultSemantics = "Returns an observationId, screen metadata, and an image attachment. The observation is short-lived and must not be reused after a new capture."
                     )
                 } else {
@@ -195,7 +180,7 @@ object ScreenAutomationSkills {
                     AndroidSkillMethod(
                         toolName = "screen_visual_gesture",
                         purpose = "Performs a coordinate gesture against a fresh visual screen observation.",
-                        whenToUse = "Only when no reliable accessibility node/action exists and the target rectangle is visible in the latest screen_capture_visual image.",
+                        whenToUse = "For a visible target identified from the latest screen_capture_visual image, using that result's exact observationId and normalized target rectangle.",
                         resultSemantics = "The backend validates observation freshness, package, dimensions, and normalized bounds; success still requires a follow-up screen verification."
                     )
                 } else {

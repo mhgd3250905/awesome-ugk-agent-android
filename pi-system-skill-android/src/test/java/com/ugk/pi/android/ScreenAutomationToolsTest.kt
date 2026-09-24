@@ -132,6 +132,61 @@ class ScreenAutomationToolsTest {
     }
 
     @Test
+    fun unsupportedVisualCaptureFallsBackToTheStructureTree() = runBlocking {
+        val backend = FakeVisualScreenAutomationBackend().apply {
+            captureResult = ScreenVisualCaptureResult(
+                code = ScreenAutomationErrorCodes.VISUAL_SCREENSHOT_UNSUPPORTED,
+                message = "Screenshots are unavailable on this device."
+            )
+        }
+        val result = ScreenCaptureVisualTool(backend).execute(
+            ToolCall("capture-unsupported", "screen_capture_visual", buildJsonObject {}),
+            ToolExecutionContext(sessionId = "visual-test")
+        )
+
+        assertTrue(result.isError)
+        assertEquals(
+            "screen_read_ui_tree",
+            result.metadata["recoveryTool"]?.toString()?.trim('"')
+        )
+        assertTrue(result.content.contains("unsupported by this device or host"))
+    }
+
+    @Test
+    fun transientVisualCaptureFailureHasOneRetryThenTreeFallbackHint() = runBlocking {
+        val backend = FakeVisualScreenAutomationBackend().apply {
+            captureResult = ScreenVisualCaptureResult(
+                code = ScreenAutomationErrorCodes.VISUAL_SCREENSHOT_TIMEOUT,
+                message = "Screenshot timed out."
+            )
+        }
+        val tool = ScreenCaptureVisualTool(backend)
+        val result = tool.execute(
+            ToolCall("capture-timeout", "screen_capture_visual", buildJsonObject {}),
+            ToolExecutionContext(sessionId = "visual-test")
+        )
+
+        assertTrue(result.isError)
+        assertEquals(
+            "screen_capture_visual",
+            result.metadata["recoveryTool"]?.toString()?.trim('"')
+        )
+        assertTrue(result.content.contains("Retry screen_capture_visual once"))
+        assertTrue(result.content.contains("continue with screen_read_ui_tree"))
+
+        val retryResult = tool.execute(
+            ToolCall("capture-timeout-retry", "screen_capture_visual", buildJsonObject {}),
+            ToolExecutionContext(sessionId = "visual-test")
+        )
+        assertTrue(retryResult.isError)
+        assertEquals(
+            "screen_read_ui_tree",
+            retryResult.metadata["recoveryTool"]?.toString()?.trim('"')
+        )
+        assertTrue(retryResult.content.contains("failed twice"))
+    }
+
+    @Test
     fun visualGestureToolPassesObservationAndNormalizedTarget() = runBlocking {
         val backend = FakeVisualScreenAutomationBackend()
         val result = ScreenVisualGestureTool(backend).execute(
@@ -289,6 +344,7 @@ class ScreenAutomationToolsTest {
 
     private class FakeVisualScreenAutomationBackend : ScreenVisualAutomationBackend {
         var lastRequest: ScreenVisualGestureRequest? = null
+        var captureResult: ScreenVisualCaptureResult? = null
 
         private val observation = ScreenVisualObservation(
             observationId = "visual-observation-1",
@@ -305,7 +361,7 @@ class ScreenAutomationToolsTest {
         )
 
         override suspend fun captureVisualObservation(sessionId: String): ScreenVisualCaptureResult =
-            ScreenVisualCaptureResult(observation = observation.copy(sessionId = sessionId))
+            captureResult ?: ScreenVisualCaptureResult(observation = observation.copy(sessionId = sessionId))
 
         override suspend fun performVisualGesture(
             sessionId: String,

@@ -14,13 +14,15 @@ private fun screenErrorResult(
     callId: String,
     toolName: String,
     code: String,
-    message: String
+    message: String,
+    recoveryHint: String = screenRecoveryHint(code),
+    recoveryTool: String = screenRecoveryTool(code)
 ): ToolResult {
     val payload = buildJsonObject {
         put("code", code)
         put("message", message)
-        put("recovery", screenRecoveryHint(code))
-        put("recoveryTool", screenRecoveryTool(code))
+        put("recovery", recoveryHint)
+        put("recoveryTool", recoveryTool)
     }
     return ToolResult(
         toolCallId = callId,
@@ -34,9 +36,11 @@ private fun screenErrorResult(
 private fun screenRecoveryHint(code: String): String = when (code) {
     ScreenAutomationErrorCodes.ACCESSIBILITY_UNAVAILABLE ->
         "Call get_android_accessibility_status, then read the screen again when readyForScreenAutomation is true."
-    ScreenAutomationErrorCodes.VISUAL_SCREENSHOT_UNSUPPORTED,
+    ScreenAutomationErrorCodes.VISUAL_SCREENSHOT_UNSUPPORTED ->
+        "Screen capture is unsupported by this device or host. Use screen_read_ui_tree or screen_find_ui_element for the rest of this task; do not capture again."
     ScreenAutomationErrorCodes.VISUAL_SCREENSHOT_FAILED,
-    ScreenAutomationErrorCodes.VISUAL_SCREENSHOT_TIMEOUT,
+    ScreenAutomationErrorCodes.VISUAL_SCREENSHOT_TIMEOUT ->
+        "Retry screen_capture_visual once. If the fresh capture also fails, continue with screen_read_ui_tree or screen_find_ui_element."
     ScreenAutomationErrorCodes.VISUAL_OBSERVATION_REQUIRED,
     ScreenAutomationErrorCodes.VISUAL_OBSERVATION_STALE,
     ScreenAutomationErrorCodes.VISUAL_TARGET_INVALID ->
@@ -47,7 +51,7 @@ private fun screenRecoveryHint(code: String): String = when (code) {
 
 private fun screenRecoveryTool(code: String): String = when (code) {
     ScreenAutomationErrorCodes.ACCESSIBILITY_UNAVAILABLE -> "get_android_accessibility_status"
-    ScreenAutomationErrorCodes.VISUAL_SCREENSHOT_UNSUPPORTED,
+    ScreenAutomationErrorCodes.VISUAL_SCREENSHOT_UNSUPPORTED -> "screen_read_ui_tree"
     ScreenAutomationErrorCodes.VISUAL_SCREENSHOT_FAILED,
     ScreenAutomationErrorCodes.VISUAL_SCREENSHOT_TIMEOUT,
     ScreenAutomationErrorCodes.VISUAL_OBSERVATION_REQUIRED,
@@ -193,8 +197,10 @@ class ScreenCaptureVisualTool(
     private val backend: ScreenVisualAutomationBackend,
     override val name: String = "screen_capture_visual"
 ) : AgentTool {
+    private val failedCapturesBySession = LinkedHashMap<String, Int>()
+
     override val description: String =
-        "Captures the current external screen and returns a multimodal observation for visual target identification. The image is sent to the configured model; use it only when the accessibility UI tree is unavailable or insufficient."
+        "Captures the current external screen as the primary visual observation for screen automation and attaches the image to the immediately following model request. The image is sent to the configured model; capture only task-relevant screens."
 
     override val inputSchema: JsonObject = buildJsonObject {
         put("type", "object")
@@ -205,6 +211,7 @@ class ScreenCaptureVisualTool(
         val result = backend.captureVisualObservation(context.sessionId)
         val observation = result.observation
         return if (result.success && observation != null) {
+            clearCaptureFailures(context.sessionId)
             val payload = observation.toJson()
             ToolResult(
                 toolCallId = call.id,
@@ -216,13 +223,57 @@ class ScreenCaptureVisualTool(
                     "已附带当前屏幕截图。请只根据截图中实际可见内容判断目标；如需操作，必须使用该 observationId，并返回目标区域的 0..1 归一化 left/top/right/bottom。"
             )
         } else {
+            val failureCount = if (
+                result.code == ScreenAutomationErrorCodes.VISUAL_SCREENSHOT_FAILED ||
+                result.code == ScreenAutomationErrorCodes.VISUAL_SCREENSHOT_TIMEOUT
+            ) {
+                recordCaptureFailure(context.sessionId)
+            } else {
+                clearCaptureFailures(context.sessionId)
+                0
+            }
+            val retryCapture = failureCount == 1
+            val recoveryHint = when {
+                result.code == ScreenAutomationErrorCodes.VISUAL_SCREENSHOT_UNSUPPORTED ->
+                    "Screen capture is unsupported by this device or host. Use screen_read_ui_tree or screen_find_ui_element for the rest of this task; do not capture again."
+                failureCount >= 2 ->
+                    "Screen capture failed twice. Use screen_read_ui_tree or screen_find_ui_element for the rest of this task; do not capture again."
+                retryCapture ->
+                    "Retry screen_capture_visual once. If the fresh capture also fails, continue with screen_read_ui_tree or screen_find_ui_element."
+                else -> screenRecoveryHint(result.code)
+            }
+            val recoveryTool = when {
+                result.code == ScreenAutomationErrorCodes.VISUAL_SCREENSHOT_UNSUPPORTED -> "screen_read_ui_tree"
+                failureCount >= 2 -> "screen_read_ui_tree"
+                else -> screenRecoveryTool(result.code)
+            }
             screenErrorResult(
                 callId = call.id,
                 toolName = name,
                 code = result.code,
-                message = result.message ?: "Unable to capture the current screen."
+                message = result.message ?: "Unable to capture the current screen.",
+                recoveryHint = recoveryHint,
+                recoveryTool = recoveryTool
             )
         }
+    }
+
+    private fun recordCaptureFailure(sessionId: String): Int = synchronized(failedCapturesBySession) {
+        val count = (failedCapturesBySession[sessionId] ?: 0) + 1
+        failedCapturesBySession[sessionId] = count
+        while (failedCapturesBySession.size > MAX_TRACKED_CAPTURE_FAILURE_SESSIONS) {
+            failedCapturesBySession.entries.firstOrNull()?.let { failedCapturesBySession.remove(it.key) }
+        }
+        count
+    }
+
+    private fun clearCaptureFailures(sessionId: String) = synchronized(failedCapturesBySession) {
+        failedCapturesBySession.remove(sessionId)
+        Unit
+    }
+
+    private companion object {
+        const val MAX_TRACKED_CAPTURE_FAILURE_SESSIONS = 16
     }
 }
 
@@ -231,7 +282,7 @@ class ScreenVisualGestureTool(
     override val name: String = "screen_visual_gesture"
 ) : AgentTool {
     override val description: String =
-        "Performs a bounded coordinate gesture against a fresh screen_capture_visual observation. Use only when the accessibility tree cannot expose a reliable target."
+        "Performs a bounded coordinate gesture against a fresh screen_capture_visual observation. Use the latest observationId and a normalized target rectangle identified from that screenshot."
 
     override val inputSchema: JsonObject = buildJsonObject {
         put("type", "object")
@@ -363,7 +414,7 @@ class ScreenGestureTool(
     override val name: String = "screen_gesture"
 ) : AgentTool {
     override val description: String =
-        "Performs a coordinate gesture using the current screen dimensions. Use only when the UI tree cannot expose the target."
+        "Performs a coordinate gesture using the current screen dimensions. Prefer screen_visual_gesture when a fresh screenshot observation is available; otherwise ground coordinates in a current accessibility snapshot."
 
     override val inputSchema: JsonObject = buildJsonObject {
         put("type", "object")

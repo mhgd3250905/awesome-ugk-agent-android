@@ -56,7 +56,7 @@ class AndroidAccessibilityStatusTool(
             put(
                 "nextAction",
                 when {
-                    ready -> "Call screen_read_ui_tree before interacting with another app."
+                    ready -> "Continue with the screen observation workflow and tools available in this host."
                     !enabled -> "Call open_android_accessibility_settings and wait for the user to enable the host service."
                     else -> "The service is enabled but not connected yet; wait for onServiceConnected and check again."
                 }

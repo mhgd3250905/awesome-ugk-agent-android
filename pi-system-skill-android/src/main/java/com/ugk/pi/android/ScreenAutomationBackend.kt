@@ -27,7 +27,7 @@ interface ScreenAutomationBackend {
 }
 
 /**
- * 可选的视觉兜底能力。单独定义接口，避免破坏已有宿主对
+ * 可选的视觉观察能力。单独定义接口，避免破坏已有宿主对
  * [ScreenAutomationBackend] 的实现与二进制兼容性。
  */
 interface ScreenVisualAutomationBackend {

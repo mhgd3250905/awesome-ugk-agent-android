@@ -39,7 +39,7 @@ object AndroidSystemSkills {
 
                 Before reading or operating another app's UI, call get_android_accessibility_status. Continue only when readyForScreenAutomation=true.
                 If the service is disabled, call open_android_accessibility_settings, explain that the user must enable the host service manually, and wait for the user to return before checking status again. Android does not allow the Agent to grant this permission silently.
-                Once ready, call screen_read_ui_tree before choosing a node. Use screen_perform_action for node actions and screen_gesture only when the UI tree cannot expose the target. After every launch, click, text entry, scroll, or gesture, read the screen again and verify the result.
+                Once ready, follow the observation workflow provided by the host's screen automation Skill. Use a fresh screenshot as primary evidence when the host exposes visual screen tools; otherwise use the structure tree. Use screen_perform_action for exact semantic node actions when a fresh snapshot provides the target. After every launch, click, text entry, scroll, or gesture, observe the screen again and verify the result.
 
                 A successful launch or gesture only means Android accepted the request. It does not prove that the target screen or action completed.
             """.trimIndent(),
