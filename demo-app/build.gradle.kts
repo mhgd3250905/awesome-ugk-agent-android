@@ -70,8 +70,8 @@ android {
         applicationId = "com.ugk.pi.agent"
         minSdk = 24
         targetSdk = 36
-        versionCode = 108
-        versionName = "1.2.1"
+        versionCode = 109
+        versionName = "1.3.0"
         testInstrumentationRunner = "androidx.test.runner.AndroidJUnitRunner"
     }
 
@@ -132,6 +132,7 @@ dependencies {
     implementation(project(":ugk-pi-android"))
     implementation(project(":pi-file-skill-android"))
     implementation(project(":pi-schedule-skill-android"))
+    implementation(project(":pi-attention-skill-android"))
     implementation(project(":ugk-agent-task-runtime-android"))
     implementation(project(":pi-system-skill-android"))
     implementation(project(":pi-agent-skill-runtime-android"))

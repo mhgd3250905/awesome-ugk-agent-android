@@ -1067,6 +1067,7 @@ class MainActivity : ComponentActivity() {
         conversationRuntime.agentRuntime = DemoAgentRuntimeFactory.create(
             context = applicationContext,
             delayedTaskController = delayedTasks,
+            urgentMessagePresenter = processScope.urgentMessagePresenter,
             confirmationPresenter = confirmationPresenter,
             shouldBypassConfirmation = {
                 processAuthorizationStore.isFullAuthorizationEnabled()

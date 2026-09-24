@@ -13,7 +13,7 @@ Android Agent Runtime SDK：提供通用 Agent 工具循环、Android Skill，�
 - v1 不支持、不打包、不宣称 Node.js、Git、OpenSSH、jq。
 - Runtime 无 UI，不要求安装 Termux 或第二个 App；它与宿主共享 Android UID，不是安全沙箱。
 - `pi-system-skill-android` 提供白名单 Android 原生 Intent Tool；打开网页、相机、拨号、地图、分享等动作不通过终端执行。
-- `demo-app` 当前本地测试版本为 `1.1.0`（`versionCode 106`），包含视觉优先屏幕自动化；最近的功能源码提交为 `2d01a70`，Jev 遗留试验数据清理提交为 `e4c422d`。`1.1.0` 尚未提交 Play，也未在本次收口中创建发布标签。此前 `1.0.5 / 105` 版本边界为 `demo-app-v1.0.5@11d764a`；其 Play 轨道状态尚无外部观察证据。自 `1.0.2` 起以 `com.ugk.pi.agent` 身份经 Google Play 分发：`1.0.2 (102)` 封闭测试全球上线（177 国家/地区，2026-09-01），`1.0.3 (103)` 悬浮窗软键盘避让与 `1.0.4 (104)` Play 应用内更新提示（FLEXIBLE）均已发布到内部测试轨道（2026-09-02）。`0.9.x` 及更早的变更明细见 [`docs/demo-app-version-ledger.md`](docs/demo-app-version-ledger.md)。
+- `demo-app` 当前源码版本为本地测试 `1.3.0`（`versionCode 109`），包含视觉优先屏幕自动化、单对话延时任务、即时通知与重要悬浮提醒；本版本尚未安装真机或提交 Play。此前 `1.2.0 / 107` 的延时功能已有用户真机反馈，`1.2.1 / 108` 为确认与等待界面视觉收口。历史版本与轨道状态见 [`docs/demo-app-version-ledger.md`](docs/demo-app-version-ledger.md)。
 - 2026-08-29 已完成快速迭代后的模块化架构收敛：生命周期、配置、Provider、会话、transcript、capability assembly 与 Terminal/Screen interlock 均有单一 owner；本机 JVM、Debug/Release 构建和 Terminal 包验收通过，设备/发布矩阵仍未关闭。
 
 ## 模块
@@ -24,6 +24,7 @@ Android Agent Runtime SDK：提供通用 Agent 工具循环、Android Skill，�
 :pi-terminal-skill-android   terminal_bash_execute Agent Tool
 :pi-file-skill-android       应用私有文件 Skill
 :pi-schedule-skill-android   定时任务 Skill
+:pi-attention-skill-android  可选的即时通知与宿主悬浮提醒 Skill
 :ugk-agent-task-runtime-android Android 定时任务持久化、AlarmManager/JobScheduler 与通知运行时
 :pi-agent-skill-runtime-android 文件型 SKILL.md 运行时与 agent-memory 记忆 Skill
 :pi-system-skill-android     系统设置/权限/Intent/剪贴板 Skill
@@ -43,7 +44,7 @@ Windows PowerShell：
 
 完整单元测试、双宿主仪器测试和 Runtime 静态验收见 [`AGENTS.md`](AGENTS.md) 与 [`docs/terminal-runtime-validation.md`](docs/terminal-runtime-validation.md)。
 
-当前授权真机以 [`HANDOVER.md`](HANDOVER.md) 为准，仅允许操作小米设备（`QSG6Q8IFDMDELVGQ`、`2304FPN6DC`/`e0b93f2f`，以 HANDOVER 的当期清单为准）。此前与 `0.8.0` 生产代码一致的 Debug APK 已以 `0.8.0 / versionCode 10` 元数据通过 `adb install -r -d` 覆盖安装到该设备，未卸载、未清理数据；该事实仅证明安装与 package metadata，不等同于 skill authoring 行为验收。`1.0.2`–`1.0.4` 的既有验收均在 `ugk_dev_api35_smooth` 模拟器完成。2026-09-24，用户反馈在真机安装测试了带视觉优先改动的 `1.0.5 / versionCode 105` Debug APK，效果不错；设备型号、系统版本和独立日志未记录，因此这里只记为用户反馈，不视作独立复核。当前源码版本元数据为 `1.1.0 / versionCode 106`，本机 Debug 构建不代表用户已在真机验证该版本，Agent 本阶段也未操作真机。
+当前授权真机以 [`HANDOVER.md`](HANDOVER.md) 为准，仅允许操作小米设备（`QSG6Q8IFDMDELVGQ`、`2304FPN6DC`/`e0b93f2f`，以 HANDOVER 的当期清单为准）。此前与 `0.8.0` 生产代码一致的 Debug APK 已以 `0.8.0 / versionCode 10` 元数据通过 `adb install -r -d` 覆盖安装到该设备，未卸载、未清理数据；该事实仅证明安装与 package metadata，不等同于 skill authoring 行为验收。`1.0.2`–`1.0.4` 的既有验收均在 `ugk_dev_api35_smooth` 模拟器完成。2026-09-24，用户反馈在真机安装测试了带视觉优先改动的 `1.0.5 / versionCode 105` Debug APK，效果不错；设备型号、系统版本和独立日志未记录，因此这里只记为用户反馈，不视作独立复核。当前源码版本元数据为 `1.3.0 / versionCode 109`，本机 Debug 构建不代表用户已在真机验证该版本，Agent 本阶段也未操作真机。
 
 ## 文档入口
 
@@ -61,6 +62,7 @@ Windows PowerShell：
 - [`docs/android-accessibility-screen-automation.md`](docs/android-accessibility-screen-automation.md)：Android Accessibility 屏幕自动化 Tool/Skill、宿主接入和验证边界；
 - [`docs/android-clipboard.md`](docs/android-clipboard.md)：Android 文本剪贴板 Tool/Skill、确认策略、隐私和 API 限制。
 - [`docs/android-scheduled-tasks.md`](docs/android-scheduled-tasks.md)：定时任务控制面、Android 运行时适配、能力边界和验收方法。
+- [`docs/android-agent-attention.md`](docs/android-agent-attention.md)：即时通知 AAR、悬浮提醒宿主适配和外部接入。
 - [`docs/android-agent-skills.md`](docs/android-agent-skills.md)：文件型 Skill、命名根嵌入、动态加载和 agent-memory 事实源。
 - [`docs/sdk-optimization-ledger.md`](docs/sdk-optimization-ledger.md)：SDK 架构整改阶段、checkpoint、验证与遗留边界。
 - [`docs/sdk-core-consumer-contract.md`](docs/sdk-core-consumer-contract.md)：当前 Core AAR 外部消费和 API/ABI 证据边界。

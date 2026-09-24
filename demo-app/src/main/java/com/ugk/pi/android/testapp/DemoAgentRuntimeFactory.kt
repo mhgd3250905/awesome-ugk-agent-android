@@ -19,6 +19,10 @@ import com.ugk.pi.android.SkillRepository
 import com.ugk.pi.android.UserConfirmationDialogPresenter
 import com.ugk.pi.android.ScheduleTaskAgentPlugin
 import com.ugk.pi.terminal.skill.TerminalAgentPlugin
+import com.ugk.pi.attention.AgentAttentionPlugin
+import com.ugk.pi.attention.AgentNotificationConfig
+import com.ugk.pi.attention.AndroidNotificationPublisher
+import com.ugk.pi.attention.UrgentMessagePresenter
 import java.io.File
 
 /**
@@ -32,6 +36,7 @@ internal object DemoAgentRuntimeFactory {
         scheduleStore: AgentTaskStore? = null,
         scheduleScheduler: AgentTaskScheduler? = null,
         delayedTaskController: DemoDelayedTaskController? = null,
+        urgentMessagePresenter: UrgentMessagePresenter? = null,
         confirmationPresenter: UserConfirmationDialogPresenter,
         shouldBypassConfirmation: () -> Boolean,
         toolDecorator: AgentToolDecorator = AgentToolDecorator.Identity,
@@ -71,6 +76,20 @@ internal object DemoAgentRuntimeFactory {
             .register(
                 DemoImportedFilePlugin(
                     DemoFileImportStore(appContext).workspaceRoot
+                )
+            )
+            .register(
+                AgentAttentionPlugin(
+                    notificationPublisher = AndroidNotificationPublisher(
+                        appContext,
+                        AgentNotificationConfig(
+                            channelId = "ugk_agent_messages",
+                            channelName = "Agent 消息",
+                            channelDescription = "Agent 请求发送的消息与重要提醒",
+                            smallIconResId = R.drawable.ic_agent_notification
+                        )
+                    ),
+                    urgentPresenter = urgentMessagePresenter
                 )
             )
         if (delayedTaskController != null) {
