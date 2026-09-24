@@ -443,10 +443,9 @@ class MainActivity : ComponentActivity() {
         }
         renderRunState()
         renderDelayedTaskState(delayedTasks.snapshot())
-        // The main chat is the primary surface. The overlay is only a
-        // background-run summary, so keep it hidden while this Activity is
-        // visible to avoid competing with the conversation.
-        floatingWindow.hide()
+        // Hide the ordinary background-run surface while chat is visible.
+        // An urgent takeover remains visible until the user closes it.
+        floatingWindow.hideOrdinaryForActivity()
         inAppUpdateController.checkOnResume()
     }
 

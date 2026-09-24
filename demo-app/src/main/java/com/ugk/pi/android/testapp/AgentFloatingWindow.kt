@@ -55,6 +55,7 @@ class AgentFloatingWindow(private val context: Context) : ConfirmationOverlayHos
 
     private var expandedView: View? = null
     private var collapsedView: View? = null
+    private var takeoverView: View? = null
     private var contentContainer: LinearLayout? = null
     private var scrollView: ScrollView? = null
     private var statusText: TextView? = null
@@ -74,7 +75,6 @@ class AgentFloatingWindow(private val context: Context) : ConfirmationOverlayHos
     private var composerDraft = ""
     private var pendingConfirmation: AgentOverlayConfirmation? = null
     private var confirmationResult: ((String) -> Unit)? = null
-    private var urgentMessage: UrgentMessage? = null
     private var urgentPreviousSurface: UrgentPreviousSurface = UrgentPreviousSurface.HIDDEN
     private var expandedX = dp(16)
     private var expandedY = dp(160)
@@ -120,13 +120,32 @@ class AgentFloatingWindow(private val context: Context) : ConfirmationOverlayHos
         softInputMode = WindowManager.LayoutParams.SOFT_INPUT_STATE_ALWAYS_HIDDEN
     }
 
+    private val takeoverParams = WindowManager.LayoutParams().apply {
+        width = WindowManager.LayoutParams.MATCH_PARENT
+        height = WindowManager.LayoutParams.MATCH_PARENT
+        type = overlayType
+        flags = WindowManager.LayoutParams.FLAG_NOT_FOCUSABLE or
+                WindowManager.LayoutParams.FLAG_LAYOUT_IN_SCREEN
+        format = PixelFormat.TRANSLUCENT
+        gravity = Gravity.TOP or Gravity.START
+        x = 0
+        y = 0
+    }
+
     fun show() {
+        if (takeoverView != null) {
+            // MainActivity may have moved to the background while the takeover is open.
+            if (urgentPreviousSurface == UrgentPreviousSurface.HIDDEN) {
+                urgentPreviousSurface = UrgentPreviousSurface.COLLAPSED
+            }
+            return
+        }
         if (!Settings.canDrawOverlays(context) || isShowing()) return
         showCollapsed()
     }
 
     fun showExpanded() {
-        if (!Settings.canDrawOverlays(context)) return
+        if (!Settings.canDrawOverlays(context) || takeoverView != null) return
         if (expandedView != null) return
 
         collapsedX = collapsedParams.x
@@ -155,45 +174,75 @@ class AgentFloatingWindow(private val context: Context) : ConfirmationOverlayHos
     }
 
     fun hide() {
-        urgentMessage = null
         urgentPreviousSurface = UrgentPreviousSurface.HIDDEN
+        hideTakeover()
         hideExpanded()
         hideCollapsed()
     }
 
-    fun isShowing(): Boolean = expandedView != null || collapsedView != null
+    /** Keep an urgent takeover visible when the main Activity returns to the foreground. */
+    fun hideOrdinaryForActivity() {
+        if (takeoverView != null) {
+            urgentPreviousSurface = UrgentPreviousSurface.HIDDEN
+        } else {
+            hide()
+        }
+    }
 
-    /** Presents an interruptive card in the existing window, without adding a second overlay. */
+    fun isShowing(): Boolean = expandedView != null || collapsedView != null || takeoverView != null
+
+    /** Temporarily replaces the ordinary bubble/chat surface with an app-owned screen. */
     fun showUrgentMessage(message: UrgentMessage): UrgentPresentationStatus {
         if (!Settings.canDrawOverlays(context)) return UrgentPresentationStatus.PERMISSION_DENIED
-        if (pendingConfirmation != null || externalAutomationMode) return UrgentPresentationStatus.BUSY
-        if (urgentMessage == null) {
-            urgentPreviousSurface = when {
-                expandedView != null -> UrgentPreviousSurface.EXPANDED
-                collapsedView != null -> UrgentPreviousSurface.COLLAPSED
-                else -> UrgentPreviousSurface.HIDDEN
-            }
+        if (pendingConfirmation != null || externalAutomationMode || takeoverView != null) {
+            return UrgentPresentationStatus.BUSY
         }
-        urgentMessage = message
-        showExpanded()
-        if (expandedView == null) {
-            urgentMessage = null
-            if (urgentPreviousSurface == UrgentPreviousSurface.HIDDEN) hideCollapsed()
-            urgentPreviousSurface = UrgentPreviousSurface.HIDDEN
+        val previous = when {
+            expandedView != null -> UrgentPreviousSurface.EXPANDED
+            collapsedView != null -> UrgentPreviousSurface.COLLAPSED
+            else -> UrgentPreviousSurface.HIDDEN
+        }
+        val view = UrgentTakeoverView.build(
+            context,
+            message,
+            onClose = { dismissUrgentMessage() },
+            onOpenApp = {
+                dismissUrgentMessage()
+                onOpenApp?.invoke()
+            }
+        )
+        hideExpanded()
+        hideCollapsed()
+        if (!addViewSafely(view, takeoverParams)) {
+            restoreSurface(previous)
             return UrgentPresentationStatus.FAILED
         }
-        renderSnapshot()
+        urgentPreviousSurface = previous
+        takeoverView = view
         return UrgentPresentationStatus.SHOWN
     }
 
     private fun dismissUrgentMessage() {
         val previous = urgentPreviousSurface
-        urgentMessage = null
+        hideTakeover()
         urgentPreviousSurface = UrgentPreviousSurface.HIDDEN
+        restoreSurface(previous)
+    }
+
+    private fun hideTakeover() {
+        takeoverView?.let(::removeViewSafely)
+        takeoverView = null
+    }
+
+    private fun restoreSurface(previous: UrgentPreviousSurface) {
         when (previous) {
-            UrgentPreviousSurface.HIDDEN -> hide()
-            UrgentPreviousSurface.COLLAPSED -> collapseToBubble()
-            UrgentPreviousSurface.EXPANDED -> renderSnapshot()
+            UrgentPreviousSurface.HIDDEN -> Unit
+            UrgentPreviousSurface.COLLAPSED -> showCollapsed()
+            UrgentPreviousSurface.EXPANDED -> {
+                collapsedX = expandedX
+                collapsedY = expandedY
+                showExpanded()
+            }
         }
     }
 
@@ -204,6 +253,7 @@ class AgentFloatingWindow(private val context: Context) : ConfirmationOverlayHos
         onResult: (String) -> Unit
     ): Boolean {
         if (!Settings.canDrawOverlays(context)) return false
+        if (takeoverView != null) dismissUrgentMessage()
         confirmationResult = onResult
         pendingConfirmation = request.toOverlayConfirmation()
         snapshot = snapshot.copy(pendingConfirmation = pendingConfirmation)
@@ -252,6 +302,7 @@ class AgentFloatingWindow(private val context: Context) : ConfirmationOverlayHos
     }
 
     fun clear() {
+        if (takeoverView != null) dismissUrgentMessage()
         legacyLogs.clear()
         expandedStepKeys.clear()
         composerDraft = ""
@@ -259,7 +310,6 @@ class AgentFloatingWindow(private val context: Context) : ConfirmationOverlayHos
         onDraftChanged?.invoke("")
         pendingConfirmation = null
         confirmationResult = null
-        urgentMessage = null
         urgentPreviousSurface = UrgentPreviousSurface.HIDDEN
         snapshot = snapshot.copy(
             statusLabel = "Agent 就绪",
@@ -290,6 +340,7 @@ class AgentFloatingWindow(private val context: Context) : ConfirmationOverlayHos
      * confirmation button.
      */
     fun setExternalAutomationMode(active: Boolean) {
+        if (active && takeoverView != null) dismissUrgentMessage()
         externalAutomationMode = active
         if (active && expandedView != null && pendingConfirmation == null) {
             collapseToBubble()
@@ -378,7 +429,6 @@ class AgentFloatingWindow(private val context: Context) : ConfirmationOverlayHos
     ) {
         RUNNING("运行中", { Ui.Primary }),
         CONFIRMING("待确认", { Ui.Warning }),
-        ATTENTION("重要提醒", { Ui.Warning }),
         COMPLETED("完成", { Ui.Success }),
         FAILED("失败", { Ui.Danger }),
         IDLE("就绪", { Ui.TextMuted })
@@ -388,7 +438,6 @@ class AgentFloatingWindow(private val context: Context) : ConfirmationOverlayHos
         if (snapshot.pendingConfirmation != null || snapshot.statusLabel.contains("确认")) {
             return CollapsedDisplayState.CONFIRMING
         }
-        if (urgentMessage != null) return CollapsedDisplayState.ATTENTION
         if (snapshot.isBusy) {
             return CollapsedDisplayState.RUNNING
         }
@@ -1043,10 +1092,6 @@ class AgentFloatingWindow(private val context: Context) : ConfirmationOverlayHos
             addConfirmation(container, confirmation)
         }
 
-        urgentMessage?.let { message ->
-            addUrgentMessage(container, message)
-        }
-
         // Keep the user's prompt before the run, but place the assistant's
         // final answer after the process and activity history. This mirrors
         // the main conversation timeline instead of putting the answer above
@@ -1097,7 +1142,7 @@ class AgentFloatingWindow(private val context: Context) : ConfirmationOverlayHos
             )
         }
         scrollView?.post {
-            if (snapshot.pendingConfirmation != null || urgentMessage != null) {
+            if (snapshot.pendingConfirmation != null) {
                 scrollView?.scrollTo(0, 0)
             } else {
                 scrollView?.fullScroll(View.FOCUS_DOWN)
@@ -1169,67 +1214,6 @@ class AgentFloatingWindow(private val context: Context) : ConfirmationOverlayHos
             LinearLayout.LayoutParams.MATCH_PARENT,
             LinearLayout.LayoutParams.WRAP_CONTENT
         ).apply { bottomMargin = dp(6) })
-    }
-
-    private fun addUrgentMessage(container: LinearLayout, message: UrgentMessage) {
-        val card = LinearLayout(context).apply {
-            orientation = LinearLayout.VERTICAL
-            background = Ui.rounded(context, Ui.WarningSoft, 16, Ui.Warning)
-            setPadding(dp(14), dp(12), dp(14), dp(12))
-            contentDescription = "重要提醒：${message.title}。${message.body}"
-        }
-        card.addView(TextView(context).apply {
-            text = "●  重要提醒"
-            textSize = 11f
-            setTypeface(null, Typeface.BOLD)
-            setTextColor(Ui.WarningOnContainer)
-        })
-        card.addView(TextView(context).apply {
-            text = message.title
-            textSize = 16f
-            setTypeface(null, Typeface.BOLD)
-            setTextColor(Ui.TextPrimary)
-            setPadding(0, dp(8), 0, dp(4))
-        })
-        card.addView(TextView(context).apply {
-            text = message.body
-            textSize = 13f
-            setTextColor(Ui.TextPrimary)
-            setTextIsSelectable(true)
-        })
-        card.addView(TextView(context).apply {
-            text = message.reason
-            textSize = 11f
-            setTextColor(Ui.TextSecondary)
-            setPadding(0, dp(8), 0, dp(10))
-        })
-        val actions = LinearLayout(context).apply {
-            orientation = LinearLayout.HORIZONTAL
-            gravity = Gravity.END
-        }
-        actions.addView(actionButton(
-            label = "知道了",
-            description = "关闭重要提醒",
-            foregroundColor = Ui.TextSecondary,
-            backgroundColor = Ui.SurfaceElevated,
-            pressedBackgroundColor = Ui.SurfaceSoft
-        ) { dismissUrgentMessage() }, LinearLayout.LayoutParams(0, dp(48), 1f))
-        actions.addView(actionButton(
-            label = "打开主界面",
-            description = "打开 Agent 主界面查看重要提醒",
-            foregroundColor = Ui.OnPrimary,
-            backgroundColor = Ui.Primary,
-            pressedBackgroundColor = Ui.PrimaryPressed,
-            strokeColor = Ui.Primary
-        ) {
-            dismissUrgentMessage()
-            onOpenApp?.invoke()
-        }, LinearLayout.LayoutParams(0, dp(48), 1f).apply { marginStart = dp(8) })
-        card.addView(actions)
-        container.addView(card, LinearLayout.LayoutParams(
-            LinearLayout.LayoutParams.MATCH_PARENT,
-            LinearLayout.LayoutParams.WRAP_CONTENT
-        ).apply { bottomMargin = dp(8) })
     }
 
     private fun addConfirmation(

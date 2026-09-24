@@ -8,8 +8,17 @@ fun interface UrgentMessagePresenter {
 data class UrgentMessage(
     val title: String,
     val body: String,
-    val reason: String
+    val reason: String,
+    val accent: UrgentAccent = UrgentAccent.AMBER,
+    val blocks: List<UrgentContentBlock> = emptyList()
 )
+
+/** A bounded presentation vocabulary. Hosts may render it in their own visual language. */
+enum class UrgentAccent { AMBER, GREEN, BLUE, RED }
+
+enum class UrgentBlockType { HEADING, PARAGRAPH, CALLOUT, BULLET }
+
+data class UrgentContentBlock(val type: UrgentBlockType, val text: String)
 
 enum class UrgentPresentationStatus {
     SHOWN,

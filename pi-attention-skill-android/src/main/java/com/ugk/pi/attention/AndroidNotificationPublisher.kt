@@ -16,12 +16,16 @@ data class AgentNotificationConfig(
     val channelId: String,
     val channelName: String,
     val smallIconResId: Int,
-    val channelDescription: String? = null
+    val channelDescription: String? = null,
+    val importance: Int = NotificationManager.IMPORTANCE_DEFAULT
 ) {
     init {
         require(channelId.isNotBlank()) { "channelId must not be blank" }
         require(channelName.isNotBlank()) { "channelName must not be blank" }
         require(smallIconResId != 0) { "smallIconResId must be a valid resource ID" }
+        require(importance in NotificationManager.IMPORTANCE_MIN..NotificationManager.IMPORTANCE_HIGH) {
+            "importance must be between IMPORTANCE_MIN and IMPORTANCE_HIGH"
+        }
     }
 }
 
@@ -68,7 +72,7 @@ class AndroidNotificationPublisher(context: Context, private val config: AgentNo
                     NotificationChannel(
                         config.channelId,
                         config.channelName,
-                        NotificationManager.IMPORTANCE_DEFAULT
+                        config.importance
                     ).apply { description = config.channelDescription }
                 )
                 if (manager.getNotificationChannel(config.channelId)?.importance ==
@@ -83,7 +87,16 @@ class AndroidNotificationPublisher(context: Context, private val config: AgentNo
                 Notification.Builder(appContext, config.channelId)
             } else {
                 @Suppress("DEPRECATION")
-                Notification.Builder(appContext).apply { setPriority(Notification.PRIORITY_DEFAULT) }
+                Notification.Builder(appContext).apply {
+                    setPriority(
+                        when (config.importance) {
+                            NotificationManager.IMPORTANCE_HIGH -> Notification.PRIORITY_HIGH
+                            NotificationManager.IMPORTANCE_DEFAULT -> Notification.PRIORITY_DEFAULT
+                            NotificationManager.IMPORTANCE_LOW -> Notification.PRIORITY_LOW
+                            else -> Notification.PRIORITY_MIN
+                        }
+                    )
+                }
             }
             builder
                 .setSmallIcon(config.smallIconResId)

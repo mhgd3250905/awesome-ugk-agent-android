@@ -86,10 +86,12 @@ internal object DemoAgentRuntimeFactory {
                     notificationPublisher = AndroidNotificationPublisher(
                         appContext,
                         AgentNotificationConfig(
-                            channelId = "ugk_agent_messages",
-                            channelName = "Agent 消息",
-                            channelDescription = "Agent 请求发送的消息与重要提醒",
-                            smallIconResId = R.drawable.ic_agent_notification
+                            // Channel importance is immutable after creation; use a new ID for heads-up eligibility.
+                            channelId = "ugk_agent_alerts_high_v1",
+                            channelName = "Agent 醒目提醒",
+                            channelDescription = "Agent 请求发送的通知与重要提醒",
+                            smallIconResId = R.drawable.ic_agent_notification,
+                            importance = android.app.NotificationManager.IMPORTANCE_HIGH
                         )
                     ),
                     urgentPresenter = urgentMessagePresenter

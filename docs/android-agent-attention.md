@@ -2,7 +2,7 @@
 
 更新时间：2026-09-25
 
-`pi-attention-skill-android` 是可选的 Android AAR。它让宿主 App 给 Agent 注册两种即时展示能力：系统通知，以及由宿主实现的重要消息展示。它不创建定时器、后台服务或第二个悬浮窗。延时任务到点后仍由原会话继续运行，Agent 可在该次运行中调用本模块的工具。
+`pi-attention-skill-android` 是可选的 Android AAR。它让宿主 App 给 Agent 注册两种即时展示能力：系统通知，以及由宿主实现的重要消息展示。它不创建定时器或后台服务。延时任务到点后仍由原会话继续运行，Agent 可在该次运行中调用本模块的工具。
 
 ## 能力边界
 
@@ -17,13 +17,15 @@
 
 ## Agent 如何知道和选择
 
-`AgentAttentionPlugin` 同时注册两个实际工具、描述使用场景的 `AndroidSkill`，以及每次模型请求都可见的简短能力说明。Agent 根据用户目的和当前情境决定是否通知：普通通知适合用户明确要求获知结果、或后台任务完成需要提醒；重要悬浮卡只用于用户合理预期被打断的紧急信息。重要悬浮工具已尝试发送同内容通知，不能为同一事件再调用普通通知工具。前台对话的普通答复通常不需要重复发通知。
+`AgentAttentionPlugin` 同时注册两个实际工具、描述使用场景的 `AndroidSkill`，以及每次模型请求都可见的简短能力说明。Agent 根据用户目的和当前情境决定是否通知：普通通知适合用户明确要求获知结果、或后台任务完成需要提醒；全屏重要提醒只用于用户合理预期被打断的时间敏感信息。重要悬浮工具已尝试发送同内容通知，不能为同一事件再调用普通通知工具。前台对话的普通答复通常不需要重复发通知。
+
+`agent_show_urgent_message` 必填 `title`、`body`、`reason`。Agent 还可选 `accent`（`amber`、`green`、`blue`、`red`）和有序 `blocks`（最多 8 个 `heading`、`paragraph`、`callout`、`bullet` 元素，各元素为最多 240 字的纯文本）。`body` 用作通知摘要和无元素时的悬浮展示兜底；给出 `blocks` 时由宿主按顺序渲染这些元素。颜色与元素结构由 Agent 选择，实际 View、可滚动布局和固定关闭入口由宿主掌控，不接受任意 HTML、脚本、尺寸或屏幕坐标。
 
 Skill 的触发词只控制详细说明何时补充到上下文，不在宿主端判断用户意图或直接执行通知；两个工具和简短能力说明始终提供给 Agent。工具立即执行，不负责创建未来定时任务；延时任务到点后，Agent 可按原请求决定是否使用提醒能力。实际投递与展示状态以工具结果为准。
 
 ## 外部 Android 宿主接入
 
-当前本地开发 publication 坐标是 `com.ugk.pi:pi-attention-skill-android:0.1.0`，POM 声明了对 `com.ugk.pi:ugk-pi-android:0.1.0` 的依赖。构建并发布到本机 Maven 仓库：
+当前本地开发 publication 坐标是 `com.ugk.pi:pi-attention-skill-android:0.2.0`，POM 声明了对 `com.ugk.pi:ugk-pi-android:0.1.0` 的依赖。`0.2.0` 新增宿主通知重要度配置，以及可选的结构化整屏提醒内容；已有三参数 `UrgentMessage` 源码调用仍可使用默认值。构建并发布到本机 Maven 仓库：
 
 ```powershell
 .\gradlew.bat :ugk-pi-android:publishReleasePublicationToMavenLocal :pi-attention-skill-android:publishReleasePublicationToMavenLocal --console=plain
@@ -33,7 +35,7 @@ Skill 的触发词只控制详细说明何时补充到上下文，不在宿主�
 
 ```kotlin
 dependencies {
-    implementation("com.ugk.pi:pi-attention-skill-android:0.1.0")
+    implementation("com.ugk.pi:pi-attention-skill-android:0.2.0")
 }
 ```
 
@@ -50,9 +52,10 @@ dependencies {
 val publisher = AndroidNotificationPublisher(
     applicationContext,
     AgentNotificationConfig(
-        channelId = "my_agent_messages",
-        channelName = "Agent 消息",
-        smallIconResId = R.drawable.ic_stat_agent
+        channelId = "my_agent_alerts_high_v1",
+        channelName = "Agent 醒目提醒",
+        smallIconResId = R.drawable.ic_stat_agent,
+        importance = NotificationManager.IMPORTANCE_HIGH
     )
 )
 val presenter = UrgentMessagePresenter { message ->
@@ -66,11 +69,11 @@ val runtime = AgentRuntime.Builder()
     .build()
 ```
 
-宿主可省略 `presenter`，只注册普通通知工具。若宿主已有悬浮窗，应把重要消息卡片放进同一个窗口，避免两个窗口互相遮挡。`Demo` 的适配器位于 `DemoUrgentMessagePresenter.kt`，重要卡片在 `AgentFloatingWindow` 中渲染；屏幕自动化或用户确认占用窗口时返回 `busy`。宿主在前台和后台都可以尝试展示；进程被系统结束后不会继续运行或补发。
+宿主可省略 `presenter`，只注册普通通知工具。`Demo` 的适配器位于 `DemoUrgentMessagePresenter.kt`：`AgentFloatingWindow` 暂时撤下原悬浮球/对话框，使用同一个进程级控制器展示 `UrgentTakeoverView` 的整屏画布；右上角关闭和底部“打开对话”始终由 App 提供。用户关闭后按所在前后台状态恢复此前的普通悬浮表面。已有整屏提醒、屏幕自动化或用户确认占用窗口时返回 `busy`；后两者开始时会撤下整屏提醒，通知仍留在系统通知栏。宿主在前台和后台都可以尝试展示；进程被系统结束后不会继续运行或补发。
 
 ## Android 行为
 
-- Android 8+ 的通知必须使用 channel；channel 首次创建后的重要度由用户控制，代码不能覆盖用户设置。模块使用宿主给定的固定渠道和默认重要度，不允许模型动态创建渠道。[Android 通知渠道](https://developer.android.com/develop/ui/compose/notifications/channels)
+- Android 8+ 的通知必须使用 channel；channel 首次创建后的重要度由用户控制，代码不能覆盖用户设置。模块使用宿主给定的固定渠道，默认重要度是 `DEFAULT`；宿主可通过 `AgentNotificationConfig.importance` 选择重要度。Demo 改用新的 `ugk_agent_alerts_high_v1` 渠道和 `HIGH` 重要度，以提高横幅出现的机会；既有 `ugk_agent_messages` 渠道不修改、不清理。是否显示横幅仍由系统、用户渠道设置、勿扰模式等决定，`posted` 不表示横幅已显示。[Android 通知渠道](https://developer.android.com/develop/ui/compose/notifications/channels)
 - Android 13+ 普通通知需要 `POST_NOTIFICATIONS` 运行时权限。[Android 通知权限](https://developer.android.com/develop/ui/compose/notifications/notification-permission)
 - 跨 App 展示由宿主使用 `SYSTEM_ALERT_WINDOW` 和 `TYPE_APPLICATION_OVERLAY` 等 Android 接口完成；系统可能调整窗口可见性，不能保证覆盖锁屏或系统关键界面。[悬浮窗权限](https://developer.android.com/reference/android/Manifest.permission)、[窗口类型](https://developer.android.com/reference/android/view/WindowManager.LayoutParams)
 - 全屏 Intent 主要针对通话和闹钟，不作为通用 Agent 重要消息通道。[Android 14 全屏通知限制](https://developer.android.com/about/versions/14/behavior-changes-14)
