@@ -262,6 +262,11 @@ class OpenAiChatCompletionsProvider(
                 put("stream", true)
             }
             put("messages", JsonArray(request.messages.map { it.toOpenAiMessage() }))
+            if (request.responseFormat == ModelResponseFormat.JSON_OBJECT) {
+                putJsonObject("response_format") {
+                    put("type", "json_object")
+                }
+            }
             if (request.tools.isNotEmpty()) {
                 put("tools", JsonArray(request.tools.map { it.toOpenAiTool() }))
                 put("tool_choice", "auto")

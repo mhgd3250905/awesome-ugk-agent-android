@@ -4,7 +4,6 @@ import com.ugk.pi.android.AgentCapabilityPlugin
 import com.ugk.pi.android.AgentRunSource
 import com.ugk.pi.android.AgentTool
 import com.ugk.pi.android.AndroidSkill
-import com.ugk.pi.android.AndroidSkillMethod
 import com.ugk.pi.android.ToolCall
 import com.ugk.pi.android.ToolExecutionContext
 import com.ugk.pi.android.ToolResult
@@ -25,33 +24,15 @@ internal class DemoDelayAgentPlugin(
 
     override fun tools(): List<AgentTool> = listOf(ProposeDelayTool(controller))
 
-    override fun skills(): List<AndroidSkill> = listOf(
-        AndroidSkill(
-            id = id,
-            description = "Propose one delayed action in the current conversation after the user asks to do something later.",
-            triggers = listOf(
-                "以后", "之后", "分钟后", "秒后", "小时后", "稍后", "过一会", "定时", "提醒",
-                "later", "minutes", "hours", "after"
-            ),
-            instructions = """
-                When the user asks to perform an action after a relative delay, call demo_delay_propose with delaySeconds and the action to perform later.
-                Do not perform the delayed action now. The app will show the exact action and delay to the user and start the timer only after explicit confirmation.
-                The current Agent turn ends after a successful proposal. At the deadline the app sends the approved action as a new message in this same conversation.
-                Only one delayed task can occupy the conversation. Repeating schedules and cron expressions are not supported here; explain this if requested.
-            """.trimIndent(),
-            methods = listOf(
-                AndroidSkillMethod(
-                    toolName = "demo_delay_propose",
-                    purpose = "Asks the app to confirm one delayed action in the current conversation.",
-                    whenToUse = "The user requests one future action after a relative delay.",
-                    resultSemantics = "A successful proposal ends this Agent turn; the app handles confirmation and later sends a fresh message."
-                )
-            )
-        )
-    )
+    override fun skills(): List<AndroidSkill> = emptyList()
 
     override fun agentInstructions(): List<String> = listOf(
-        "For a one-time delayed request, use demo_delay_propose before doing the requested work. Preserve the user's intended action in instruction; do not claim it is scheduled until the app confirms it."
+        """
+            For a one-time delayed request, call demo_delay_propose before doing the requested work.
+            Preserve the user's intended action in instruction. Do not perform it now or claim it is scheduled until the app confirms it.
+            A successful proposal ends this Agent turn. The app sends the approved action as a new message in this same conversation at the deadline.
+            Only one delayed task can occupy the conversation. Repeating schedules and cron expressions are not supported by this Demo.
+        """.trimIndent()
     )
 }
 

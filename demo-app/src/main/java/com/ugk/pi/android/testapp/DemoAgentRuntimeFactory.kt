@@ -47,10 +47,13 @@ internal object DemoAgentRuntimeFactory {
     ): AgentRuntime {
         val appContext = context.applicationContext
         val config = ApiProviderSettingsStore(appContext).activeConfig()
-        val provider: LLMProvider = config
-            ?.let(ProviderProfile::from)
-            ?.createRuntimeProvider(httpTransport)
-            ?: MissingApiProvider
+        val profile = config?.let(ProviderProfile::from)
+        val baseProvider: LLMProvider = profile?.createRuntimeProvider(httpTransport) ?: MissingApiProvider
+        val provider: LLMProvider = if (profile != null && delayedTaskController != null && !isBackgroundRun) {
+            DemoModelIntentRouter(baseProvider, profile)
+        } else {
+            baseProvider
+        }
 
         // File-backed skills live in the app-private agent-skills directory;
         // packaged skills are seeded once and never overwrite user changes.

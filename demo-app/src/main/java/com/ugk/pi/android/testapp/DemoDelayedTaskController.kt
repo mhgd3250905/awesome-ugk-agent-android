@@ -90,17 +90,8 @@ internal class DemoDelayedTaskController(
         instruction: String,
         delaySeconds: Long
     ): Result<DemoDelayedTask> = withContext(Dispatchers.Main.immediate) {
-        proposeOnMain(sessionId, instruction, delaySeconds)
-    }
-
-    /** Used by the Activity's explicit-delay fast path before starting a model run. */
-    fun proposeOnMain(
-        sessionId: String,
-        instruction: String,
-        delaySeconds: Long
-    ): Result<DemoDelayedTask> {
         val conversationId = conversationRuntime.activeConversationId
-        return when {
+        when {
             delaySeconds !in 1L..86_400L || instruction.isBlank() || instruction.length > 2_000 ->
                 Result.failure(IllegalArgumentException("定时任务时长或内容无效。"))
             state !is DemoDelayedTaskState.Idle ->

@@ -1377,26 +1377,6 @@ class MainActivity : ComponentActivity() {
         conversationRuntime.activeConversationId = activeConversation.id
         floatingWindow.clear()
 
-        // A clear relative-delay command must reach the host confirmation card
-        // even if the selected model elects to answer in text instead of
-        // calling demo_delay_propose. Complex wording still uses the Agent.
-        if (attachments.isEmpty() && images.isEmpty()) {
-            DemoRelativeDelayParser.parse(effectiveText)?.let { request ->
-                delayedTasks.proposeOnMain(session.id, request.instruction, request.delaySeconds)
-                    .getOrNull()?.let { task ->
-                        persistAssistantMessage(
-                            "请在弹窗中确认：${task.delaySeconds} 秒后执行「${task.instruction}」。"
-                        )
-                        // This turn skipped AgentRuntime.run, so rebuild its
-                        // session from the durable user/proposal messages.
-                        conversationRuntime.rememberSession(
-                            activeConversation.id,
-                            createDemoAgentSession(activeConversation)
-                        )
-                        return true
-                    }
-            }
-        }
         addProcessCard()
         floatingWindow.setSending(true)
         floatingWindow.setStatus("思考中")
@@ -1596,36 +1576,7 @@ class MainActivity : ComponentActivity() {
                         }
                     }
                 } else {
-                    var proposedFromText = false
-                    var falseDelayClaim = false
-                    if (runCoordinator.snapshot().source == AgentRunSource.USER &&
-                        delayedTasks.snapshot() is DemoDelayedTaskState.Idle
-                    ) {
-                        val latestUserMessage = activeConversation.messages.lastOrNull { it.role == "user" }?.content
-                        val fallback = latestUserMessage?.let {
-                            DemoRelativeDelayParser.parseAssistantProposal(it, event.content)
-                        }
-                        if (fallback != null) {
-                            proposedFromText = delayedTasks.proposeOnMain(
-                                session.id, fallback.instruction, fallback.delaySeconds
-                            ).isSuccess
-                        }
-                        falseDelayClaim = !proposedFromText && latestUserMessage != null &&
-                            DemoRelativeDelayParser.isUnconfirmedDelayClaim(latestUserMessage, event.content)
-                    }
-                    persistAssistantMessage(
-                        if (falseDelayClaim) {
-                            "这次没有真正创建定时任务，也不会开始倒计时。请再发一次明确的“几分钟后做什么”。"
-                        } else {
-                            event.content
-                        }
-                    )
-                    if (falseDelayClaim) {
-                        conversationRuntime.rememberSession(
-                            activeConversation.id,
-                            createDemoAgentSession(activeConversation)
-                        )
-                    }
+                    persistAssistantMessage(event.content)
                 }
                 runCoordinator.acknowledgeOutcome()
                 floatingWindow.setStatus("已完成")

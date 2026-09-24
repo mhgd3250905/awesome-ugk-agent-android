@@ -6,8 +6,16 @@ import kotlinx.coroutines.flow.flow
 data class ModelRequest(
     val sessionId: String,
     val messages: List<AgentMessage>,
-    val tools: List<AgentToolDefinition>
+    val tools: List<AgentToolDefinition>,
+    val responseFormat: ModelResponseFormat = ModelResponseFormat.TEXT,
+    val runSource: AgentRunSource = AgentRunSource.USER,
+    val isFirstModelRequest: Boolean = false
 )
+
+enum class ModelResponseFormat {
+    TEXT,
+    JSON_OBJECT
+}
 
 data class ModelResponse(
     val content: String,
