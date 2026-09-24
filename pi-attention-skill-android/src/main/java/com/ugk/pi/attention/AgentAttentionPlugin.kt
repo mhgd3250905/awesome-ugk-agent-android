@@ -25,18 +25,24 @@ class AgentAttentionPlugin(
         urgentPresenter?.let { add(ShowUrgentMessageTool(notificationPublisher, it)) }
     }
 
-    override fun agentInstructions(): List<String> = listOf(
-        "Attention tools publish immediately through the host app. Use them only when the user requested a notification or a time-sensitive result warrants one; reserve the urgent overlay for information that reasonably needs to interrupt the screen. Report each returned delivery status accurately."
-    )
+    override fun agentInstructions(): List<String> = listOf(buildString {
+        appendLine("This host can alert the user immediately outside the chat:")
+        appendLine("- agent_send_notification(title, body) posts a regular Android notification. Use it when the user asks to be notified or a background result needs an alert. An ordinary foreground chat reply does not need a duplicate notification.")
+        if (urgentPresenter != null) {
+            appendLine("- agent_show_urgent_message(title, body, reason) posts that same notification and attempts to show an urgent card in the existing overlay. Use it only when the user expects an interruption for important, time-sensitive information. Do not also call agent_send_notification for the same event.")
+        }
+        appendLine("These methods act now; they do not schedule future work. For a future alert, use a separate scheduling capability only if the host registered one. Decide from the user's intent and the situation, not from keywords. Report the notification and overlay statuses returned by the tool; do not claim delivery or display when a status says otherwise.")
+    }.trim())
 
     override fun skills(): List<AndroidSkill> = listOf(
         AndroidSkill(
             id = "android-attention",
             description = "通过宿主应用通知用户，必要时显示重要信息",
             instructions = """
-                Send a notification when the user asked to be notified or a completed task needs a durable, user-visible result.
+                Send a notification when the user asked to be notified or a background result needs an alert. A foreground chat reply ordinarily needs no duplicate notification.
                 Use the urgent message only for time-sensitive information the user would reasonably expect to interrupt their screen.
                 An urgent message also attempts a regular notification so the information can be reopened later.
+                Do not call both methods for the same event.
                 Never report delivery as successful when a tool returns a denied, blocked, unavailable or failed status.
                 These tools publish now; they do not schedule a future run.
             """.trimIndent(),
