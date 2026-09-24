@@ -70,8 +70,8 @@ android {
         applicationId = "com.ugk.pi.agent"
         minSdk = 24
         targetSdk = 36
-        versionCode = 107
-        versionName = "1.2.0"
+        versionCode = 108
+        versionName = "1.2.1"
         testInstrumentationRunner = "androidx.test.runner.AndroidJUnitRunner"
     }
 

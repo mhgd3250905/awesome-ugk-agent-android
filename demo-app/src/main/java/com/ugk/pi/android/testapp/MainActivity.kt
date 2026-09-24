@@ -13,7 +13,6 @@ import android.graphics.RectF
 import android.graphics.Typeface
 import android.os.Build
 import android.os.Bundle
-import android.os.SystemClock
 import android.text.Editable
 import android.text.InputType
 import android.text.TextWatcher
@@ -30,7 +29,6 @@ import android.widget.LinearLayout
 import android.widget.ScrollView
 import android.widget.HorizontalScrollView
 import android.widget.TextView
-import android.widget.ProgressBar
 import androidx.activity.ComponentActivity
 import androidx.activity.result.contract.ActivityResultContracts
 import androidx.core.view.ViewCompat
@@ -143,18 +141,7 @@ class MainActivity : ComponentActivity() {
     private var hasPendingStreamingRender = false
     private val streamingRenderHandler = android.os.Handler(android.os.Looper.getMainLooper())
     private val streamingRenderRunnable = Runnable { flushStreamingAssistantText() }
-    private val delayDialogHandler = android.os.Handler(android.os.Looper.getMainLooper())
-    private var delayDialog: AlertDialog? = null
-    private var delayDialogTaskId: String? = null
-    private var delayDialogPhase: String? = null
-    private var delayCountdownText: TextView? = null
-    private val delayTickRunnable = object : Runnable {
-        override fun run() {
-            val waiting = delayedTasks.snapshot() as? DemoDelayedTaskState.Waiting ?: return
-            updateDelayCountdown(waiting)
-            delayDialogHandler.postDelayed(this, 1000L)
-        }
-    }
+    private val delayedDialog by lazy { DemoDelayedTaskDialog(this) { delayedTasks.snapshot() } }
     private var lastImeInsetBottom = 0
     private val themeListener: (Boolean) -> Unit = { runOnUiThread { applyTheme() } }
     private val floatingWindow: AgentFloatingWindow
@@ -466,7 +453,7 @@ class MainActivity : ComponentActivity() {
     override fun onPause() {
         activityResumed = false
         super.onPause()
-        dismissDelayDialog()
+        delayedDialog.dismiss()
         showFloatingWindowIfNeeded()
         suppressOverlayForInAppNavigation = false
         confirmationPresenter.onActivityPaused()
@@ -474,7 +461,7 @@ class MainActivity : ComponentActivity() {
 
     override fun onDestroy() {
         cancelPendingStreamingRender()
-        dismissDelayDialog()
+        delayedDialog.dismiss()
         delayedTasks.detach(activityToken)
         inAppUpdateController.release()
         val finishing = isFinishing && !isChangingConfigurations
@@ -1857,7 +1844,7 @@ class MainActivity : ComponentActivity() {
         updateComposerState()
         when (state) {
             DemoDelayedTaskState.Idle -> {
-                dismissDelayDialog()
+                delayedDialog.dismiss()
                 reloadDelayedConversation()
             }
             is DemoDelayedTaskState.Proposed -> {
@@ -1869,7 +1856,7 @@ class MainActivity : ComponentActivity() {
                 if (activityResumed) showDelayWaitingDialog(state)
             }
             is DemoDelayedTaskState.Executing -> {
-                dismissDelayDialog()
+                delayedDialog.dismiss()
                 floatingWindow.setStatus("定时任务执行中")
                 reloadDelayedConversation()
             }
@@ -1877,102 +1864,30 @@ class MainActivity : ComponentActivity() {
     }
 
     private fun showDelayConfirmation(task: DemoDelayedTask) {
-        if (delayDialogTaskId == task.id && delayDialogPhase == "proposal" && delayDialog?.isShowing == true) return
-        dismissDelayDialog()
-        val queued = runCoordinator.snapshot().queuedMessages
-        val message = "确认后等待 ${formatDelay(task.delaySeconds)}，再在当前对话执行：\n\n" +
-            task.instruction +
-            (if (queued > 0) "\n\n开启后会清空当前排队的 $queued 条消息。" else "") +
-            "\n\n请在手机系统设置中允许后台运行、自启动，并减少电池限制。" +
-            "如果应用进程被系统结束，任务将中断。"
-        val dialog = AlertDialog.Builder(this, Ui.dialogTheme())
-            .setTitle("确认定时任务")
-            .setMessage(message)
-            .setCancelable(false)
-            .setNegativeButton("取消") { _, _ ->
+        delayedDialog.showProposal(
+            task = task,
+            queuedMessages = runCoordinator.snapshot().queuedMessages,
+            onReject = {
                 delayedTasks.reject(task.id)
                 startNextQueuedOverlayMessage()
-            }
-            .setNeutralButton("后台设置") { _, _ ->
+            },
+            onBackgroundSettings = {
                 startActivity(Intent(Settings.ACTION_APPLICATION_DETAILS_SETTINGS).apply {
                     data = Uri.parse("package:$packageName")
                 })
-            }
-            .setPositiveButton("开启") { _, _ ->
+            },
+            onConfirm = {
                 if (!delayedTasks.confirm(task.id)) {
                     delayedTasks.reject(task.id)
                     showInlineNotice("无法保存定时任务，请重试")
                     startNextQueuedOverlayMessage()
                 }
             }
-            .create()
-        delayDialog = dialog
-        delayDialogTaskId = task.id
-        delayDialogPhase = "proposal"
-        dialog.show()
+        )
     }
 
     private fun showDelayWaitingDialog(waiting: DemoDelayedTaskState.Waiting) {
-        if (delayDialogTaskId == waiting.task.id && delayDialogPhase == "waiting" && delayDialog?.isShowing == true) {
-            updateDelayCountdown(waiting)
-            return
-        }
-        dismissDelayDialog()
-        val content = LinearLayout(this).apply {
-            orientation = LinearLayout.VERTICAL
-            setPadding(dp(24), dp(12), dp(24), dp(18))
-        }
-        val spinner = ProgressBar(this).apply { isIndeterminate = true }
-        content.addView(spinner, LinearLayout.LayoutParams(dp(32), dp(32)).apply {
-            gravity = Gravity.CENTER_HORIZONTAL
-            bottomMargin = dp(10)
-        })
-        val countdown = TextView(this).apply {
-            textSize = 16f
-            setTextColor(Ui.TextPrimary)
-        }
-        content.addView(countdown)
-        val dialog = AlertDialog.Builder(this, Ui.dialogTheme())
-            .setTitle("定时任务等待中")
-            .setView(content)
-            .setCancelable(false)
-            .setPositiveButton("停止任务") { _, _ -> stopAgent() }
-            .create()
-        delayDialog = dialog
-        delayDialogTaskId = waiting.task.id
-        delayDialogPhase = "waiting"
-        delayCountdownText = countdown
-        dialog.show()
-        updateDelayCountdown(waiting)
-        delayDialogHandler.postDelayed(delayTickRunnable, 1000L)
-    }
-
-    private fun updateDelayCountdown(waiting: DemoDelayedTaskState.Waiting) {
-        val remaining = ((waiting.deadlineElapsedMillis - SystemClock.elapsedRealtime() + 999L) / 1000L)
-            .coerceAtLeast(0L)
-        val deadline = DateFormat.getTimeInstance(DateFormat.SHORT).format(Date(waiting.deadlineWallMillis))
-        delayCountdownText?.text = "${waiting.task.instruction}\n\n剩余 ${formatDelay(remaining)}" +
-            "\n预计 $deadline 开始\n\n离开此页面或锁屏不会主动取消任务。"
-    }
-
-    private fun dismissDelayDialog() {
-        delayDialogHandler.removeCallbacks(delayTickRunnable)
-        delayDialog?.dismiss()
-        delayDialog = null
-        delayDialogTaskId = null
-        delayDialogPhase = null
-        delayCountdownText = null
-    }
-
-    private fun formatDelay(seconds: Long): String {
-        val hours = seconds / 3600L
-        val minutes = (seconds % 3600L) / 60L
-        val rest = seconds % 60L
-        return if (hours > 0L) {
-            "%d:%02d:%02d".format(hours, minutes, rest)
-        } else {
-            "%02d:%02d".format(minutes, rest)
-        }
+        delayedDialog.showWaiting(waiting) { stopAgent() }
     }
 
     private fun removePendingFile(file: DemoImportedFile) {

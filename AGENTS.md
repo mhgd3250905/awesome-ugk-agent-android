@@ -106,6 +106,7 @@ v1 Terminal Core Profile：Bash、curl、OpenSSL、SQLite、CPython 3.14.6；Nod
 | `MainActivity.kt` | 主界面：对话 UI + AgentRuntime 构建 + skill instructions |
 | `DemoDelayedTaskController.kt` | 单对话延时任务的确认后计时、独占状态、中断标记和取消 |
 | `DemoDelayedMessageDispatcher.kt` | 到点向当前会话追加消息并启动原 AgentRuntime |
+| `DemoDelayedTaskDialog.kt` | 定时任务确认与等待共用的原生卡片、倒计时和操作入口 |
 | `AgentAccessibilityService.kt` | 无障碍服务，静态 `instance` 给 Tool 使用 |
 | `AgentFloatingWindow.kt` | 可拖动、缩放的跨 App 悬浮窗；按过程到最终回答的时间线展示 Agent 状态 |
 | `pi-system-skill-android/src/main/.../ScreenAutomationTools.kt` | SDK 统一的 screen read/find/action/gesture/IME/global Tools |
