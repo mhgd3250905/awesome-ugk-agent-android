@@ -63,6 +63,12 @@ class DemoAgentRunCoordinator(
     private var listenerOwner: Any? = null
     private var eventListener: ((AgentEvent) -> Unit)? = null
     private var finishListener: (() -> Unit)? = null
+    private var processIdleListener: (() -> Unit)? = null
+
+    /** Process-owned dispatchers use this to start queued turns after the prior run exits. */
+    fun setProcessIdleListener(listener: () -> Unit) {
+        processIdleListener = listener
+    }
 
     fun attach(
         owner: Any,
@@ -140,7 +146,8 @@ class DemoAgentRunCoordinator(
                     job = null
                     if (activeRunLifecycle === runLifecycle) activeRunLifecycle = null
                     runCatching { onFinished?.invoke() }
-                    finishListener?.invoke()
+                    runCatching { finishListener?.invoke() }
+                    runCatching { processIdleListener?.invoke() }
                 }
             }
         }

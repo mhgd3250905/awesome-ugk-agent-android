@@ -19,7 +19,14 @@ class DemoProcessScope private constructor(context: Context) {
     val confirmationPresenter: ActivityUserConfirmationDialogPresenter =
         ActivityUserConfirmationDialogPresenter()
     val overlayController: DemoOverlayController = DemoOverlayController(appContext)
-    internal val urgentMessagePresenter = DemoUrgentMessagePresenter(overlayController)
+    internal val urgentMessagePresenter = DemoUrgentMessagePresenter(overlayController) { sessionId ->
+        conversationRuntime.activeConversationId?.takeIf { id ->
+            conversationRuntime.sessionFor(id)?.id == sessionId
+        }
+    }
+    internal val urgentInteractionDispatcher: DemoUrgentInteractionDispatcher by lazy {
+        DemoUrgentInteractionDispatcher(appContext, this)
+    }
     internal val delayedTasks: DemoDelayedTaskController by lazy {
         DemoDelayedTaskController(appContext, conversationRuntime) { task ->
             delayedMessageDispatcher.dispatch(task)
@@ -30,12 +37,14 @@ class DemoProcessScope private constructor(context: Context) {
     }
 
     init {
+        overlayController.onUrgentInteraction = { event -> urgentInteractionDispatcher.submit(event) }
         overlayController.setFallbackCommands(DemoOverlayCommands(
             onSend = {
                 overlayController.window.addLog("请打开主对话后发送消息")
                 false
             },
             onStop = {
+                urgentInteractionDispatcher.cancelPending()
                 conversationRuntime.runCoordinator.clearQueue()
                 delayedTasks.stop()
                 conversationRuntime.agentRuntime?.cancelAllPlugins()

@@ -433,8 +433,10 @@ class MainActivity : ComponentActivity() {
         refreshRuntime()
         confirmationPresenter.onActivityResumed()
         refreshActiveConversationFromStore()
-        if (runCoordinator.snapshot().source == AgentRunSource.SCHEDULED_TASK) {
-            reloadDelayedConversation()
+        if (runCoordinator.snapshot().source == AgentRunSource.SCHEDULED_TASK ||
+            runCoordinator.snapshot().source == AgentRunSource.SDK_EVENT
+        ) {
+            reloadProcessOwnedConversation()
         }
         updateCapabilityBanner()
         if (::inputField.isInitialized && inputField.text.toString() != conversationRuntime.draft) {
@@ -446,6 +448,7 @@ class MainActivity : ComponentActivity() {
         // Hide the ordinary background-run surface while chat is visible.
         // An urgent takeover remains visible until the user closes it.
         floatingWindow.hideOrdinaryForActivity()
+        processScope.urgentInteractionDispatcher.resumePending()
         inAppUpdateController.checkOnResume()
     }
 
@@ -1252,6 +1255,7 @@ class MainActivity : ComponentActivity() {
 
     private fun startNextQueuedOverlayMessage() {
         if (delayedTasks.snapshot() !is DemoDelayedTaskState.Idle) return
+        if (processScope.urgentInteractionDispatcher.hasPending()) return
         if (runState.isBusy || runCoordinator.isRunning()) return
         val next = runCoordinator.removeNextQueued() ?: return
         floatingWindow.addLog("开始处理排队消息")
@@ -1417,7 +1421,7 @@ class MainActivity : ComponentActivity() {
         setScreenAutomationActive(capabilityInterlock.isCapabilityOwned())
         runCoordinator.consumePendingOutcome(activeConversation.id)?.let { outcome ->
             if (outcome.source == AgentRunSource.SCHEDULED_TASK) {
-                reloadDelayedConversation()
+                reloadProcessOwnedConversation()
                 if (!outcome.handledByProcessOwner) {
                     when (val event = outcome.event) {
                         is AgentEvent.Completed -> persistAssistantMessage(event.content)
@@ -1426,6 +1430,15 @@ class MainActivity : ComponentActivity() {
                     }
                     (delayedTasks.snapshot() as? DemoDelayedTaskState.Executing)?.let {
                         delayedTasks.complete(it.task.id)
+                    }
+                }
+            } else if (outcome.source == AgentRunSource.SDK_EVENT) {
+                reloadProcessOwnedConversation()
+                if (!outcome.handledByProcessOwner) {
+                    when (val event = outcome.event) {
+                        is AgentEvent.Completed -> persistAssistantMessage(event.content)
+                        is AgentEvent.Failed -> persistAssistantMessage("悬浮提醒操作未完成：${event.message}")
+                        else -> Unit
                     }
                 }
             } else {
@@ -1492,8 +1505,10 @@ class MainActivity : ComponentActivity() {
         runState = runCoordinator.snapshot().state
         when (event) {
             is AgentEvent.Started -> {
-                if (runCoordinator.snapshot().source == AgentRunSource.SCHEDULED_TASK) {
-                    reloadDelayedConversation()
+                if (runCoordinator.snapshot().source == AgentRunSource.SCHEDULED_TASK ||
+                    runCoordinator.snapshot().source == AgentRunSource.SDK_EVENT
+                ) {
+                    reloadProcessOwnedConversation()
                 }
             }
             is AgentEvent.ToolStarted -> {
@@ -1567,12 +1582,17 @@ class MainActivity : ComponentActivity() {
                 setScreenAutomationActive(false)
                 streamingAssistantText = null
                 if (runCoordinator.snapshot().source == AgentRunSource.SCHEDULED_TASK) {
-                    reloadDelayedConversation()
+                    reloadProcessOwnedConversation()
                     if (runCoordinator.snapshot().pendingOutcome?.handledByProcessOwner != true) {
                         persistAssistantMessage(event.content)
                         (delayedTasks.snapshot() as? DemoDelayedTaskState.Executing)?.let {
                             delayedTasks.complete(it.task.id)
                         }
+                    }
+                } else if (runCoordinator.snapshot().source == AgentRunSource.SDK_EVENT) {
+                    reloadProcessOwnedConversation()
+                    if (runCoordinator.snapshot().pendingOutcome?.handledByProcessOwner != true) {
+                        persistAssistantMessage(event.content)
                     }
                 } else {
                     persistAssistantMessage(event.content)
@@ -1586,12 +1606,19 @@ class MainActivity : ComponentActivity() {
                 setScreenAutomationActive(false)
                 streamingAssistantText = null
                 if (runCoordinator.snapshot().source == AgentRunSource.SCHEDULED_TASK) {
-                    reloadDelayedConversation()
+                    reloadProcessOwnedConversation()
                     if (runCoordinator.snapshot().pendingOutcome?.handledByProcessOwner != true) {
                         persistAssistantMessage("任务未完成：${event.message}")
                         (delayedTasks.snapshot() as? DemoDelayedTaskState.Executing)?.let {
                             delayedTasks.complete(it.task.id)
                         }
+                    }
+                } else if (runCoordinator.snapshot().source == AgentRunSource.SDK_EVENT) {
+                    reloadProcessOwnedConversation()
+                    if (runCoordinator.snapshot().pendingOutcome?.handledByProcessOwner != true &&
+                        event.message.isNotBlank()
+                    ) {
+                        persistAssistantMessage("悬浮提醒操作未完成：${event.message}")
                     }
                 } else if (event.message.isNotBlank()) {
                     persistAssistantMessage("任务未完成：${event.message}")
@@ -1845,7 +1872,7 @@ class MainActivity : ComponentActivity() {
         when (state) {
             DemoDelayedTaskState.Idle -> {
                 delayedDialog.dismiss()
-                reloadDelayedConversation()
+                reloadProcessOwnedConversation()
             }
             is DemoDelayedTaskState.Proposed -> {
                 floatingWindow.setStatus("等待定时任务确认")
@@ -1858,7 +1885,7 @@ class MainActivity : ComponentActivity() {
             is DemoDelayedTaskState.Executing -> {
                 delayedDialog.dismiss()
                 floatingWindow.setStatus("定时任务执行中")
-                reloadDelayedConversation()
+                reloadProcessOwnedConversation()
             }
         }
     }
@@ -2025,6 +2052,7 @@ class MainActivity : ComponentActivity() {
     }
 
     private fun stopAgent(clearQueuedMessages: Boolean = true) {
+        if (clearQueuedMessages) processScope.urgentInteractionDispatcher.cancelPending()
         if (clearQueuedMessages && delayedTasks.snapshot() !is DemoDelayedTaskState.Idle) {
             runCoordinator.clearQueue()
         }
@@ -2244,11 +2272,11 @@ class MainActivity : ComponentActivity() {
         }
     }
 
-    /** Reload results appended by the process-owned timed-message dispatcher. */
+    /** Reload turns appended by the process-owned delayed or urgent dispatcher. */
     private fun refreshActiveConversationFromStore() {
         if (!::activeConversation.isInitialized) return
         if (delayedTasks.snapshot() !is DemoDelayedTaskState.Idle) {
-            reloadDelayedConversation()
+            reloadProcessOwnedConversation()
             return
         }
         if (runState.isBusy || runCoordinator.isRunning()) return
@@ -2265,8 +2293,8 @@ class MainActivity : ComponentActivity() {
         renderConversation()
     }
 
-    /** A timed turn writes through the process owner even while this Activity is detached. */
-    private fun reloadDelayedConversation() {
+    /** Process-owned turns write through storage even while this Activity is detached. */
+    private fun reloadProcessOwnedConversation() {
         if (!::activeConversation.isInitialized) return
         val latest = conversationStore.get(activeConversation.id) ?: return
         if (latest.updatedAt == activeConversation.updatedAt &&

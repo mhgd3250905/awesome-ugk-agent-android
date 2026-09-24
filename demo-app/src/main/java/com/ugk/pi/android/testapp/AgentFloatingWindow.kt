@@ -32,6 +32,8 @@ import android.widget.TextView
 import com.ugk.pi.android.UserConfirmationDialogRequest
 import com.ugk.pi.attention.UrgentMessage
 import com.ugk.pi.attention.UrgentPresentationStatus
+import com.ugk.pi.attention.UrgentAction
+import com.ugk.pi.attention.UrgentForm
 import java.util.ArrayDeque
 import java.util.LinkedHashSet
 
@@ -56,6 +58,8 @@ class AgentFloatingWindow(private val context: Context) : ConfirmationOverlayHos
     private var expandedView: View? = null
     private var collapsedView: View? = null
     private var takeoverView: View? = null
+    private var activeTakeoverPresentationId: String? = null
+    private var takeoverInteractionConsumed = false
     private var contentContainer: LinearLayout? = null
     private var scrollView: ScrollView? = null
     private var statusText: TextView? = null
@@ -93,6 +97,7 @@ class AgentFloatingWindow(private val context: Context) : ConfirmationOverlayHos
     var onOpenApp: (() -> Unit)? = null
     var onHide: (() -> Unit)? = null
     var onDraftChanged: ((String) -> Unit)? = null
+    internal var onUrgentInteraction: ((DemoUrgentInteraction) -> Boolean)? = null
 
     private val expandedParams = WindowManager.LayoutParams().apply {
         width = expandedWidth()
@@ -192,11 +197,14 @@ class AgentFloatingWindow(private val context: Context) : ConfirmationOverlayHos
     fun isShowing(): Boolean = expandedView != null || collapsedView != null || takeoverView != null
 
     /** Temporarily replaces the ordinary bubble/chat surface with an app-owned screen. */
-    fun showUrgentMessage(message: UrgentMessage): UrgentPresentationStatus {
+    fun showUrgentMessage(message: UrgentMessage, conversationId: String? = null): UrgentPresentationStatus {
         if (!Settings.canDrawOverlays(context)) return UrgentPresentationStatus.PERMISSION_DENIED
         if (pendingConfirmation != null || externalAutomationMode || takeoverView != null) {
             return UrgentPresentationStatus.BUSY
         }
+        if ((message.actions.isNotEmpty() || message.form != null) &&
+            (message.binding == null || conversationId == null || onUrgentInteraction == null)
+        ) return UrgentPresentationStatus.UNAVAILABLE
         val previous = when {
             expandedView != null -> UrgentPreviousSurface.EXPANDED
             collapsedView != null -> UrgentPreviousSurface.COLLAPSED
@@ -209,17 +217,76 @@ class AgentFloatingWindow(private val context: Context) : ConfirmationOverlayHos
             onOpenApp = {
                 dismissUrgentMessage()
                 onOpenApp?.invoke()
+            },
+            onAction = { action: UrgentAction ->
+                deliverUrgentInteraction(message, conversationId, DemoUrgentInteraction.Kind.BUTTON, action.id, action.label)
+            },
+            onFormSubmit = { form: UrgentForm, value: String ->
+                deliverUrgentInteraction(message, conversationId, DemoUrgentInteraction.Kind.FORM, form.id, form.label, value)
             }
         )
         hideExpanded()
         hideCollapsed()
+        takeoverParams.flags = WindowManager.LayoutParams.FLAG_LAYOUT_IN_SCREEN or
+                if (message.form == null) WindowManager.LayoutParams.FLAG_NOT_FOCUSABLE else 0
+        takeoverParams.softInputMode = if (message.form == null) {
+            WindowManager.LayoutParams.SOFT_INPUT_STATE_ALWAYS_HIDDEN
+        } else {
+            WindowManager.LayoutParams.SOFT_INPUT_STATE_ALWAYS_HIDDEN or
+                    WindowManager.LayoutParams.SOFT_INPUT_ADJUST_RESIZE
+        }
         if (!addViewSafely(view, takeoverParams)) {
             restoreSurface(previous)
             return UrgentPresentationStatus.FAILED
         }
         urgentPreviousSurface = previous
         takeoverView = view
+        activeTakeoverPresentationId = message.binding?.presentationId
+        takeoverInteractionConsumed = false
         return UrgentPresentationStatus.SHOWN
+    }
+
+    private fun deliverUrgentInteraction(
+        message: UrgentMessage,
+        conversationId: String?,
+        kind: DemoUrgentInteraction.Kind,
+        controlId: String,
+        controlLabel: String,
+        value: String? = null
+    ): Boolean {
+        val binding = message.binding ?: return false
+        val target = conversationId ?: return false
+        if (takeoverView == null || takeoverInteractionConsumed ||
+            activeTakeoverPresentationId != binding.presentationId
+        ) return false
+        val controlBelongsToScreen = when (kind) {
+            DemoUrgentInteraction.Kind.BUTTON -> message.actions.any {
+                it.id == controlId && it.label == controlLabel
+            }
+            DemoUrgentInteraction.Kind.FORM -> message.form?.let {
+                it.id == controlId && it.label == controlLabel
+            } == true
+        }
+        if (!controlBelongsToScreen) return false
+        val callback = onUrgentInteraction ?: return false
+        takeoverInteractionConsumed = true
+        val accepted = runCatching {
+            callback(DemoUrgentInteraction(
+                binding = binding,
+                conversationId = target,
+                title = message.title,
+                kind = kind,
+                controlId = controlId,
+                controlLabel = controlLabel,
+                value = value
+            ))
+        }.getOrDefault(false)
+        if (!accepted) {
+            takeoverInteractionConsumed = false
+            return false
+        }
+        if (takeoverView != null) dismissUrgentMessage()
+        return true
     }
 
     private fun dismissUrgentMessage() {
@@ -230,8 +297,14 @@ class AgentFloatingWindow(private val context: Context) : ConfirmationOverlayHos
     }
 
     private fun hideTakeover() {
-        takeoverView?.let(::removeViewSafely)
+        takeoverView?.let { view ->
+            val imm = context.getSystemService(Context.INPUT_METHOD_SERVICE) as InputMethodManager
+            imm.hideSoftInputFromWindow(view.windowToken, 0)
+            removeViewSafely(view)
+        }
         takeoverView = null
+        activeTakeoverPresentationId = null
+        takeoverInteractionConsumed = false
     }
 
     private fun restoreSurface(previous: UrgentPreviousSurface) {

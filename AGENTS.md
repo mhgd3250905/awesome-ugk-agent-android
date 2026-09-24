@@ -8,7 +8,7 @@ Android Agent Runtime SDK — 通用 AI Agent 工具循环框架，附带无障�
 :ugk-pi-android              — Agent Runtime 核心（AgentRuntime, AgentSession, AgentTool, LLMProvider, AndroidSkill）
 :pi-file-skill-android       — 应用私有文件工具 skill
 :pi-schedule-skill-android   — 定时任务 skill
-:pi-attention-skill-android  — 可选的即时通知与重要悬浮提醒 skill（独立 AAR）
+:pi-attention-skill-android  — 可选的即时通知、重要悬浮提醒及受限交互控件 skill（独立 AAR）
 :ugk-agent-task-runtime-android — Android 定时任务持久化、AlarmManager/JobScheduler 与通知运行时
 :pi-system-skill-android     — 系统设置 / 权限 / Intent skill
 :pi-agent-skill-runtime-android — 文件型 skill 运行时（SKILL.md 发现/解析/按加载策略注入）+ agent-memory 与 android-skill-creator 预制 skills
@@ -110,6 +110,8 @@ v1 Terminal Core Profile：Bash、curl、OpenSSL、SQLite、CPython 3.14.6；Nod
 | `DemoDelayedTaskDialog.kt` | 定时任务确认与等待共用的原生卡片、倒计时和操作入口 |
 | `AgentAccessibilityService.kt` | 无障碍服务，静态 `instance` 给 Tool 使用 |
 | `AgentFloatingWindow.kt` | 可拖动、缩放的跨 App 悬浮窗；按过程到最终回答的时间线展示 Agent 状态 |
+| `UrgentTakeoverView.kt` | 整屏重要提醒及由 Agent 指定的有限按钮、输入控件 |
+| `DemoUrgentInteractionDispatcher.kt` | 悬浮控件事件绑定原会话并按序启动 SDK_EVENT 回合 |
 | `pi-system-skill-android/src/main/.../ScreenAutomationTools.kt` | SDK 统一的 screen read/find/action/gesture/IME/global Tools |
 | `pi-system-skill-android/src/main/.../AccessibilityScreenAutomationBackend.kt` | AccessibilityService 默认 backend、snapshot/target 校验和 fail-closed 恢复 |
 | `pi-system-skill-android/src/main/.../ScreenAutomationSkills.kt` | Android Accessibility 屏幕自动化 Skill 与确认/验证策略 |
