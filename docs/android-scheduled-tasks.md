@@ -1,6 +1,6 @@
 # Android Agent 定时任务
 
-当前实现是一条可持久化的“控制面 + 运行时适配面”链路：到点后既可以发送通知，也可以真正唤醒一次独立的 Agent 对话回合。
+本文记录 SDK 通用的可持久化“控制面 + 运行时适配面”链路。`demo-app` 已改为进程级、单对话延时任务，不再注册本模块的 `agent_task_*` 工具或安装后台 JobService/Receiver；当前 Demo 事实见 [demo-delayed-conversation.md](demo-delayed-conversation.md)。下文提到 Demo 接入旧调度器的段落和验收记录均为历史事实，不代表当前 Demo 行为。
 
 ## 架构
 
@@ -26,9 +26,9 @@ ugk-agent-task-runtime-android
 
 控制面不持有 `Context`，运行时适配面不依赖 `Activity` 或具体模型供应商。宿主在 `Application` 实现 `AgentTaskRuntimeOwner`，由 `AgentTaskJobService` 在后台创建自己的 Runtime；因此定时执行不需要依赖前台 Activity。后续可以替换 Store（例如 SQLite）或 Scheduler，而不改变 Agent Tool 协议。
 
-## 当前实际支持范围
+## 旧 Demo 接入范围（历史，已被单对话延时任务替代）
 
-Demo 当前已开启 `NOTIFY_USER` 和 `RUN_AGENT_PROMPT`：
+当时 Demo 开启了 `NOTIFY_USER` 和 `RUN_AGENT_PROMPT`：
 
 - “10 分钟后提醒我休息”会创建一个 `ONE_SHOT` 任务，到期后发送 Android 通知。
 - “10 分钟后检查微信是否有新消息”应创建 `RUN_AGENT_PROMPT`；到点后系统启动 `AgentTaskJobService`，恢复任务关联的会话，使用 `AgentRunSource.SCHEDULED_TASK` 调用 AgentRuntime 的完整模型/Tool 循环，并把用户任务和最终结果写回同一会话。
@@ -94,7 +94,7 @@ Android 官方明确区分了精确闹钟、普通闹钟和后台服务启动限
 - 主目标小米 `QSG6Q8IFDMDELVGQ` 本轮离线；三星设备 `R5CRB11B2AW` 未操作。真机调试命令必须显式指定授权小米序列号。
 - 本记录验证的是有限后台 Agent 回合，不代表精确定时、第三方事件订阅、常驻监听或自动启动/解锁微信已得到保证。
 
-## 验收建议
+## 旧 Demo 验收建议（历史）
 
 1. 首次启动 Demo 时允许通知权限。
 2. 对 Agent 说：“10 分钟后检查当前微信界面有没有优积可的新消息，有就告诉我。”

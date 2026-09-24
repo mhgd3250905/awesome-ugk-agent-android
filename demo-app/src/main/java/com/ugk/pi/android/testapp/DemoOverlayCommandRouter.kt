@@ -21,6 +21,12 @@ class DemoOverlayCommandRouter {
     )
 
     private var binding: Binding? = null
+    private var fallback: DemoOverlayCommands? = null
+
+    @Synchronized
+    fun setFallback(commands: DemoOverlayCommands) {
+        fallback = commands
+    }
 
     @Synchronized
     fun bind(owner: Any, commands: DemoOverlayCommands) {
@@ -51,5 +57,5 @@ class DemoOverlayCommandRouter {
     }
 
     @Synchronized
-    private fun commands(): DemoOverlayCommands? = binding?.commands
+    private fun commands(): DemoOverlayCommands? = binding?.commands ?: fallback
 }

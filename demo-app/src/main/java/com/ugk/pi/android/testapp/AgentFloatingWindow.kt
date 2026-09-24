@@ -37,8 +37,8 @@ import java.util.LinkedHashSet
  * Cross-app, user-controlled Agent surface.
  *
  * The overlay is deliberately a renderer and interaction shell. Agent
- * execution remains owned by MainActivity, while this class exposes only
- * snapshots and user intents through callbacks.
+ * execution is process-owned, while this class exposes only snapshots and
+ * user intents through callbacks.
  */
 class AgentFloatingWindow(private val context: Context) : ConfirmationOverlayHost {
 

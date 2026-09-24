@@ -22,17 +22,16 @@ import com.ugk.pi.terminal.skill.TerminalAgentPlugin
 import java.io.File
 
 /**
- * Single composition root for both foreground and scheduled Agent runs.
- *
- * The background JobService never creates an Activity. It asks the host for
- * this same capability graph with a headless confirmation presenter and the
- * current persisted authorization setting.
+ * Composition root for the Demo conversation runtime. A legacy headless
+ * caller remains for compatibility, but the interactive app now registers
+ * its own one-slot delayed-conversation tool.
  */
 internal object DemoAgentRuntimeFactory {
     fun create(
         context: Context,
-        scheduleStore: AgentTaskStore,
-        scheduleScheduler: AgentTaskScheduler,
+        scheduleStore: AgentTaskStore? = null,
+        scheduleScheduler: AgentTaskScheduler? = null,
+        delayedTaskController: DemoDelayedTaskController? = null,
         confirmationPresenter: UserConfirmationDialogPresenter,
         shouldBypassConfirmation: () -> Boolean,
         toolDecorator: AgentToolDecorator = AgentToolDecorator.Identity,
@@ -74,14 +73,18 @@ internal object DemoAgentRuntimeFactory {
                     DemoFileImportStore(appContext).workspaceRoot
                 )
             )
-            .register(
-                ScheduleTaskAgentPlugin(
-                    store = scheduleStore,
-                    scheduler = scheduleScheduler,
-                    supportsBackgroundPromptExecution = supportsBackgroundPromptExecution
-                )
-            )
-            .register(
+        if (delayedTaskController != null) {
+            builder.register(DemoDelayAgentPlugin(delayedTaskController))
+        } else if (scheduleStore != null && scheduleScheduler != null) {
+            // Compatibility for the retired background executor only. The
+            // interactive Demo exposes the single-conversation delay instead.
+            builder.register(ScheduleTaskAgentPlugin(
+                store = scheduleStore,
+                scheduler = scheduleScheduler,
+                supportsBackgroundPromptExecution = supportsBackgroundPromptExecution
+            ))
+        }
+        builder.register(
                 AndroidAutomationAgentPlugin(
                     context = appContext,
                     confirmationPresenter = confirmationPresenter,

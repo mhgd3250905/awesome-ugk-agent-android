@@ -1,0 +1,29 @@
+# Demo 单对话延时任务（首版）
+
+更新时间：2026-09-24。本文描述 `demo-app` 当前的延时任务交互；SDK 通用持久化调度器另见 [android-scheduled-tasks.md](android-scheduled-tasks.md)。
+
+## 目标与流程
+
+用户说“5 分钟后告诉我今天的天气”时，Agent 先调用 `demo_delay_propose`，提交相对时长和到点后要执行的原始意图。App 展示任务内容并要求用户明确确认；“全授权”设置不会跳过这一步。计时从确认时开始。当前 Agent 回合随提案工具的 `terminalForTurn` 结果结束，不提前查询天气。
+
+确认后，当前对话进入唯一的等待槽位。主界面显示不可绕过的倒计时弹窗、任务内容、预计触发时间和“停止任务”；其他消息、历史切换及新建会话在等待期间被阻止，悬浮窗也不能排队新消息。离开页面或锁屏不会主动取消。到点后，进程级分发器向同一 `DemoConversation` 追加一条用户消息，使用同一个 `AgentSession` 和 `AgentRuntime` 启动普通 Tool/模型循环，并将结果写回该对话。等待和执行中都只占一个槽位。
+
+确认定时任务只授权“稍后发起这个回合”，不等于授权到点后所有高影响工具；原有工具确认和“全授权”策略继续生效。后台没有 Activity 时，原有悬浮窗确认路径可承接需要用户决策的动作。
+
+首版只接受一次性相对延时（1 秒至 24 小时）；不解析 Cron 表达式，不支持重复任务，不为延时创建 JobService、AlarmManager 触发器或独立 Agent 会话。旧 SDK 模块仍保留供其他宿主使用，但 Demo 不再注册 `agent_task_*` 工具。升级时，Demo 停止旧版仍处于 `SCHEDULED` 或 `RUNNING` 的后台任务并在关联对话说明；不会把旧任务悄悄迁成新的等待槽位。
+
+## 进程与故障边界
+
+`DemoDelayedTaskController` 与 `DemoAgentRunCoordinator` 由 `DemoProcessScope` 持有。Activity 只附着状态和展示弹窗；页面销毁不取消任务，悬浮窗的停止命令在没有 Activity 时仍能到达进程级控制器。App 引导用户在设备设置中允许自启动、后台运行并降低电池限制，但不把这些设置当成准点执行保证。
+
+计时以 `SystemClock.elapsedRealtime()` 的截止时间为准。后台进程若暂时得不到执行时间，恢复后检查截止时间并尽快执行一次。进程死亡会终止内存计时与 Agent 运行；本地只存一个中断标记，下次启动明确报告“尚未执行”或“执行结果可能不完整”，绝不自动补跑。用户按“停止任务”会取消等待或当前执行并在对话里记录。
+
+## 接线与验收边界
+
+- `DemoDelayAgentPlugin`：意图提案、参数校验、首回合结束。
+- `DemoDelayedTaskController`：唯一槽位、确认后计时、取消、中断标记。
+- `DemoDelayedMessageDispatcher`：到点后追加消息、启动同会话运行、保存结果。
+- `MainActivity`：确认、倒计时、使用阻塞和重新附着。
+- `DemoApplication` / Demo Manifest：清理旧任务并移除旧版后台组件入口。
+
+本次代码经过 Demo Debug Kotlin 编译与 APK 构建检查。需要在真机上检查确认/拒绝、5 分钟倒计时、锁屏/切后台后到点执行、用户停止、页面销毁后恢复、进程被杀后的中断提示，以及旧任务升级迁移；未验证前不宣称系统级准点或后台存活保证。

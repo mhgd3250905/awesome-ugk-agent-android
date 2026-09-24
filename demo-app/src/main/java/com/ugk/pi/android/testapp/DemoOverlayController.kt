@@ -25,6 +25,10 @@ class DemoOverlayController(context: Context) {
         commandRouter.bind(owner, commands)
     }
 
+    fun setFallbackCommands(commands: DemoOverlayCommands) {
+        commandRouter.setFallback(commands)
+    }
+
     fun unbindCommands(owner: Any) {
         commandRouter.unbind(owner)
     }

@@ -108,7 +108,7 @@ internal fun normalizeStoredConversation(conversation: DemoConversation): DemoCo
  *
  * Append semantics must not be built on save()'s whole-conversation
  * replacement: a foreground Activity holding a stale in-memory snapshot
- * would otherwise erase messages a background scheduled run appended in the
+ * would otherwise erase messages a process-owned timed run appended in the
  * meantime. Normalization mirrors the save() path, so an append is truncated
  * to MAX_MESSAGES exactly like a save would be.
  */
@@ -203,17 +203,19 @@ class DemoConversationStore(context: Context) {
     /**
      * Atomically appends messages to a stored conversation instead of
      * replacing it wholesale like save(). A foreground Activity can hold a
-     * stale snapshot while a background scheduled run appends its result;
+     * stale snapshot while a timed run appends its result;
      * only an append-merge keeps both turns alive. Returns the updated
      * conversation, or null when the conversation no longer exists — a
      * background append must not resurrect a conversation the user deleted
-     * while the run was in flight.
+     * while the run was in flight. Migration/recovery callers can preserve
+     * the current selection with activateConversation=false.
      */
     @Synchronized
     fun appendMessages(
         conversationId: String,
         messages: List<DemoStoredMessage>,
-        titleUpdate: String? = null
+        titleUpdate: String? = null,
+        activateConversation: Boolean = true
     ): DemoConversation? {
         val current = readAll()
         val existing = current.firstOrNull { it.id == conversationId } ?: return null
@@ -225,7 +227,7 @@ class DemoConversationStore(context: Context) {
         )
         val all = current.filterNot { it.id == updated.id } + updated
         writeAll(keepNewestDemoConversations(all, MAX_CONVERSATIONS))
-        setActive(updated.id)
+        if (activateConversation) setActive(updated.id)
         return updated
     }
 
@@ -239,9 +241,10 @@ class DemoConversationStore(context: Context) {
     fun appendMessagesAndFlush(
         conversationId: String,
         messages: List<DemoStoredMessage>,
-        titleUpdate: String? = null
+        titleUpdate: String? = null,
+        activateConversation: Boolean = true
     ): DemoConversation? {
-        val updated = appendMessages(conversationId, messages, titleUpdate) ?: return null
+        val updated = appendMessages(conversationId, messages, titleUpdate, activateConversation) ?: return null
         try {
             writeExecutor.submit { drainPendingWrites(syncToDisk = true) }.get()
         } catch (error: InterruptedException) {

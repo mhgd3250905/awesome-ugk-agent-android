@@ -110,9 +110,8 @@ Android 原生 Intent 和跨 App 自动化接入：轻量宿主可注册
 剪贴板 Tool/Skill 的 API 限制、原文短暂传递策略和宿主接入方式见
 [`docs/android-clipboard.md`](docs/android-clipboard.md)。
 
-定时任务由 `pi-schedule-skill-android` 和 `ugk-agent-task-runtime-android` 分层提供：前者注册
-`agent_task_create/list/get/update/cancel`，后者对通知任务使用 `AlarmManager`，对 Agent Prompt 使用
-`JobScheduler` 启动后台执行窗口。Demo 已接入 `RUN_AGENT_PROMPT`，会恢复关联会话并实际运行一轮 Agent；整体设计与限制见 [`docs/android-scheduled-tasks.md`](docs/android-scheduled-tasks.md)。
+SDK 通用定时任务仍由 `pi-schedule-skill-android` 和 `ugk-agent-task-runtime-android` 分层提供：前者注册
+`agent_task_create/list/get/update/cancel`，后者使用 `AlarmManager` 或 `JobScheduler`。Demo 当前改用单对话延时任务：用户确认后占用一个进程级等待槽位，到点向同一对话提交新消息。见 [`docs/demo-delayed-conversation.md`](docs/demo-delayed-conversation.md)；SDK 调度器另见 [`docs/android-scheduled-tasks.md`](docs/android-scheduled-tasks.md)。
 
 文件型 Skill 由 `pi-agent-skill-runtime-android` 提供：`SKILL.md` 放在 App 私有
 `filesDir/agent-skills` 下，运行时通过 `skill_list` / `skill_read` 发现和加载；预制的

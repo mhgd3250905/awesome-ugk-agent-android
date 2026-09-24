@@ -3,6 +3,7 @@ package com.ugk.pi.android.testapp
 import com.ugk.pi.android.AgentEvent
 import com.ugk.pi.android.AgentImageContent
 import com.ugk.pi.android.AgentRunInput
+import com.ugk.pi.android.AgentRunSource
 import com.ugk.pi.android.AgentRuntime
 import com.ugk.pi.android.AgentSession
 import kotlinx.coroutines.CancellationException
@@ -28,7 +29,9 @@ import java.util.ArrayDeque
 data class DemoAgentRunOutcome(
     val generation: Long,
     val conversationId: String,
-    val event: AgentEvent
+    val event: AgentEvent,
+    val source: AgentRunSource = AgentRunSource.USER,
+    val handledByProcessOwner: Boolean = false
 )
 
 data class DemoAgentRunSnapshot(
@@ -37,7 +40,8 @@ data class DemoAgentRunSnapshot(
     val state: DemoRunState,
     val isRunning: Boolean,
     val queuedMessages: Int,
-    val pendingOutcome: DemoAgentRunOutcome?
+    val pendingOutcome: DemoAgentRunOutcome?,
+    val source: AgentRunSource = AgentRunSource.USER
 )
 
 class DemoAgentRunCoordinator(
@@ -53,6 +57,8 @@ class DemoAgentRunCoordinator(
     private var session: AgentSession? = null
     private var state = DemoRunState.initial()
     private var pendingOutcome: DemoAgentRunOutcome? = null
+    private var source: AgentRunSource = AgentRunSource.USER
+    private var outcomeObserver: ((AgentEvent) -> Unit)? = null
     private var activeRunLifecycle: DemoAgentRunLifecycle? = null
     private var listenerOwner: Any? = null
     private var eventListener: ((AgentEvent) -> Unit)? = null
@@ -82,12 +88,18 @@ class DemoAgentRunCoordinator(
         conversationId: String,
         message: String,
         images: List<AgentImageContent> = emptyList(),
-        runLifecycle: DemoAgentRunLifecycle? = null
+        runLifecycle: DemoAgentRunLifecycle? = null,
+        source: AgentRunSource = AgentRunSource.USER,
+        taskId: String? = null,
+        onOutcome: ((AgentEvent) -> Unit)? = null,
+        onFinished: (() -> Unit)? = null
     ): Long {
         check(job == null) { "An Agent run is already active" }
         val runId = ++generation
         this.conversationId = conversationId
         this.session = session
+        this.source = source
+        outcomeObserver = onOutcome
         activeRunLifecycle = runLifecycle
         runLifecycle?.onRunStarted()
         // Publish a busy snapshot synchronously. The runtime's first Started
@@ -100,7 +112,12 @@ class DemoAgentRunCoordinator(
         launchedJob = scope.launch(start = CoroutineStart.LAZY) {
             try {
                 withContext(Dispatchers.Default) {
-                    val input = AgentRunInput(content = message, images = images)
+                    val input = AgentRunInput(
+                        content = message,
+                        source = source,
+                        taskId = taskId,
+                        images = images
+                    )
                     runtime.run(runSession, input).collect { event ->
                         withContext(mainDispatcher) {
                             runLifecycle?.onEvent(event)
@@ -122,6 +139,7 @@ class DemoAgentRunCoordinator(
                     if (job !== launchedJob) return@withContext
                     job = null
                     if (activeRunLifecycle === runLifecycle) activeRunLifecycle = null
+                    runCatching { onFinished?.invoke() }
                     finishListener?.invoke()
                 }
             }
@@ -139,6 +157,7 @@ class DemoAgentRunCoordinator(
         job?.cancel()
         state = state.cancel()
         pendingOutcome = null
+        outcomeObserver = null
         return snapshot()
     }
 
@@ -162,6 +181,8 @@ class DemoAgentRunCoordinator(
         this.conversationId = conversationId
         state = DemoRunState.initial()
         pendingOutcome = null
+        source = AgentRunSource.USER
+        outcomeObserver = null
         queuedMessages.clear()
     }
 
@@ -186,7 +207,8 @@ class DemoAgentRunCoordinator(
         state = state,
         isRunning = isRunning(),
         queuedMessages = queuedMessages.size,
-        pendingOutcome = pendingOutcome
+        pendingOutcome = pendingOutcome,
+        source = source
     )
 
     private fun dispatch(runId: Long, event: AgentEvent) {
@@ -204,7 +226,9 @@ class DemoAgentRunCoordinator(
         }
         if (event is AgentEvent.Completed || event is AgentEvent.Failed) {
             val id = conversationId ?: return
-            pendingOutcome = DemoAgentRunOutcome(runId, id, event)
+            val observer = outcomeObserver
+            val handled = observer != null && runCatching { observer(event) }.isSuccess
+            pendingOutcome = DemoAgentRunOutcome(runId, id, event, source, handled)
         }
         eventListener?.invoke(event)
     }

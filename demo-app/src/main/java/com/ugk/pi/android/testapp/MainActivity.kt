@@ -13,6 +13,7 @@ import android.graphics.RectF
 import android.graphics.Typeface
 import android.os.Build
 import android.os.Bundle
+import android.os.SystemClock
 import android.text.Editable
 import android.text.InputType
 import android.text.TextWatcher
@@ -29,6 +30,7 @@ import android.widget.LinearLayout
 import android.widget.ScrollView
 import android.widget.HorizontalScrollView
 import android.widget.TextView
+import android.widget.ProgressBar
 import androidx.activity.ComponentActivity
 import androidx.activity.result.contract.ActivityResultContracts
 import androidx.core.view.ViewCompat
@@ -39,6 +41,7 @@ import com.google.android.material.bottomsheet.BottomSheetDialog
 import com.ugk.pi.android.AgentEvent
 import com.ugk.pi.android.AgentRuntime
 import com.ugk.pi.android.AgentSession
+import com.ugk.pi.android.AgentRunSource
 import com.ugk.pi.android.AgentToolInterlockErrorCodes
 import android.Manifest
 import android.content.pm.PackageManager
@@ -52,8 +55,6 @@ import android.widget.ImageButton
 import androidx.core.app.ActivityCompat
 import androidx.core.content.ContextCompat
 import com.ugk.pi.android.AgentImageContent
-import com.ugk.pi.task.runtime.AlarmManagerAgentTaskScheduler
-import com.ugk.pi.task.runtime.AndroidAgentTaskStore
 import java.io.File
 import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.Dispatchers
@@ -77,8 +78,8 @@ class MainActivity : ComponentActivity() {
         get() = conversationRuntime.conversationStore
     private val traceStore by lazy { DemoAgentTraceStore(applicationContext) }
     private val fileImportStore by lazy { DemoFileImportStore(applicationContext) }
-    private val scheduledTaskStore by lazy { AndroidAgentTaskStore(applicationContext) }
-    private val scheduledTaskScheduler by lazy { AlarmManagerAgentTaskScheduler(applicationContext) }
+    private val delayedTasks: DemoDelayedTaskController
+        get() = processScope.delayedTasks
     private lateinit var activeConversation: DemoConversation
     private val session: AgentSession
         get() = checkNotNull(conversationRuntime.session) {
@@ -142,6 +143,18 @@ class MainActivity : ComponentActivity() {
     private var hasPendingStreamingRender = false
     private val streamingRenderHandler = android.os.Handler(android.os.Looper.getMainLooper())
     private val streamingRenderRunnable = Runnable { flushStreamingAssistantText() }
+    private val delayDialogHandler = android.os.Handler(android.os.Looper.getMainLooper())
+    private var delayDialog: AlertDialog? = null
+    private var delayDialogTaskId: String? = null
+    private var delayDialogPhase: String? = null
+    private var delayCountdownText: TextView? = null
+    private val delayTickRunnable = object : Runnable {
+        override fun run() {
+            val waiting = delayedTasks.snapshot() as? DemoDelayedTaskState.Waiting ?: return
+            updateDelayCountdown(waiting)
+            delayDialogHandler.postDelayed(this, 1000L)
+        }
+    }
     private var lastImeInsetBottom = 0
     private val themeListener: (Boolean) -> Unit = { runOnUiThread { applyTheme() } }
     private val floatingWindow: AgentFloatingWindow
@@ -211,6 +224,9 @@ class MainActivity : ComponentActivity() {
         restoreDraft(savedInstanceState)
         refreshRuntime()
         attachRunCoordinator()
+        delayedTasks.attach(activityToken) { state ->
+            runOnUiThread { renderDelayedTaskState(state) }
+        }
         requestNotificationPermissionIfNeeded()
     }
 
@@ -430,12 +446,16 @@ class MainActivity : ComponentActivity() {
         refreshRuntime()
         confirmationPresenter.onActivityResumed()
         refreshActiveConversationFromStore()
+        if (runCoordinator.snapshot().source == AgentRunSource.SCHEDULED_TASK) {
+            reloadDelayedConversation()
+        }
         updateCapabilityBanner()
         if (::inputField.isInitialized && inputField.text.toString() != conversationRuntime.draft) {
             inputField.setText(conversationRuntime.draft)
             inputField.setSelection(inputField.length())
         }
         renderRunState()
+        renderDelayedTaskState(delayedTasks.snapshot())
         // The main chat is the primary surface. The overlay is only a
         // background-run summary, so keep it hidden while this Activity is
         // visible to avoid competing with the conversation.
@@ -446,6 +466,7 @@ class MainActivity : ComponentActivity() {
     override fun onPause() {
         activityResumed = false
         super.onPause()
+        dismissDelayDialog()
         showFloatingWindowIfNeeded()
         suppressOverlayForInAppNavigation = false
         confirmationPresenter.onActivityPaused()
@@ -453,9 +474,12 @@ class MainActivity : ComponentActivity() {
 
     override fun onDestroy() {
         cancelPendingStreamingRender()
+        dismissDelayDialog()
+        delayedTasks.detach(activityToken)
         inAppUpdateController.release()
         val finishing = isFinishing && !isChangingConfigurations
-        if (finishing) {
+        val keepRuntimeForDelay = delayedTasks.snapshot() !is DemoDelayedTaskState.Idle
+        if (finishing && !keepRuntimeForDelay) {
             runCoordinator.stop()
             runCoordinator.clearQueue()
             runCoordinator.detach(activityToken)
@@ -474,7 +498,7 @@ class MainActivity : ComponentActivity() {
         invalidateImageSelection()
         fileImportScope.cancel()
         super.onDestroy()
-        if (finishing) hideFloatingWindow()
+        if (finishing && !keepRuntimeForDelay) hideFloatingWindow()
         processScope.overlayController.unbindCommands(activityToken)
     }
 
@@ -1022,6 +1046,10 @@ class MainActivity : ComponentActivity() {
     )
 
     private fun openSettings() {
+        if (delayedTasks.snapshot() !is DemoDelayedTaskState.Idle) {
+            showInlineNotice("请先停止当前定时任务")
+            return
+        }
         hideFloatingWindow()
         suppressOverlayForInAppNavigation = true
         startActivity(Intent(this, SettingsActivity::class.java))
@@ -1048,18 +1076,16 @@ class MainActivity : ComponentActivity() {
     private fun rebuildRuntime(config: ApiProviderConfig?) {
         stopAgent(clearQueuedMessages = true)
         conversationRuntime.agentRuntime?.close()
+        val processAuthorizationStore = AgentAuthorizationSettingsStore(applicationContext)
         conversationRuntime.agentRuntime = DemoAgentRuntimeFactory.create(
             context = applicationContext,
-            scheduleStore = scheduledTaskStore,
-            scheduleScheduler = scheduledTaskScheduler,
+            delayedTaskController = delayedTasks,
             confirmationPresenter = confirmationPresenter,
             shouldBypassConfirmation = {
-                authorizationStore.isFullAuthorizationEnabled()
+                processAuthorizationStore.isFullAuthorizationEnabled()
             },
             toolDecorator = capabilityInterlock.toolDecorator(),
-            // The Demo now owns a real Application-level executor used by
-            // JobScheduler when RUN_AGENT_PROMPT reaches its trigger time.
-            supportsBackgroundPromptExecution = true
+            supportsBackgroundPromptExecution = false
         )
         conversationRuntime.appliedRuntimeConfig = DemoRuntimeConfig.from(config)
         refreshRuntimeState(config)
@@ -1091,6 +1117,10 @@ class MainActivity : ComponentActivity() {
     }
 
     private fun sendMessage() {
+        if (delayedTasks.snapshot() !is DemoDelayedTaskState.Idle) {
+            stopAgent()
+            return
+        }
         if (runState.isBusy) {
             stopAgent()
             return
@@ -1213,6 +1243,10 @@ class MainActivity : ComponentActivity() {
     }
 
     private fun enqueueOverlayMessage(text: String): Boolean {
+        if (delayedTasks.snapshot() !is DemoDelayedTaskState.Idle) {
+            floatingWindow.addLog("请先停止当前定时任务")
+            return false
+        }
         val message = text.trim()
         if (message.isBlank()) return false
 
@@ -1230,6 +1264,7 @@ class MainActivity : ComponentActivity() {
     }
 
     private fun startNextQueuedOverlayMessage() {
+        if (delayedTasks.snapshot() !is DemoDelayedTaskState.Idle) return
         if (runState.isBusy || runCoordinator.isRunning()) return
         val next = runCoordinator.removeNextQueued() ?: return
         floatingWindow.addLog("开始处理排队消息")
@@ -1291,7 +1326,9 @@ class MainActivity : ComponentActivity() {
         attachments: List<DemoImportedFile> = emptyList(),
         images: List<ProcessedImage> = emptyList()
     ): Boolean {
-        if (runState.isBusy || runCoordinator.isRunning()) return false
+        if (delayedTasks.snapshot() !is DemoDelayedTaskState.Idle ||
+            runState.isBusy || runCoordinator.isRunning()
+        ) return false
         val currentRuntime = conversationRuntime.agentRuntime ?: return false
         val effectiveText = if (text.isBlank() && images.isNotEmpty()) {
             resolveDefaultImagePromptText(images.size)
@@ -1322,7 +1359,7 @@ class MainActivity : ComponentActivity() {
             imagePaths = imagePaths
         )
         // Append atomically instead of saving this Activity's snapshot: a
-        // background scheduled run may have appended messages this screen has
+        // process-owned timed run may have appended messages this screen has
         // not observed, and a whole-conversation save would erase them.
         val stored = conversationStore.appendMessages(
             conversationId = activeConversation.id,
@@ -1391,21 +1428,32 @@ class MainActivity : ComponentActivity() {
         )
         runState = snapshot.state
         setScreenAutomationActive(capabilityInterlock.isCapabilityOwned())
-        runCoordinator
-            .consumePendingOutcome(activeConversation.id)
-            ?.event
-            ?.let { event ->
-                when (event) {
+        runCoordinator.consumePendingOutcome(activeConversation.id)?.let { outcome ->
+            if (outcome.source == AgentRunSource.SCHEDULED_TASK) {
+                reloadDelayedConversation()
+                if (!outcome.handledByProcessOwner) {
+                    when (val event = outcome.event) {
+                        is AgentEvent.Completed -> persistAssistantMessage(event.content)
+                        is AgentEvent.Failed -> persistAssistantMessage("任务未完成：${event.message}")
+                        else -> Unit
+                    }
+                    (delayedTasks.snapshot() as? DemoDelayedTaskState.Executing)?.let {
+                        delayedTasks.complete(it.task.id)
+                    }
+                }
+            } else {
+                when (val event = outcome.event) {
                     is AgentEvent.Completed -> persistAssistantMessage(event.content)
                     is AgentEvent.Failed -> persistAssistantMessage("任务未完成：${event.message}")
                     else -> Unit
                 }
             }
+        }
         // refreshRuntime() renders once before the coordinator is attached.
         // Render again from the restored snapshot so terminal runs also place
         // their process card between the latest user message and its answer.
         renderConversation()
-        if (!snapshot.isRunning) {
+        if (!snapshot.isRunning && delayedTasks.snapshot() is DemoDelayedTaskState.Idle) {
             floatingWindow.setSending(false)
             startNextQueuedOverlayMessage()
         }
@@ -1418,7 +1466,8 @@ class MainActivity : ComponentActivity() {
         floatingWindow.setSending(false)
         floatingWindow.setStatus(runState.statusLabel)
         setScreenAutomationActive(false)
-        startNextQueuedOverlayMessage()
+        renderDelayedTaskState(delayedTasks.snapshot())
+        if (delayedTasks.snapshot() is DemoDelayedTaskState.Idle) startNextQueuedOverlayMessage()
     }
 
     private fun cancelPendingStreamingRender() {
@@ -1455,6 +1504,11 @@ class MainActivity : ComponentActivity() {
         traceStore.append(event)
         runState = runCoordinator.snapshot().state
         when (event) {
+            is AgentEvent.Started -> {
+                if (runCoordinator.snapshot().source == AgentRunSource.SCHEDULED_TASK) {
+                    reloadDelayedConversation()
+                }
+            }
             is AgentEvent.ToolStarted -> {
                 if (DemoScreenAutomationPolicy.isScreenWorkflowTool(event.call.name)) {
                     setScreenAutomationActive(true)
@@ -1525,7 +1579,17 @@ class MainActivity : ComponentActivity() {
                 cancelPendingStreamingRender()
                 setScreenAutomationActive(false)
                 streamingAssistantText = null
-                persistAssistantMessage(event.content)
+                if (runCoordinator.snapshot().source == AgentRunSource.SCHEDULED_TASK) {
+                    reloadDelayedConversation()
+                    if (runCoordinator.snapshot().pendingOutcome?.handledByProcessOwner != true) {
+                        persistAssistantMessage(event.content)
+                        (delayedTasks.snapshot() as? DemoDelayedTaskState.Executing)?.let {
+                            delayedTasks.complete(it.task.id)
+                        }
+                    }
+                } else {
+                    persistAssistantMessage(event.content)
+                }
                 runCoordinator.acknowledgeOutcome()
                 floatingWindow.setStatus("已完成")
                 floatingWindow.addLog("回答已完成")
@@ -1534,7 +1598,15 @@ class MainActivity : ComponentActivity() {
                 cancelPendingStreamingRender()
                 setScreenAutomationActive(false)
                 streamingAssistantText = null
-                if (event.message.isNotBlank()) {
+                if (runCoordinator.snapshot().source == AgentRunSource.SCHEDULED_TASK) {
+                    reloadDelayedConversation()
+                    if (runCoordinator.snapshot().pendingOutcome?.handledByProcessOwner != true) {
+                        persistAssistantMessage("任务未完成：${event.message}")
+                        (delayedTasks.snapshot() as? DemoDelayedTaskState.Executing)?.let {
+                            delayedTasks.complete(it.task.id)
+                        }
+                    }
+                } else if (event.message.isNotBlank()) {
                     persistAssistantMessage("任务未完成：${event.message}")
                 }
                 runCoordinator.acknowledgeOutcome()
@@ -1741,12 +1813,17 @@ class MainActivity : ComponentActivity() {
     }
 
     private fun updateComposerState() {
+        val delayOccupied = delayedTasks.snapshot() !is DemoDelayedTaskState.Idle
         if (::historyButton.isInitialized) {
-            historyButton.isEnabled = !processingImages
-            historyButton.alpha = if (processingImages) 0.45f else 1f
+            historyButton.isEnabled = !processingImages && !delayOccupied
+            historyButton.alpha = if (processingImages || delayOccupied) 0.45f else 1f
+        }
+        if (::settingsButton.isInitialized) {
+            settingsButton.isEnabled = !delayOccupied
+            settingsButton.alpha = if (delayOccupied) 0.45f else 1f
         }
         if (!::sendButton.isInitialized) return
-        val busy = runState.isBusy
+        val busy = runState.isBusy || delayOccupied
         inputField.isEnabled = !busy && !processingImages
         val hasText = !inputField.text.isNullOrBlank()
         val hasAttachments = pendingImportedFiles.isNotEmpty()
@@ -1773,6 +1850,129 @@ class MainActivity : ComponentActivity() {
             else -> SendActionButton.State.DISABLED
         }
         sendButton.isEnabled = actionable
+    }
+
+    private fun renderDelayedTaskState(state: DemoDelayedTaskState) {
+        if (!::activeConversation.isInitialized) return
+        updateComposerState()
+        when (state) {
+            DemoDelayedTaskState.Idle -> {
+                dismissDelayDialog()
+                reloadDelayedConversation()
+            }
+            is DemoDelayedTaskState.Proposed -> {
+                floatingWindow.setStatus("等待定时任务确认")
+                if (activityResumed && !runCoordinator.isRunning()) showDelayConfirmation(state.task)
+            }
+            is DemoDelayedTaskState.Waiting -> {
+                floatingWindow.setStatus("定时任务等待中")
+                if (activityResumed) showDelayWaitingDialog(state)
+            }
+            is DemoDelayedTaskState.Executing -> {
+                dismissDelayDialog()
+                floatingWindow.setStatus("定时任务执行中")
+                reloadDelayedConversation()
+            }
+        }
+    }
+
+    private fun showDelayConfirmation(task: DemoDelayedTask) {
+        if (delayDialogTaskId == task.id && delayDialogPhase == "proposal" && delayDialog?.isShowing == true) return
+        dismissDelayDialog()
+        val queued = runCoordinator.snapshot().queuedMessages
+        val message = "确认后等待 ${formatDelay(task.delaySeconds)}，再在当前对话执行：\n\n" +
+            task.instruction +
+            (if (queued > 0) "\n\n开启后会清空当前排队的 $queued 条消息。" else "") +
+            "\n\n请在手机系统设置中允许后台运行、自启动，并减少电池限制。" +
+            "如果应用进程被系统结束，任务将中断。"
+        val dialog = AlertDialog.Builder(this, Ui.dialogTheme())
+            .setTitle("确认定时任务")
+            .setMessage(message)
+            .setCancelable(false)
+            .setNegativeButton("取消") { _, _ ->
+                delayedTasks.reject(task.id)
+                startNextQueuedOverlayMessage()
+            }
+            .setNeutralButton("后台设置") { _, _ ->
+                startActivity(Intent(Settings.ACTION_APPLICATION_DETAILS_SETTINGS).apply {
+                    data = Uri.parse("package:$packageName")
+                })
+            }
+            .setPositiveButton("开启") { _, _ ->
+                if (!delayedTasks.confirm(task.id)) {
+                    delayedTasks.reject(task.id)
+                    showInlineNotice("无法保存定时任务，请重试")
+                    startNextQueuedOverlayMessage()
+                }
+            }
+            .create()
+        delayDialog = dialog
+        delayDialogTaskId = task.id
+        delayDialogPhase = "proposal"
+        dialog.show()
+    }
+
+    private fun showDelayWaitingDialog(waiting: DemoDelayedTaskState.Waiting) {
+        if (delayDialogTaskId == waiting.task.id && delayDialogPhase == "waiting" && delayDialog?.isShowing == true) {
+            updateDelayCountdown(waiting)
+            return
+        }
+        dismissDelayDialog()
+        val content = LinearLayout(this).apply {
+            orientation = LinearLayout.VERTICAL
+            setPadding(dp(24), dp(12), dp(24), dp(18))
+        }
+        val spinner = ProgressBar(this).apply { isIndeterminate = true }
+        content.addView(spinner, LinearLayout.LayoutParams(dp(32), dp(32)).apply {
+            gravity = Gravity.CENTER_HORIZONTAL
+            bottomMargin = dp(10)
+        })
+        val countdown = TextView(this).apply {
+            textSize = 16f
+            setTextColor(Ui.TextPrimary)
+        }
+        content.addView(countdown)
+        val dialog = AlertDialog.Builder(this, Ui.dialogTheme())
+            .setTitle("定时任务等待中")
+            .setView(content)
+            .setCancelable(false)
+            .setPositiveButton("停止任务") { _, _ -> stopAgent() }
+            .create()
+        delayDialog = dialog
+        delayDialogTaskId = waiting.task.id
+        delayDialogPhase = "waiting"
+        delayCountdownText = countdown
+        dialog.show()
+        updateDelayCountdown(waiting)
+        delayDialogHandler.postDelayed(delayTickRunnable, 1000L)
+    }
+
+    private fun updateDelayCountdown(waiting: DemoDelayedTaskState.Waiting) {
+        val remaining = ((waiting.deadlineElapsedMillis - SystemClock.elapsedRealtime() + 999L) / 1000L)
+            .coerceAtLeast(0L)
+        val deadline = DateFormat.getTimeInstance(DateFormat.SHORT).format(Date(waiting.deadlineWallMillis))
+        delayCountdownText?.text = "${waiting.task.instruction}\n\n剩余 ${formatDelay(remaining)}" +
+            "\n预计 $deadline 开始\n\n离开此页面或锁屏不会主动取消任务。"
+    }
+
+    private fun dismissDelayDialog() {
+        delayDialogHandler.removeCallbacks(delayTickRunnable)
+        delayDialog?.dismiss()
+        delayDialog = null
+        delayDialogTaskId = null
+        delayDialogPhase = null
+        delayCountdownText = null
+    }
+
+    private fun formatDelay(seconds: Long): String {
+        val hours = seconds / 3600L
+        val minutes = (seconds % 3600L) / 60L
+        val rest = seconds % 60L
+        return if (hours > 0L) {
+            "%d:%02d:%02d".format(hours, minutes, rest)
+        } else {
+            "%02d:%02d".format(minutes, rest)
+        }
     }
 
     private fun removePendingFile(file: DemoImportedFile) {
@@ -1910,6 +2110,19 @@ class MainActivity : ComponentActivity() {
     }
 
     private fun stopAgent(clearQueuedMessages: Boolean = true) {
+        if (clearQueuedMessages && delayedTasks.snapshot() !is DemoDelayedTaskState.Idle) {
+            runCoordinator.clearQueue()
+        }
+        if (delayedTasks.stop()) {
+            confirmationPresenter.cancelPending()
+            conversationRuntime.agentRuntime?.cancelAllPlugins()
+            if (runCoordinator.isRunning()) runCoordinator.stop()
+            runState = runCoordinator.snapshot().state
+            renderRunState()
+            floatingWindow.setSending(false)
+            floatingWindow.setStatus("已停止")
+            return
+        }
         confirmationPresenter.cancelPending()
         if (!runCoordinator.isRunning() && !runState.isBusy) {
             setScreenAutomationActive(false)
@@ -2116,13 +2329,13 @@ class MainActivity : ComponentActivity() {
         }
     }
 
-    /**
-     * A JobService may append a scheduled turn while this Activity is alive.
-     * Reload the durable conversation when returning to the foreground so the
-     * result is visible without requiring a process restart.
-     */
+    /** Reload results appended by the process-owned timed-message dispatcher. */
     private fun refreshActiveConversationFromStore() {
         if (!::activeConversation.isInitialized) return
+        if (delayedTasks.snapshot() !is DemoDelayedTaskState.Idle) {
+            reloadDelayedConversation()
+            return
+        }
         if (runState.isBusy || runCoordinator.isRunning()) return
         val latest = conversationStore.get(activeConversation.id) ?: return
         if (latest.updatedAt == activeConversation.updatedAt &&
@@ -2137,11 +2350,27 @@ class MainActivity : ComponentActivity() {
         renderConversation()
     }
 
+    /** A timed turn writes through the process owner even while this Activity is detached. */
+    private fun reloadDelayedConversation() {
+        if (!::activeConversation.isInitialized) return
+        val latest = conversationStore.get(activeConversation.id) ?: return
+        if (latest.updatedAt == activeConversation.updatedAt &&
+            latest.messages == activeConversation.messages
+        ) return
+        activeConversation = latest
+        syncTranscript()
+        renderConversation()
+    }
+
     private fun updateAppBar() {
         if (::appBarTitle.isInitialized) appBarTitle.text = activeConversation.title
     }
 
     private fun selectConversation(id: String) {
+        if (delayedTasks.snapshot() !is DemoDelayedTaskState.Idle) {
+            showInlineNotice("请先停止当前定时任务")
+            return
+        }
         if (processingImages) {
             showInlineNotice("正在处理图片，请稍候...")
             return
@@ -2167,6 +2396,10 @@ class MainActivity : ComponentActivity() {
     }
 
     private fun createNewConversation() {
+        if (delayedTasks.snapshot() !is DemoDelayedTaskState.Idle) {
+            showInlineNotice("请先停止当前定时任务")
+            return
+        }
         if (processingImages) {
             showInlineNotice("正在处理图片，请稍候...")
             return
@@ -2186,6 +2419,10 @@ class MainActivity : ComponentActivity() {
     }
 
     private fun showConversationHistory() {
+        if (delayedTasks.snapshot() !is DemoDelayedTaskState.Idle) {
+            showInlineNotice("请先停止当前定时任务")
+            return
+        }
         if (processingImages) {
             showInlineNotice("正在处理图片，请稍候...")
             return
@@ -2389,6 +2626,10 @@ class MainActivity : ComponentActivity() {
         conversation: DemoConversation,
         onChanged: () -> Unit
     ) {
+        if (delayedTasks.snapshot() !is DemoDelayedTaskState.Idle) {
+            showInlineNotice("请先停止当前定时任务")
+            return
+        }
         AlertDialog.Builder(this, Ui.dialogTheme())
             .setItems(arrayOf("重命名", "删除")) { _, which ->
                 if (which == 0) renameConversation(conversation, onChanged)

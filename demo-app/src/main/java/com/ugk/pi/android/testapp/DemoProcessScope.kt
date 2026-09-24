@@ -1,6 +1,7 @@
 package com.ugk.pi.android.testapp
 
 import android.content.Context
+import android.content.Intent
 
 /**
  * Composition root for the demo process.
@@ -18,6 +19,38 @@ class DemoProcessScope private constructor(context: Context) {
     val confirmationPresenter: ActivityUserConfirmationDialogPresenter =
         ActivityUserConfirmationDialogPresenter()
     val overlayController: DemoOverlayController = DemoOverlayController(appContext)
+    internal val delayedTasks: DemoDelayedTaskController by lazy {
+        DemoDelayedTaskController(appContext, conversationRuntime) { task ->
+            delayedMessageDispatcher.dispatch(task)
+        }
+    }
+    private val delayedMessageDispatcher: DemoDelayedMessageDispatcher by lazy {
+        DemoDelayedMessageDispatcher(appContext, this)
+    }
+
+    init {
+        overlayController.setFallbackCommands(DemoOverlayCommands(
+            onSend = {
+                overlayController.window.addLog("请打开主对话后发送消息")
+                false
+            },
+            onStop = {
+                conversationRuntime.runCoordinator.clearQueue()
+                delayedTasks.stop()
+                conversationRuntime.agentRuntime?.cancelAllPlugins()
+                conversationRuntime.runCoordinator.stop()
+                overlayController.window.setSending(false)
+                overlayController.window.setStatus("已停止")
+            },
+            onOpenApp = {
+                appContext.startActivity(Intent(appContext, MainActivity::class.java).apply {
+                    addFlags(Intent.FLAG_ACTIVITY_NEW_TASK or Intent.FLAG_ACTIVITY_REORDER_TO_FRONT)
+                })
+            },
+            onHide = { overlayController.window.hide() },
+            onDraftChanged = { value -> conversationRuntime.draft = value }
+        ))
+    }
 
     companion object {
         @Volatile

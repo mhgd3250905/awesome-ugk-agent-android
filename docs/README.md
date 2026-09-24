@@ -42,6 +42,7 @@
 | [android-accessibility-screen-automation.md](android-accessibility-screen-automation.md) | Android Accessibility 屏幕自动化 Skill、Tool 协议、宿主接入和验证边界 |
 | [android-clipboard.md](android-clipboard.md) | Android 文本剪贴板 Tool/Skill、确认策略、隐私和 API 限制 |
 | [android-scheduled-tasks.md](android-scheduled-tasks.md) | Android Agent 定时任务控制面、持久化调度运行时、能力开关和验收边界 |
+| [demo-delayed-conversation.md](demo-delayed-conversation.md) | Demo 当前的单对话延时任务：用户确认、独占等待、到点同会话续跑和进程边界 |
 | [android-agent-skills.md](android-agent-skills.md) | 文件型 SKILL.md 运行时、动态加载策略、命名根嵌入和 agent-memory |
 | [sdk-optimization-ledger.md](sdk-optimization-ledger.md) | SDK 架构优化步骤、验证结果和版本影响台账 |
 | [sdk-confirmation-ticket-contract.md](sdk-confirmation-ticket-contract.md) | SDK 确认票据契约：票据生成、绑定与消费的单一事实源 |
@@ -66,7 +67,7 @@
 需要理解实现时，再读 `terminal-runtime-architecture.md`；需要改变方向时，先读并更新 `terminal-runtime-decisions.md`。
 
 涉及 `demo-app` 的聊天或悬浮窗 UI 时，补读 `demo-app-ui-redesign.md` 和
-`demo-app-version-ledger.md`；这两份文档只记录宿主 Demo 的产品 UI，不改变 Terminal Runtime 的 Gate 结论。
+`demo-app-version-ledger.md`；涉及延时任务再读 `demo-delayed-conversation.md`。这些文档记录宿主 Demo 的产品行为，不改变 Terminal Runtime 的 Gate 结论。
 
 ## 状态标签
 
