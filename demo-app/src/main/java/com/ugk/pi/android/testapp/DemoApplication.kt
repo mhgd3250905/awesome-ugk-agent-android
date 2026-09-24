@@ -6,9 +6,18 @@ import com.ugk.pi.task.runtime.AgentTaskRuntimeOwner
 import com.ugk.pi.task.runtime.AlarmManagerAgentTaskScheduler
 import com.ugk.pi.task.runtime.AndroidAgentTaskRuntime
 import com.ugk.pi.task.runtime.AndroidAgentTaskStore
+import java.io.File
 
 /** Host composition entry point used when JobScheduler starts the app process. */
 class DemoApplication : Application(), AgentTaskRuntimeOwner {
+    override fun onCreate() {
+        super.onCreate()
+        // Remove credentials and diagnostics persisted by the retired Jev trial.
+        deleteSharedPreferences("jev_screen_settings")
+        File(filesDir, "jev-live-probe.json").delete()
+        File(filesDir, "jev-live-request.json").delete()
+    }
+
     val processScope: DemoProcessScope by lazy {
         DemoProcessScope.get(this)
     }
