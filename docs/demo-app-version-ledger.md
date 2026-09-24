@@ -1,11 +1,11 @@
 # demo-app 版本与变更台账
 
-更新时间：2026-09-03
-当前保存版本：`1.0.5`（`versionCode 105`）
+更新时间：2026-09-24
+当前本地测试版本：`1.1.0`（`versionCode 106`）
 版本范围：仅 `:demo-app`；SDK/AAR 模块版本继续独立维护。
-当前阶段：在 `1.0.4`（Play 应用内更新提示，功能 commit `11d9945`、版本 commit `4e4bbe4`）之上交付悬浮窗 IME 贴顶钳位高度压缩（`1.0.5 / 105`，功能 commit `c703f91`、版本 commit `11d764a`）；`1.0.3`、`1.0.4` 已发布到 Play 内部测试轨道，自 `1.0.5` 起运行 `1.0.4` 的测试人员可见 Play 应用内更新弹窗；`1.0.5` 的 Play 轨道发布状态在本次补记时点无外部观察证据，以 Play Console 实测为准。版本边界标签为 `demo-app-v1.0.5@11d764a`；远端状态以 Git 实测为准。
+当前阶段：在已保存的 `1.0.5 / 105`（功能 commit `c703f91`、版本 commit `11d764a`）之后，完成视觉优先屏幕自动化（源码 commit `2d01a70`）及 Jev 遗留试验数据清理（源码 commit `e4c422d`）；按用户可感知功能的 minor 版本规则，将本地测试版本元数据更新至 `1.1.0 / 106`。`1.0.3`、`1.0.4` 已发布到 Play 内部测试轨道；`1.0.5` 的 Play 轨道发布状态无外部观察证据，`1.1.0` 尚未提交 Play，本次收口不创建发布标签。已存在的 `demo-app-v1.0.5@11d764a` 版本边界保持不变。
 
-> 文首元数据、版本规则和 `1.0.5` 记录描述当前保存点；其后的版本条目是不可改写的历史记录。
+> 文首元数据、版本规则和 `1.1.0` 记录描述当前本地测试保存点；其后的版本条目是不可改写的历史记录。
 > 历史条目中的“当前”仅指该条目记录时点，不是今天的版本或验证状态。
 
 ## 版本规则
@@ -13,9 +13,23 @@
 - `versionCode` 只递增，不因重新打包或覆盖安装回退。
 - `versionName` 使用面向测试交付的 SemVer 风格；聊天、会话和悬浮窗等一组可感知能力完成后提升 minor 版本。
 - 稳定性修复、生命周期恢复和验收证据整理使用 patch 版本递增，不与新的用户可感知 UI 能力混用。
-- 本阶段版本边界标签名为 `demo-app-v1.0.5@11d764a`；`demo-app-v1.0.4@4e4bbe4`、`demo-app-v1.0.3@032589c`、`demo-app-v1.0.2@6f88115`、`demo-app-v0.9.4`、`demo-app-v0.9.3`（指向 `1170268`）、`demo-app-v0.9.2`、`demo-app-v0.9.1`、`demo-app-v0.9.0`、`demo-app-v0.8.0`、`demo-app-v0.7.1`、`demo-app-v0.7.0`、`demo-app-v0.6.0`、`demo-app-v0.5.0`、`demo-app-v0.4.0` 和 `demo-app-v0.3.0` 保留为历史 Demo 交付标签，不代表 Terminal Runtime 已达到最终发布状态。
+- 最近已保存的历史版本边界标签为 `demo-app-v1.0.5@11d764a`；`1.1.0 / 106` 是本地测试版本，未创建发布标签。`demo-app-v1.0.4@4e4bbe4`、`demo-app-v1.0.3@032589c`、`demo-app-v1.0.2@6f88115`、`demo-app-v0.9.4`、`demo-app-v0.9.3`（指向 `1170268`）、`demo-app-v0.9.2`、`demo-app-v0.9.1`、`demo-app-v0.9.0`、`demo-app-v0.8.0`、`demo-app-v0.7.1`、`demo-app-v0.7.0`、`demo-app-v0.6.0`、`demo-app-v0.5.0`、`demo-app-v0.4.0` 和 `demo-app-v0.3.0` 保留为历史 Demo 交付标签，不代表 Terminal Runtime 已达到最终发布状态。
 - Debug APK 允许本机从被 Git 忽略的配置读取 API 默认值，不能作为对外分发包；API Key 不进入源码、文档或提交。
-- 真机迭代使用固定 Debug 签名和 `adb install -r -d`，不以卸载、清数据作为常规版本升级步骤；本阶段不操作真机。
+- 真机迭代使用固定 Debug 签名和 `adb install -r -d`，不以卸载、清数据作为常规版本升级步骤；用户反馈已在真机测试 1.0.5/105 Debug 包，设备和日志信息未记录，Agent 未独立操作设备或复核该结果。
+
+## 1.1.0 · 2026-09-24 · 视觉优先屏幕自动化
+
+### 变更范围
+
+- 对支持截图的无障碍后端，屏幕自动化以当前截图作为主要观察，操作后重新截图验证；结构树用于语义证据、精确文本、节点能力和目标消歧。截图不支持时使用结构树；截图失败最多重试一次，之后回退结构树。实现与限制见 [`android-accessibility-screen-automation.md`](android-accessibility-screen-automation.md)，源码提交 `2d01a70`。
+- `DemoApplication` 启动时删除已退役 Jev 试验留下的偏好和两个数据文件（源码提交 `e4c422d`）。
+- Demo 测试交付元数据由 `1.0.5 / versionCode 105` 升至 `1.1.0 / versionCode 106`。此版本未提交 Play，也未创建发布标签。
+
+### 验收证据与边界
+
+- `:demo-app:assembleDebug`、8 个 SDK 模块及 `:demo-app:testDebugUnitTest`、`:demo-app:compileDebugAndroidTestKotlin` 在源码 HEAD `e4c422da81d675f623558a0b29dcb5efd640a12e` 对应的提交内容上通过；9 个模块共 `573` 项（0 failure、0 error、3 skipped）。该测试结果在版本元数据递增前执行；本次收口另行验证 `1.1.0 / 106` Debug APK 构建。
+- 用户反馈此前安装的 `1.0.5 / 105` Debug APK 真机测试效果不错。该反馈对应视觉优先实现的同一源码；设备型号、系统版本和独立日志未记录，不作为 Agent 独立复核结果。`1.1.0 / 106` 是新的本地测试元数据，尚无此版本真机验证。
+- Play 发布状态：本次未上传；`1.1.0` 不是 Play 发布。旧版 `1.0.5` 的 Play 轨道状态仍以 Play Console 实测为准。
 
 ## 1.0.5 · 2026-09-03 · 悬浮窗贴顶钳位下的 IME 高度压缩
 
