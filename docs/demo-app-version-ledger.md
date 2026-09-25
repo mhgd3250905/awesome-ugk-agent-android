@@ -28,7 +28,7 @@
 
 ### 验收证据与边界
 
-- `:demo-app:assembleDebug` 与 `:pi-attention-skill-android:publishReleasePublicationToMavenLocal` 通过，`0.3.0` AAR 已落到本机 Maven 仓库；`aapt dump badging` 确认 APK 是 `com.ugk.pi.agent / 1.5.0 / 114`，`git diff --check` 通过。授权小米当前未被 ADB 枚举，本轮尚未覆盖安装 `1.5.0 / 114`。真实模型选择控件、按钮回传以及不同输入法布局仍需真机使用反馈。
+- `:demo-app:assembleDebug` 与 `:pi-attention-skill-android:publishReleasePublicationToMavenLocal` 通过，`0.3.0` AAR 已落到本机 Maven 仓库；`aapt dump badging` 确认 APK 是 `com.ugk.pi.agent / 1.5.0 / 114`，`git diff --check` 通过。授权小米 `QSG6Q8IFDMDELVGQ`（实测型号 `2602BRT18C`）已通过 `adb install -r` 保留数据覆盖安装并启动，`dumpsys package` 确认 `1.5.0 / 114`、应用进程存在，原 API、会话与其他偏好文件仍在；安装前后延时任务标记均为空。真实模型选择控件、按钮回传以及不同输入法布局仍需用户真机体验反馈。
 
 ## 1.4.0 · 2026-09-25 · 醒目通知与整屏重要提醒
 
