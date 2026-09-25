@@ -17,7 +17,8 @@ internal data class DemoDelayedTask(
     val conversationId: String,
     val sessionId: String,
     val instruction: String,
-    val delaySeconds: Long
+    val delaySeconds: Long,
+    val repeating: Boolean = false
 )
 
 internal sealed interface DemoDelayedTaskState {
@@ -26,9 +27,15 @@ internal sealed interface DemoDelayedTaskState {
     data class Waiting(
         val task: DemoDelayedTask,
         val deadlineElapsedMillis: Long,
-        val deadlineWallMillis: Long
+        val deadlineWallMillis: Long,
+        val completedRuns: Long = 0L,
+        val latestResult: String? = null
     ) : DemoDelayedTaskState
-    data class Executing(val task: DemoDelayedTask) : DemoDelayedTaskState
+    data class Executing(
+        val task: DemoDelayedTask,
+        val scheduledElapsedMillis: Long = 0L,
+        val completedRuns: Long = 0L
+    ) : DemoDelayedTaskState
 }
 
 /** One process-owned delay slot. No platform alarm or independent Agent session is created. */
@@ -52,10 +59,13 @@ internal class DemoDelayedTaskController(
         if (taskId != null && conversationId != null) {
             val instruction = prefs.getString(KEY_INSTRUCTION, "").orEmpty()
             val wasExecuting = prefs.getBoolean(KEY_EXECUTING, false)
-            val message = if (wasExecuting) {
-                "上次定时任务在应用进程结束时中断，执行结果可能不完整：$instruction"
-            } else {
-                "上次定时任务因应用进程结束而中断，尚未执行：$instruction"
+            val repeating = prefs.getBoolean(KEY_REPEATING, false)
+            val message = when {
+                repeating && wasExecuting ->
+                    "上次周期任务在应用进程结束时中断，本轮结果可能不完整；周期任务已停止：$instruction"
+                repeating -> "上次周期任务因应用进程结束而中断，已停止后续执行：$instruction"
+                wasExecuting -> "上次定时任务在应用进程结束时中断，执行结果可能不完整：$instruction"
+                else -> "上次定时任务因应用进程结束而中断，尚未执行：$instruction"
             }
             runCatching {
                 conversationRuntime.conversationStore.appendMessagesAndFlush(
@@ -88,7 +98,8 @@ internal class DemoDelayedTaskController(
     suspend fun propose(
         sessionId: String,
         instruction: String,
-        delaySeconds: Long
+        delaySeconds: Long,
+        repeating: Boolean = false
     ): Result<DemoDelayedTask> = withContext(Dispatchers.Main.immediate) {
         val conversationId = conversationRuntime.activeConversationId
         when {
@@ -104,7 +115,8 @@ internal class DemoDelayedTaskController(
                     conversationId = conversationId,
                     sessionId = sessionId,
                     instruction = instruction,
-                    delaySeconds = delaySeconds
+                    delaySeconds = delaySeconds,
+                    repeating = repeating
                 )
                 publish(DemoDelayedTaskState.Proposed(task))
                 Result.success(task)
@@ -124,6 +136,7 @@ internal class DemoDelayedTaskController(
                 .putString(KEY_TASK_ID, proposed.task.id)
                 .putString(KEY_CONVERSATION_ID, proposed.task.conversationId)
                 .putString(KEY_INSTRUCTION, proposed.task.instruction)
+                .putBoolean(KEY_REPEATING, proposed.task.repeating)
                 .putBoolean(KEY_EXECUTING, false)
                 .commit()
         ) return false
@@ -131,25 +144,18 @@ internal class DemoDelayedTaskController(
         if (queued > 0) {
             conversationRuntime.runCoordinator.clearQueue()
         }
-        appendStatus(
-            proposed.task,
-            "已开启定时任务：${proposed.task.delaySeconds} 秒后执行「${proposed.task.instruction}」。" +
-                if (queued > 0) "原有 $queued 条排队消息已清空。" else ""
-        )
-        publish(DemoDelayedTaskState.Waiting(proposed.task, deadlineElapsed, deadlineWall))
-        timerJob = scope.launch {
-            delay((deadlineElapsed - SystemClock.elapsedRealtime()).coerceAtLeast(0L))
-            // The proposal tool ends the first Agent turn. Do not start the
-            // timed turn until that session's run gate has been released.
-            while (isWaitingFor(taskId) && conversationRuntime.runCoordinator.isRunning()) {
-                delay(50L)
+        val task = proposed.task
+        appendStatus(task, buildString {
+            if (task.repeating) {
+                append("已开启周期任务：每 ${task.delaySeconds} 秒执行「${task.instruction}」，直到手动停止。")
+            } else {
+                append("已开启定时任务：${task.delaySeconds} 秒后执行「${task.instruction}」。")
             }
-            if (!isWaitingFor(taskId)) return@launch
-            prefs.edit().putBoolean(KEY_EXECUTING, true).commit()
-            publish(DemoDelayedTaskState.Executing(proposed.task))
-            runCatching { onDue(proposed.task) }
-                .onFailure { fail(taskId, "定时任务启动失败：${it.message ?: "未知错误"}") }
-        }
+            if (queued > 0) append("原有 $queued 条排队消息已清空。")
+        })
+        val waiting = DemoDelayedTaskState.Waiting(task, deadlineElapsed, deadlineWall)
+        publish(waiting)
+        startTimer(waiting)
         return true
     }
 
@@ -179,23 +185,80 @@ internal class DemoDelayedTaskController(
         return true
     }
 
-    fun complete(taskId: String) {
+    fun complete(taskId: String, latestResult: String? = null) {
         val executing = state as? DemoDelayedTaskState.Executing ?: return
         if (executing.task.id != taskId) return
         timerJob = null
-        clearMarker()
-        publish(DemoDelayedTaskState.Idle)
+        if (!executing.task.repeating) {
+            clearMarker()
+            publish(DemoDelayedTaskState.Idle)
+            return
+        }
+        val nowElapsed = SystemClock.elapsedRealtime()
+        val intervalMillis = executing.task.delaySeconds * 1_000L
+        val scheduled = executing.scheduledElapsedMillis.takeIf { it > 0L } ?: nowElapsed
+        // Preserve the cadence from the confirmed first deadline. A long run
+        // skips missed ticks instead of creating overlapping or catch-up runs.
+        val periods = ((nowElapsed - scheduled).coerceAtLeast(0L) / intervalMillis) + 1L
+        val nextElapsed = scheduled + periods * intervalMillis
+        val nextWall = System.currentTimeMillis() + (nextElapsed - nowElapsed)
+        if (!prefs.edit().putBoolean(KEY_EXECUTING, false).commit()) {
+            appendStatus(executing.task, "周期任务状态保存失败，已停止后续执行：${executing.task.instruction}")
+            clearMarker()
+            publish(DemoDelayedTaskState.Idle)
+            return
+        }
+        val waiting = DemoDelayedTaskState.Waiting(
+            executing.task,
+            nextElapsed,
+            nextWall,
+            executing.completedRuns + 1L,
+            latestResult?.trim()?.takeIf { it.isNotEmpty() }?.let { result ->
+                if (result.length > MAX_LATEST_RESULT_CHARS) {
+                    result.take(MAX_LATEST_RESULT_CHARS) + "…（完整结果保存在对话中）"
+                } else result
+            }
+        )
+        publish(waiting)
+        startTimer(waiting)
     }
 
     fun fail(taskId: String, reason: String) {
         val executing = state as? DemoDelayedTaskState.Executing ?: return
         if (executing.task.id != taskId) return
         appendStatus(executing.task, reason)
-        complete(taskId)
+        timerJob?.cancel()
+        timerJob = null
+        clearMarker()
+        publish(DemoDelayedTaskState.Idle)
     }
 
-    private fun isWaitingFor(taskId: String): Boolean =
-        (state as? DemoDelayedTaskState.Waiting)?.task?.id == taskId
+    private fun startTimer(waiting: DemoDelayedTaskState.Waiting) {
+        timerJob?.cancel()
+        timerJob = scope.launch {
+            delay((waiting.deadlineElapsedMillis - SystemClock.elapsedRealtime()).coerceAtLeast(0L))
+            // The proposal or previous timed turn must release the run gate.
+            while (state == waiting && conversationRuntime.runCoordinator.isRunning()) {
+                delay(50L)
+            }
+            if (state != waiting) return@launch
+            if (!prefs.edit().putBoolean(KEY_EXECUTING, true).commit()) {
+                appendStatus(waiting.task, "定时任务状态保存失败，已停止执行：${waiting.task.instruction}")
+                clearMarker()
+                publish(DemoDelayedTaskState.Idle)
+                return@launch
+            }
+            publish(DemoDelayedTaskState.Executing(
+                waiting.task,
+                waiting.deadlineElapsedMillis,
+                waiting.completedRuns
+            ))
+            runCatching { onDue(waiting.task) }
+                .onFailure {
+                    fail(waiting.task.id, "定时任务启动失败：${it.message ?: "未知错误"}")
+                }
+        }
+    }
 
     private fun publish(next: DemoDelayedTaskState) {
         state = next
@@ -223,6 +286,8 @@ internal class DemoDelayedTaskController(
         const val KEY_TASK_ID = "task_id"
         const val KEY_CONVERSATION_ID = "conversation_id"
         const val KEY_INSTRUCTION = "instruction"
+        const val KEY_REPEATING = "repeating"
         const val KEY_EXECUTING = "executing"
+        const val MAX_LATEST_RESULT_CHARS = 2_000
     }
 }

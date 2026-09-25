@@ -57,22 +57,30 @@ internal class DemoDelayedTaskDialog(
         if (isShowing(task.id, Phase.PROPOSAL)) return
         dismiss()
         val (card, content) = card()
-        content.addView(eyebrow("单次定时任务"))
-        content.addView(title("稍后继续这件事"), fullWidth(top = 18))
-        content.addView(body("确认后开始计时，到点会在当前对话继续执行。"), fullWidth(top = 6))
+        content.addView(eyebrow(if (task.repeating) "周期任务" else "单次定时任务"))
+        content.addView(title(if (task.repeating) "按间隔重复执行" else "稍后继续这件事"), fullWidth(top = 18))
+        content.addView(body(if (task.repeating) {
+            "确认后每隔一段时间在当前对话执行一次，首次在一个间隔后开始，直到你停止任务。"
+        } else {
+            "确认后开始计时，到点会在当前对话继续执行。"
+        }), fullWidth(top = 6))
 
         val timing = panel(Ui.PrimaryContainer)
-        timing.addView(caption("等待时长", Ui.OnPrimaryContainer))
+        timing.addView(caption(if (task.repeating) "执行间隔" else "等待时长", Ui.OnPrimaryContainer))
         timing.addView(TextView(activity).apply {
             text = formatDelay(task.delaySeconds)
             textSize = 38f
             typeface = Typeface.create(Typeface.MONOSPACE, Typeface.BOLD)
             setTextColor(Ui.OnPrimaryContainer)
             includeFontPadding = false
-            contentDescription = "确认后等待 ${formatDelay(task.delaySeconds)}"
+            contentDescription = if (task.repeating) {
+                "每隔 ${formatDelay(task.delaySeconds)} 执行一次"
+            } else {
+                "确认后等待 ${formatDelay(task.delaySeconds)}"
+            }
         }, fullWidth(top = 6))
         content.addView(timing, fullWidth(top = 20))
-        content.addView(taskPanel("到点执行", task.instruction), fullWidth(top = 12))
+        content.addView(taskPanel(if (task.repeating) "每次执行" else "到点执行", task.instruction), fullWidth(top = 12))
 
         if (queuedMessages > 0) {
             content.addView(TextView(activity).apply {
@@ -86,7 +94,7 @@ internal class DemoDelayedTaskDialog(
 
         content.addView(body("锁屏或离开 App 可以继续等待。建议允许自启动并放宽电池限制；进程结束后任务会中断。"), fullWidth(top = 16))
         content.addView(textAction("后台运行设置", onBackgroundSettings), fullWidth(top = 2))
-        content.addView(action("开始等待", primary = true, onClick = onConfirm), fullWidth(top = 10))
+        content.addView(action(if (task.repeating) "开始周期任务" else "开始等待", primary = true, onClick = onConfirm), fullWidth(top = 10))
         content.addView(action("取消", primary = false, onClick = onReject), fullWidth(top = 8))
         present(task.id, Phase.PROPOSAL, card)
     }
@@ -98,9 +106,13 @@ internal class DemoDelayedTaskDialog(
         }
         dismiss()
         val (card, content) = card()
-        content.addView(eyebrow("等待中"))
-        content.addView(title("时间到了就继续"), fullWidth(top = 18))
-        content.addView(body("当前对话正在等待这个任务。"), fullWidth(top = 6))
+        content.addView(eyebrow(if (waiting.task.repeating) "周期任务等待中" else "等待中"))
+        content.addView(title(if (waiting.task.repeating) "等待下一次执行" else "时间到了就继续"), fullWidth(top = 18))
+        content.addView(body(if (waiting.task.repeating) {
+            "当前对话会按这个间隔重复执行，直到你停止任务。"
+        } else {
+            "当前对话正在等待这个任务。"
+        }), fullWidth(top = 6))
 
         val timing = panel(Ui.PrimaryContainer)
         timing.gravity = Gravity.CENTER_HORIZONTAL
@@ -133,7 +145,10 @@ internal class DemoDelayedTaskDialog(
         remainingLabel = caption("", Ui.OnPrimaryContainer).apply { gravity = Gravity.CENTER }
         timing.addView(remainingLabel, fullWidth(top = 12))
         content.addView(timing, fullWidth(top = 20))
-        content.addView(taskPanel("到点执行", waiting.task.instruction), fullWidth(top = 12))
+        content.addView(taskPanel(if (waiting.task.repeating) "每次执行" else "到点执行", waiting.task.instruction), fullWidth(top = 12))
+        if (waiting.task.repeating && !waiting.latestResult.isNullOrBlank()) {
+            content.addView(taskPanel("上次执行结果", waiting.latestResult), fullWidth(top = 12))
+        }
         content.addView(body("可以锁屏或离开 App，应用进程存活时会继续等待。"), fullWidth(top = 16))
         content.addView(action("停止任务", primary = false, onClick = onStop, destructive = true), fullWidth(top = 20))
         present(waiting.task.id, Phase.WAITING, card)
@@ -162,7 +177,14 @@ internal class DemoDelayedTaskDialog(
         val totalMillis = waiting.task.delaySeconds * 1000L
         progress?.progress = (((totalMillis - remainingMillis).coerceIn(0L, totalMillis) * 1000L) / totalMillis).toInt()
         val time = DateFormat.getTimeInstance(DateFormat.SHORT).format(Date(waiting.deadlineWallMillis))
-        remainingLabel?.text = if (seconds > 0L) "预计 $time 开始" else "正在接续当前对话"
+        remainingLabel?.text = if (waiting.task.repeating) {
+            val completed = "已执行 ${waiting.completedRuns} 次"
+            if (seconds > 0L) "$completed · 下次预计 $time" else "$completed · 正在接续当前对话"
+        } else if (seconds > 0L) {
+            "预计 $time 开始"
+        } else {
+            "正在接续当前对话"
+        }
     }
 
     private fun isShowing(taskId: String, phase: Phase): Boolean =

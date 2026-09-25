@@ -1429,7 +1429,12 @@ class MainActivity : ComponentActivity() {
                         else -> Unit
                     }
                     (delayedTasks.snapshot() as? DemoDelayedTaskState.Executing)?.let {
-                        delayedTasks.complete(it.task.id)
+                        val latestResult = when (val event = outcome.event) {
+                            is AgentEvent.Completed -> event.content
+                            is AgentEvent.Failed -> "任务未完成：${event.message}"
+                            else -> null
+                        }
+                        delayedTasks.complete(it.task.id, latestResult)
                     }
                 }
             } else if (outcome.source == AgentRunSource.SDK_EVENT) {
@@ -1510,6 +1515,11 @@ class MainActivity : ComponentActivity() {
                 ) {
                     reloadProcessOwnedConversation()
                 }
+                if (runCoordinator.snapshot().source == AgentRunSource.SDK_EVENT &&
+                    delayedTasks.snapshot() is DemoDelayedTaskState.Waiting
+                ) {
+                    delayedDialog.dismiss()
+                }
             }
             is AgentEvent.ToolStarted -> {
                 if (DemoScreenAutomationPolicy.isScreenWorkflowTool(event.call.name)) {
@@ -1586,7 +1596,7 @@ class MainActivity : ComponentActivity() {
                     if (runCoordinator.snapshot().pendingOutcome?.handledByProcessOwner != true) {
                         persistAssistantMessage(event.content)
                         (delayedTasks.snapshot() as? DemoDelayedTaskState.Executing)?.let {
-                            delayedTasks.complete(it.task.id)
+                            delayedTasks.complete(it.task.id, event.content)
                         }
                     }
                 } else if (runCoordinator.snapshot().source == AgentRunSource.SDK_EVENT) {
@@ -1610,7 +1620,7 @@ class MainActivity : ComponentActivity() {
                     if (runCoordinator.snapshot().pendingOutcome?.handledByProcessOwner != true) {
                         persistAssistantMessage("任务未完成：${event.message}")
                         (delayedTasks.snapshot() as? DemoDelayedTaskState.Executing)?.let {
-                            delayedTasks.complete(it.task.id)
+                            delayedTasks.complete(it.task.id, "任务未完成：${event.message}")
                         }
                     }
                 } else if (runCoordinator.snapshot().source == AgentRunSource.SDK_EVENT) {
@@ -1875,16 +1885,19 @@ class MainActivity : ComponentActivity() {
                 reloadProcessOwnedConversation()
             }
             is DemoDelayedTaskState.Proposed -> {
-                floatingWindow.setStatus("等待定时任务确认")
+                floatingWindow.setStatus(if (state.task.repeating) "等待周期任务确认" else "等待定时任务确认")
                 if (activityResumed && !runCoordinator.isRunning()) showDelayConfirmation(state.task)
             }
             is DemoDelayedTaskState.Waiting -> {
-                floatingWindow.setStatus("定时任务等待中")
-                if (activityResumed) showDelayWaitingDialog(state)
+                floatingWindow.setStatus(if (state.task.repeating) "周期任务等待中" else "定时任务等待中")
+                val handlingControlEvent = runCoordinator.isRunning() &&
+                    runCoordinator.snapshot().source == AgentRunSource.SDK_EVENT
+                if (activityResumed && !handlingControlEvent) showDelayWaitingDialog(state)
+                else if (handlingControlEvent) delayedDialog.dismiss()
             }
             is DemoDelayedTaskState.Executing -> {
                 delayedDialog.dismiss()
-                floatingWindow.setStatus("定时任务执行中")
+                floatingWindow.setStatus(if (state.task.repeating) "周期任务执行中" else "定时任务执行中")
                 reloadProcessOwnedConversation()
             }
         }

@@ -41,10 +41,11 @@ internal class DemoDelayedMessageDispatcher(
         DemoAgentTraceStore(appContext).reset(task.conversationId, session.id)
         processScope.overlayController.window.apply {
             setSending(true)
-            setStatus("定时任务执行中")
-            addLog("到点执行：${task.instruction.take(48)}")
+            setStatus(if (task.repeating) "周期任务执行中" else "定时任务执行中")
+            addLog("${if (task.repeating) "周期任务到点" else "到点执行"}：${task.instruction.take(48)}")
         }
         var resultPersisted = false
+        var latestResult: String? = null
         coordinator.start(
             runtime = runtime,
             session = session,
@@ -66,18 +67,28 @@ internal class DemoDelayedMessageDispatcher(
                         listOf(DemoStoredMessage("assistant", answer))
                     )) { "Unable to persist the timed Agent result." }
                 }
+                latestResult = answer.takeIf { it.isNotBlank() }
                 resultPersisted = true
                 processScope.overlayController.window.apply {
                     setSending(false)
                     setStatus(if (completed) "已完成" else "失败")
-                    addLog(if (completed) "定时任务已完成" else "定时任务未完成")
+                    addLog(if (completed) {
+                        if (task.repeating) "本轮周期任务已完成" else "定时任务已完成"
+                    } else {
+                        if (task.repeating) "本轮周期任务未完成" else "定时任务未完成"
+                    })
                 }
             },
             onFinished = {
                 if (resultPersisted) {
-                    processScope.delayedTasks.complete(task.id)
+                    processScope.delayedTasks.complete(task.id, latestResult)
+                    if (processScope.delayedTasks.snapshot() is DemoDelayedTaskState.Waiting) {
+                        processScope.overlayController.window.setStatus("周期任务等待中")
+                        processScope.overlayController.window.addLog("本轮结束，等待下一次执行")
+                    }
                 } else {
                     processScope.delayedTasks.fail(task.id, "定时任务结果未能保存，请检查对话记录。")
+                    processScope.overlayController.window.setStatus("失败")
                 }
             }
         )

@@ -19,7 +19,7 @@ import kotlinx.serialization.json.JsonPrimitive
 import kotlinx.serialization.json.contentOrNull
 import kotlinx.serialization.json.longOrNull
 
-/** Lets the model decide whether the current user turn needs the delayed-task tool. */
+/** Lets the model decide whether the current user turn needs the in-conversation timer. */
 internal class DemoModelIntentRouter(
     private val delegate: LLMProvider,
     profile: ProviderProfile
@@ -31,13 +31,13 @@ internal class DemoModelIntentRouter(
 
     override suspend fun generate(request: ModelRequest): ModelResponse =
         when (val route = routeIfNeeded(request)) {
-            is Route.Delay -> route.asModelResponse()
+            is Route.Timed -> route.asModelResponse()
             Route.Continue -> delegate.generate(request)
         }
 
     override fun generateStream(request: ModelRequest): Flow<ModelStreamChunk> = flow {
         when (val route = routeIfNeeded(request)) {
-            is Route.Delay -> emit(ModelStreamChunk.Completed(route.asModelResponse()))
+            is Route.Timed -> emit(ModelStreamChunk.Completed(route.asModelResponse()))
             Route.Continue -> emitAll(delegate.generateStream(request))
         }
     }
@@ -99,14 +99,16 @@ internal class DemoModelIntentRouter(
         val kind = (value["route"] as? JsonPrimitive)?.takeIf { it.isString }?.contentOrNull
         return when (kind) {
             "continue" -> Route.Continue
-            "delay" -> {
-                val seconds = (value["delaySeconds"] as? JsonPrimitive)
+            "delay", "repeat" -> {
+                val repeating = kind == "repeat"
+                val secondsField = if (repeating) "intervalSeconds" else "delaySeconds"
+                val seconds = (value[secondsField] as? JsonPrimitive)
                     ?.takeUnless { it.isString }?.longOrNull
                     ?.takeIf { it in 1L..86_400L } ?: return null
                 val instruction = (value["instruction"] as? JsonPrimitive)
                     ?.takeIf { it.isString }?.contentOrNull?.trim()
                     ?.takeIf { it.isNotEmpty() && it.length <= 2_000 } ?: return null
-                Route.Delay(seconds, instruction)
+                Route.Timed(seconds, instruction, repeating)
             }
             else -> null
         }
@@ -114,7 +116,11 @@ internal class DemoModelIntentRouter(
 
     private sealed interface Route {
         data object Continue : Route
-        data class Delay(val seconds: Long, val instruction: String) : Route {
+        data class Timed(
+            val seconds: Long,
+            val instruction: String,
+            val repeating: Boolean
+        ) : Route {
             fun asModelResponse(): ModelResponse = ModelResponse(
                 content = "",
                 toolCalls = listOf(
@@ -124,10 +130,11 @@ internal class DemoModelIntentRouter(
                         input = kotlinx.serialization.json.buildJsonObject {
                             put("delaySeconds", kotlinx.serialization.json.JsonPrimitive(seconds))
                             put("instruction", kotlinx.serialization.json.JsonPrimitive(instruction))
+                            put("repeating", kotlinx.serialization.json.JsonPrimitive(repeating))
                         }
                     )
                 ),
-                stopReason = "model_routed_delay"
+                stopReason = if (repeating) "model_routed_repeat" else "model_routed_delay"
             )
         }
     }
@@ -136,10 +143,11 @@ internal class DemoModelIntentRouter(
         const val DELAY_TOOL_NAME = "demo_delay_propose"
         const val MAX_ROUTE_ATTEMPTS = 2
         val ROUTE_INSTRUCTIONS = """
-            You are the intent router for a phone Agent. Read the latest actual user message in its conversation context and decide whether it asks for one action after a relative delay.
+            You are the intent router for a phone Agent. Read the latest actual user message in its conversation context and decide whether it asks for one action after a relative delay or an indefinite action at a fixed interval.
             Return exactly one JSON object, with no prose or Markdown.
             For a clear, one-time delayed action within 1 second to 24 hours, return {"route":"delay","delaySeconds":60,"instruction":"the action to perform when the timer expires"} with the requested duration converted to integer seconds. Preserve the user's intended action; do not perform it now.
-            For every other request, including ambiguous timing, missing action, recurring schedules, and ordinary immediate work, return {"route":"continue"}. The Agent will handle that request normally.
+            For a clear indefinite recurring action at a fixed interval from 1 second to 24 hours, return {"route":"repeat","intervalSeconds":300,"instruction":"the action to perform on every occurrence"}. The first run happens one interval after the user confirms; later runs continue at the same cadence until the user manually stops. Phrases such as "from now on, every 5 minutes" or "从现在开始，每5分钟帮我做这件事" mean repeat with the first run after 5 minutes, not an immediate run.
+            For every other request, including ambiguous timing, missing action, cron/calendar schedules, a finite repeat count, an automatic end condition, and ordinary immediate work, return {"route":"continue"}. The Agent will handle that request normally.
             Classify the user's meaning, not a fixed list of words. The app will ask for confirmation only after a valid delay result. Do not claim that any task has already been scheduled.
         """.trimIndent()
     }

@@ -46,7 +46,7 @@ internal class DemoUrgentInteractionDispatcher(
     /** Called on the main thread by the overlay. A true result consumes this screen's event once. */
     fun submit(event: DemoUrgentInteraction): Boolean {
         if (pending.size >= MAX_PENDING || event.binding.presentationId in acceptedPresentationIds) return false
-        if (processScope.delayedTasks.snapshot() !is DemoDelayedTaskState.Idle) return false
+        if (!timerAllowsInteraction(event)) return false
         if (!ownsCurrentSession(event)) return false
         if (conversationRuntime.agentRuntime == null) return false
         pending.addLast(event)
@@ -72,6 +72,15 @@ internal class DemoUrgentInteractionDispatcher(
         conversationRuntime.activeConversationId == event.conversationId &&
             conversationRuntime.sessionFor(event.conversationId)?.id == event.binding.sessionId &&
             conversationRuntime.conversationStore.get(event.conversationId) != null
+
+    private fun timerAllowsInteraction(event: DemoUrgentInteraction): Boolean =
+        when (val timer = processScope.delayedTasks.snapshot()) {
+            DemoDelayedTaskState.Idle -> true
+            is DemoDelayedTaskState.Executing -> timer.task.conversationId == event.conversationId
+            is DemoDelayedTaskState.Waiting ->
+                timer.task.repeating && timer.task.conversationId == event.conversationId
+            is DemoDelayedTaskState.Proposed -> false
+        }
 
     private fun drain(): Boolean {
         if (draining || coordinator.isRunning()) return true

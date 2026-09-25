@@ -73,7 +73,7 @@ val runtime = AgentRuntime.Builder()
 
 宿主可省略 `presenter`，只注册普通通知工具。要开放交互参数，宿主实现 `InteractiveUrgentMessagePresenter`，并在其 UI 中把点击/提交事件送回自己的 Agent 会话。SDK 在 `UrgentMessage.binding` 提供不能由模型指定的 `presentationId`、原 `sessionId`；宿主应校验绑定、控件 ID、一次性提交和当前会话归属，当前回合仍运行时先排队，之后以 `AgentRunInput(source = SDK_EVENT, taskId = presentationId)` 启动新回合。仅实现普通 `UrgentMessagePresenter` 时不应渲染无法回传的假按钮。
 
-`Demo` 的适配器位于 `DemoUrgentMessagePresenter.kt`：`AgentFloatingWindow` 暂时撤下原悬浮球/对话框，使用同一个进程级控制器展示 `UrgentTakeoverView` 的整屏画布；右上角关闭和底部“打开对话”始终由 App 提供。`DemoUrgentInteractionDispatcher` 把已接受的操作绑定回原会话，忙时放进有界进程内队列，到空闲后顺序启动 `SDK_EVENT` 回合；事件与结果写入主对话。用户关闭后按所在前后台状态恢复此前的普通悬浮表面。已有整屏提醒、屏幕自动化或用户确认占用窗口时返回 `busy`；后两者开始时会撤下整屏提醒，通知仍留在系统通知栏。宿主在前台和后台都可以尝试展示；进程被系统结束后，未处理的内存队列不会自动补发。
+`Demo` 的适配器位于 `DemoUrgentMessagePresenter.kt`：`AgentFloatingWindow` 暂时撤下原悬浮球/对话框，使用同一个进程级控制器展示 `UrgentTakeoverView` 的整屏画布；右上角关闭和底部“打开对话”始终由 App 提供。`DemoUrgentInteractionDispatcher` 把已接受的操作绑定回原会话，忙时放进有界进程内队列，到空闲后顺序启动 `SDK_EVENT` 回合；周期任务等待中也允许同一会话的提醒控件事件串行执行，普通聊天仍受周期任务阻塞。事件与结果写入主对话。用户关闭后按所在前后台状态恢复此前的普通悬浮表面。已有整屏提醒、屏幕自动化或用户确认占用窗口时返回 `busy`；后两者开始时会撤下整屏提醒，通知仍留在系统通知栏。宿主在前台和后台都可以尝试展示；进程被系统结束后，未处理的内存队列不会自动补发。
 
 ## Android 行为
 
