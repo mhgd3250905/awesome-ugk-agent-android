@@ -27,7 +27,7 @@
 
 ### 验收证据与边界
 
-- `:demo-app:assembleDebug` 和 `git diff --check` 通过；`aapt dump badging` 确认 APK 为 `com.ugk.pi.agent / 1.7.0 / 117`。安装前检查授权小米 `QSG6Q8IFDMDELVGQ`（实测型号 `2602BRT18C`）发现上一轮“每轮提醒喝水”的周期任务仍在等待，因此尚未覆盖安装，避免中断用户任务。弹窗的实际动效、长任务滚动与浅/深色观感需真机体验。
+- `:demo-app:assembleDebug` 和 `git diff --check` 通过；`aapt dump badging` 确认 APK 为 `com.ugk.pi.agent / 1.7.0 / 117`。初次检查授权小米 `QSG6Q8IFDMDELVGQ`（实测型号 `2602BRT18C`）时，上一轮“每轮提醒喝水”的周期任务仍在等待，因此暂缓安装。用户随后明确要求安装；再次检查任务标记为空后，使用 `adb install -r` 保留数据覆盖安装并启动。`dumpsys package` 确认 `versionCode 117 / versionName 1.7.0`，应用进程存在，原 API、会话等偏好文件仍在，任务标记仍为空。弹窗的实际动效、长任务滚动与浅/深色观感需用户真机体验。
 
 ## 1.6.1 · 2026-09-25 · 周期任务按上轮完成时间重新计时
 
