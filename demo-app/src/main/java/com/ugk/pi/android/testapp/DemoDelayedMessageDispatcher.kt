@@ -61,13 +61,13 @@ internal class DemoDelayedMessageDispatcher(
                     is AgentEvent.Failed -> "任务未完成：${event.message}"
                     else -> ""
                 }
+                latestResult = answer.takeIf { it.isNotBlank() }
                 if (answer.isNotBlank()) {
                     checkNotNull(conversationStore.appendMessagesAndFlush(
                         task.conversationId,
                         listOf(DemoStoredMessage("assistant", answer))
                     )) { "Unable to persist the timed Agent result." }
                 }
-                latestResult = answer.takeIf { it.isNotBlank() }
                 resultPersisted = true
                 processScope.overlayController.window.apply {
                     setSending(false)
@@ -80,7 +80,16 @@ internal class DemoDelayedMessageDispatcher(
                 }
             },
             onFinished = {
-                if (resultPersisted) {
+                // An attached Activity may save the answer if process-owned
+                // persistence fails. Re-arm only here, after the Agent job exits.
+                val fallbackPersisted = !resultPersisted && runCatching {
+                    latestResult?.let { answer ->
+                        conversationStore.get(task.conversationId)?.messages?.lastOrNull()?.let { message ->
+                            message.role == "assistant" && message.content == answer
+                        }
+                    } == true
+                }.getOrDefault(false)
+                if (resultPersisted || fallbackPersisted) {
                     processScope.delayedTasks.complete(task.id, latestResult)
                     if (processScope.delayedTasks.snapshot() is DemoDelayedTaskState.Waiting) {
                         processScope.overlayController.window.setStatus("周期任务等待中")

@@ -33,7 +33,6 @@ internal sealed interface DemoDelayedTaskState {
     ) : DemoDelayedTaskState
     data class Executing(
         val task: DemoDelayedTask,
-        val scheduledElapsedMillis: Long = 0L,
         val completedRuns: Long = 0L
     ) : DemoDelayedTaskState
 }
@@ -147,7 +146,7 @@ internal class DemoDelayedTaskController(
         val task = proposed.task
         appendStatus(task, buildString {
             if (task.repeating) {
-                append("已开启周期任务：每 ${task.delaySeconds} 秒执行「${task.instruction}」，直到手动停止。")
+                append("已开启周期任务：首次在 ${task.delaySeconds} 秒后执行「${task.instruction}」，此后每轮结束再等待 ${task.delaySeconds} 秒，直到手动停止。")
             } else {
                 append("已开启定时任务：${task.delaySeconds} 秒后执行「${task.instruction}」。")
             }
@@ -194,20 +193,17 @@ internal class DemoDelayedTaskController(
             publish(DemoDelayedTaskState.Idle)
             return
         }
-        val nowElapsed = SystemClock.elapsedRealtime()
         val intervalMillis = executing.task.delaySeconds * 1_000L
-        val scheduled = executing.scheduledElapsedMillis.takeIf { it > 0L } ?: nowElapsed
-        // Preserve the cadence from the confirmed first deadline. A long run
-        // skips missed ticks instead of creating overlapping or catch-up runs.
-        val periods = ((nowElapsed - scheduled).coerceAtLeast(0L) / intervalMillis) + 1L
-        val nextElapsed = scheduled + periods * intervalMillis
-        val nextWall = System.currentTimeMillis() + (nextElapsed - nowElapsed)
         if (!prefs.edit().putBoolean(KEY_EXECUTING, false).commit()) {
             appendStatus(executing.task, "周期任务状态保存失败，已停止后续执行：${executing.task.instruction}")
             clearMarker()
             publish(DemoDelayedTaskState.Idle)
             return
         }
+        // Start the next full interval after this Agent turn has finished and
+        // its result has been saved. Processing time never consumes it.
+        val nextElapsed = SystemClock.elapsedRealtime() + intervalMillis
+        val nextWall = System.currentTimeMillis() + intervalMillis
         val waiting = DemoDelayedTaskState.Waiting(
             executing.task,
             nextElapsed,
@@ -248,11 +244,7 @@ internal class DemoDelayedTaskController(
                 publish(DemoDelayedTaskState.Idle)
                 return@launch
             }
-            publish(DemoDelayedTaskState.Executing(
-                waiting.task,
-                waiting.deadlineElapsedMillis,
-                waiting.completedRuns
-            ))
+            publish(DemoDelayedTaskState.Executing(waiting.task, waiting.completedRuns))
             runCatching { onDue(waiting.task) }
                 .onFailure {
                     fail(waiting.task.id, "定时任务启动失败：${it.message ?: "未知错误"}")

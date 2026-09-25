@@ -31,7 +31,7 @@ internal class DemoDelayAgentPlugin(
         """
             For a one-time delayed request or an indefinite fixed-interval request, call demo_delay_propose before doing the requested work. Set repeating=true only for an explicit recurring request.
             Preserve the user's intended action in instruction. Do not perform it now or claim it is scheduled until the app confirms it.
-            A successful proposal ends this Agent turn. The app sends the approved action as a new message in this same conversation after the first interval and on each later interval until the user stops it. Runs never overlap and missed intervals are skipped.
+            A successful proposal ends this Agent turn. The app sends the approved action as a new message in this same conversation after the first interval. For a repeating task, each later full interval starts after the previous Agent turn finishes and its result is saved, until the user stops it. Runs never overlap or catch up in a burst.
             Only one timed task can occupy the conversation. Do not propose a timer for cron expressions, finite repeat counts or automatic end conditions; explain the limitation instead.
         """.trimIndent()
     )
@@ -48,7 +48,7 @@ private class ProposeDelayTool(
         putJsonObject("properties") {
             putJsonObject("delaySeconds") {
                 put("type", "integer")
-                put("description", "Seconds until the first run, or the fixed interval between repeating runs; timing starts after confirmation.")
+                put("description", "Seconds until the first run after confirmation, then the full interval after each repeating run finishes and its result is saved.")
                 put("minimum", 1)
                 put("maximum", 86400)
             }

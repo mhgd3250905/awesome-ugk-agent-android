@@ -1428,14 +1428,6 @@ class MainActivity : ComponentActivity() {
                         is AgentEvent.Failed -> persistAssistantMessage("任务未完成：${event.message}")
                         else -> Unit
                     }
-                    (delayedTasks.snapshot() as? DemoDelayedTaskState.Executing)?.let {
-                        val latestResult = when (val event = outcome.event) {
-                            is AgentEvent.Completed -> event.content
-                            is AgentEvent.Failed -> "任务未完成：${event.message}"
-                            else -> null
-                        }
-                        delayedTasks.complete(it.task.id, latestResult)
-                    }
                 }
             } else if (outcome.source == AgentRunSource.SDK_EVENT) {
                 reloadProcessOwnedConversation()
@@ -1595,9 +1587,6 @@ class MainActivity : ComponentActivity() {
                     reloadProcessOwnedConversation()
                     if (runCoordinator.snapshot().pendingOutcome?.handledByProcessOwner != true) {
                         persistAssistantMessage(event.content)
-                        (delayedTasks.snapshot() as? DemoDelayedTaskState.Executing)?.let {
-                            delayedTasks.complete(it.task.id, event.content)
-                        }
                     }
                 } else if (runCoordinator.snapshot().source == AgentRunSource.SDK_EVENT) {
                     reloadProcessOwnedConversation()
@@ -1619,9 +1608,6 @@ class MainActivity : ComponentActivity() {
                     reloadProcessOwnedConversation()
                     if (runCoordinator.snapshot().pendingOutcome?.handledByProcessOwner != true) {
                         persistAssistantMessage("任务未完成：${event.message}")
-                        (delayedTasks.snapshot() as? DemoDelayedTaskState.Executing)?.let {
-                            delayedTasks.complete(it.task.id, "任务未完成：${event.message}")
-                        }
                     }
                 } else if (runCoordinator.snapshot().source == AgentRunSource.SDK_EVENT) {
                     reloadProcessOwnedConversation()

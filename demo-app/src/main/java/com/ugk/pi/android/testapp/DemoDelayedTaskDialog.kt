@@ -60,7 +60,7 @@ internal class DemoDelayedTaskDialog(
         content.addView(eyebrow(if (task.repeating) "周期任务" else "单次定时任务"))
         content.addView(title(if (task.repeating) "按间隔重复执行" else "稍后继续这件事"), fullWidth(top = 18))
         content.addView(body(if (task.repeating) {
-            "确认后每隔一段时间在当前对话执行一次，首次在一个间隔后开始，直到你停止任务。"
+            "确认后先等待一个间隔；每轮执行完成后，再等待完整间隔，直到你停止任务。"
         } else {
             "确认后开始计时，到点会在当前对话继续执行。"
         }), fullWidth(top = 6))
@@ -74,7 +74,7 @@ internal class DemoDelayedTaskDialog(
             setTextColor(Ui.OnPrimaryContainer)
             includeFontPadding = false
             contentDescription = if (task.repeating) {
-                "每隔 ${formatDelay(task.delaySeconds)} 执行一次"
+                "首次等待 ${formatDelay(task.delaySeconds)}，此后每轮完成再等待 ${formatDelay(task.delaySeconds)}"
             } else {
                 "确认后等待 ${formatDelay(task.delaySeconds)}"
             }
@@ -109,7 +109,7 @@ internal class DemoDelayedTaskDialog(
         content.addView(eyebrow(if (waiting.task.repeating) "周期任务等待中" else "等待中"))
         content.addView(title(if (waiting.task.repeating) "等待下一次执行" else "时间到了就继续"), fullWidth(top = 18))
         content.addView(body(if (waiting.task.repeating) {
-            "当前对话会按这个间隔重复执行，直到你停止任务。"
+            "每轮执行完成后，重新等待一个完整间隔，直到你停止任务。"
         } else {
             "当前对话正在等待这个任务。"
         }), fullWidth(top = 6))

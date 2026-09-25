@@ -13,7 +13,7 @@ Android Agent Runtime SDK：提供通用 Agent 工具循环、Android Skill，�
 - v1 不支持、不打包、不宣称 Node.js、Git、OpenSSH、jq。
 - Runtime 无 UI，不要求安装 Termux 或第二个 App；它与宿主共享 Android UID，不是安全沙箱。
 - `pi-system-skill-android` 提供白名单 Android 原生 Intent Tool；打开网页、相机、拨号、地图、分享等动作不通过终端执行。
-- `demo-app` 当前源码版本为本地测试 `1.6.0`（`versionCode 115`），包含视觉优先屏幕自动化、单对话单次/周期计时任务、醒目通知与可交互的整屏重要提醒。Agent 可指定有限的展示元素、真实按钮和单行输入表单；用户操作作为新回合送回原会话。计时意图仍由模型判断，应用负责确认、计时和停止。本版本尚未提交 Play。历史版本与轨道状态见 [`docs/demo-app-version-ledger.md`](docs/demo-app-version-ledger.md)。
+- `demo-app` 当前源码版本为本地测试 `1.6.1`（`versionCode 116`），包含视觉优先屏幕自动化、单对话单次/周期计时任务、醒目通知与可交互的整屏重要提醒。Agent 可指定有限的展示元素、真实按钮和单行输入表单；用户操作作为新回合送回原会话。计时意图仍由模型判断；周期任务每轮结果写回后才重新等待完整间隔。本版本尚未提交 Play。历史版本与轨道状态见 [`docs/demo-app-version-ledger.md`](docs/demo-app-version-ledger.md)。
 - 2026-08-29 已完成快速迭代后的模块化架构收敛：生命周期、配置、Provider、会话、transcript、capability assembly 与 Terminal/Screen interlock 均有单一 owner；本机 JVM、Debug/Release 构建和 Terminal 包验收通过，设备/发布矩阵仍未关闭。
 
 ## 模块
@@ -44,7 +44,7 @@ Windows PowerShell：
 
 完整单元测试、双宿主仪器测试和 Runtime 静态验收见 [`AGENTS.md`](AGENTS.md) 与 [`docs/terminal-runtime-validation.md`](docs/terminal-runtime-validation.md)。
 
-当前授权真机以 [`HANDOVER.md`](HANDOVER.md) 为准，仅允许操作小米设备（`QSG6Q8IFDMDELVGQ`、`2304FPN6DC`/`e0b93f2f`，以 HANDOVER 的当期清单为准）。此前与 `0.8.0` 生产代码一致的 Debug APK 已以 `0.8.0 / versionCode 10` 元数据通过 `adb install -r -d` 覆盖安装到该设备，未卸载、未清理数据；该事实仅证明安装与 package metadata，不等同于 skill authoring 行为验收。`1.0.2`–`1.0.4` 的既有验收均在 `ugk_dev_api35_smooth` 模拟器完成。2026-09-24，用户反馈在真机安装测试了带视觉优先改动的 `1.0.5 / versionCode 105` Debug APK，效果不错；设备型号、系统版本和独立日志未记录，因此这里只记为用户反馈，不视作独立复核。当前源码版本元数据为 `1.6.0 / versionCode 115`；本机 Debug 构建或覆盖安装不等于已验收本版的周期执行行为。
+当前授权真机以 [`HANDOVER.md`](HANDOVER.md) 为准，仅允许操作小米设备（`QSG6Q8IFDMDELVGQ`、`2304FPN6DC`/`e0b93f2f`，以 HANDOVER 的当期清单为准）。此前与 `0.8.0` 生产代码一致的 Debug APK 已以 `0.8.0 / versionCode 10` 元数据通过 `adb install -r -d` 覆盖安装到该设备，未卸载、未清理数据；该事实仅证明安装与 package metadata，不等同于 skill authoring 行为验收。`1.0.2`–`1.0.4` 的既有验收均在 `ugk_dev_api35_smooth` 模拟器完成。2026-09-24，用户反馈在真机安装测试了带视觉优先改动的 `1.0.5 / versionCode 105` Debug APK，效果不错；设备型号、系统版本和独立日志未记录，因此这里只记为用户反馈，不视作独立复核。`1.6.0 / 115` 的周期功能由用户真机测试发现下一轮倒计时提前消耗，当前源码版本元数据为 `1.6.1 / versionCode 116`；本机 Debug 构建或覆盖安装不等于已验收本版的周期执行行为。
 
 ## 文档入口
 
