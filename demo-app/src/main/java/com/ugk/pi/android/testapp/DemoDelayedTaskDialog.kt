@@ -7,6 +7,7 @@ import android.graphics.Color
 import android.graphics.Rect
 import android.graphics.Typeface
 import android.graphics.drawable.ColorDrawable
+import android.os.Build
 import android.os.Handler
 import android.os.Looper
 import android.os.SystemClock
@@ -16,12 +17,16 @@ import android.view.View
 import android.view.ViewGroup
 import android.view.Window
 import android.view.WindowManager
+import android.view.animation.AnimationUtils
 import android.widget.Button
+import android.widget.FrameLayout
 import android.widget.LinearLayout
 import android.widget.ProgressBar
 import android.widget.ScrollView
 import android.widget.TextView
 import androidx.core.view.ViewCompat
+import androidx.core.view.WindowCompat
+import androidx.core.view.WindowInsetsCompat
 import androidx.core.widget.TextViewCompat
 import java.text.DateFormat
 import java.util.Date
@@ -232,17 +237,56 @@ internal class DemoDelayedTaskDialog(
 
     private fun present(taskId: String, phase: Phase, content: View) {
         if (activity.isFinishing || activity.isDestroyed) return
-        val next = Dialog(activity, Ui.dialogTheme()).apply {
+        if (phase == Phase.PROPOSAL) {
+            // This card starts at the top of a full-screen dialog. Only the
+            // status-bar inset belongs above its content; a floating dialog
+            // would start below that inset and leave the dimmed Activity visible.
+            val topInset = ViewCompat.getRootWindowInsets(activity.window.decorView)
+                ?.getInsets(WindowInsetsCompat.Type.statusBars())?.top
+                ?.takeIf { it > 0 }
+                ?: Rect().also { activity.window.decorView.getWindowVisibleDisplayFrame(it) }.top
+            content.setPadding(content.paddingLeft, topInset, content.paddingRight, content.paddingBottom)
+        }
+        val dialogContent = if (phase == Phase.PROPOSAL) {
+            FrameLayout(activity).apply {
+                addView(content, FrameLayout.LayoutParams(
+                    ViewGroup.LayoutParams.MATCH_PARENT,
+                    ViewGroup.LayoutParams.WRAP_CONTENT,
+                    Gravity.TOP
+                ))
+            }
+        } else {
+            content
+        }
+        val next = Dialog(activity, if (phase == Phase.PROPOSAL) {
+            R.style.DemoTopSheetDialog
+        } else {
+            Ui.dialogTheme()
+        }).apply {
             requestWindowFeature(Window.FEATURE_NO_TITLE)
-            setContentView(content)
+            if (phase == Phase.PROPOSAL) {
+                window?.let { WindowCompat.setDecorFitsSystemWindows(it, false) }
+            }
+            setContentView(dialogContent)
             setCancelable(false)
             setCanceledOnTouchOutside(false)
         }
         next.window?.apply {
             setBackgroundDrawable(ColorDrawable(Color.TRANSPARENT))
+            if (phase == Phase.PROPOSAL) {
+                addFlags(WindowManager.LayoutParams.FLAG_DRAWS_SYSTEM_BAR_BACKGROUNDS)
+                clearFlags(WindowManager.LayoutParams.FLAG_TRANSLUCENT_STATUS)
+                statusBarColor = Color.TRANSPARENT
+            }
             addFlags(WindowManager.LayoutParams.FLAG_DIM_BEHIND)
             setDimAmount(if (phase == Phase.PROPOSAL) 0.44f else 0.38f)
             attributes = attributes.apply {
+                if (phase == Phase.PROPOSAL && Build.VERSION.SDK_INT >= Build.VERSION_CODES.R) {
+                    fitInsetsTypes = 0
+                }
+                if (phase == Phase.PROPOSAL && Build.VERSION.SDK_INT >= Build.VERSION_CODES.P) {
+                    layoutInDisplayCutoutMode = WindowManager.LayoutParams.LAYOUT_IN_DISPLAY_CUTOUT_MODE_ALWAYS
+                }
                 gravity = if (phase == Phase.PROPOSAL) {
                     Gravity.TOP or Gravity.CENTER_HORIZONTAL
                 } else {
@@ -250,7 +294,7 @@ internal class DemoDelayedTaskDialog(
                 }
                 y = 0
                 windowAnimations = if (phase == Phase.PROPOSAL) {
-                    R.style.DemoTopDialogMotion
+                    0
                 } else {
                     R.style.DemoBottomDialogMotion
                 }
@@ -260,7 +304,20 @@ internal class DemoDelayedTaskDialog(
         shownTaskId = taskId
         shownPhase = phase
         next.show()
-        next.window?.setLayout(ViewGroup.LayoutParams.MATCH_PARENT, ViewGroup.LayoutParams.WRAP_CONTENT)
+        if (phase == Phase.PROPOSAL) {
+            next.window?.let { window ->
+                WindowCompat.getInsetsController(window, window.decorView).apply {
+                    isAppearanceLightStatusBars = !Ui.isDark
+                    isAppearanceLightNavigationBars = !Ui.isDark
+                }
+            }
+            content.startAnimation(AnimationUtils.loadAnimation(activity, R.anim.demo_dialog_enter_top))
+        }
+        next.window?.setLayout(ViewGroup.LayoutParams.MATCH_PARENT, if (phase == Phase.PROPOSAL) {
+            ViewGroup.LayoutParams.MATCH_PARENT
+        } else {
+            ViewGroup.LayoutParams.WRAP_CONTENT
+        })
     }
 
     private fun card(phase: Phase): Card {
@@ -277,7 +334,7 @@ internal class DemoDelayedTaskDialog(
         }
         val content = LinearLayout(activity).apply {
             orientation = LinearLayout.VERTICAL
-            setPadding(activity.dp(22), activity.dp(if (phase == Phase.PROPOSAL) 22 else 12),
+            setPadding(activity.dp(22), activity.dp(if (phase == Phase.PROPOSAL) 16 else 12),
                 activity.dp(22), activity.dp(10))
         }
         if (phase == Phase.PROPOSAL) {
