@@ -9,4 +9,14 @@
         <item name="android:windowBackground">@color/app_window_background</item>
         <item name="android:colorAccent">@color/app_color_accent</item>
     </style>
+
+    <style name="DemoTopDialogMotion">
+        <item name="android:windowEnterAnimation">@anim/demo_dialog_enter_top</item>
+        <item name="android:windowExitAnimation">@anim/demo_dialog_exit_top</item>
+    </style>
+
+    <style name="DemoBottomDialogMotion">
+        <item name="android:windowEnterAnimation">@anim/demo_dialog_enter_bottom</item>
+        <item name="android:windowExitAnimation">@anim/demo_dialog_exit_bottom</item>
+    </style>
 </resources>
