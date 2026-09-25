@@ -25,7 +25,6 @@ import androidx.core.view.ViewCompat
 import androidx.core.widget.TextViewCompat
 import java.text.DateFormat
 import java.util.Date
-import kotlin.math.max
 import kotlin.math.min
 
 /** A top decision card and a bottom waiting sheet for the same timer slot. */
@@ -155,23 +154,22 @@ internal class DemoDelayedTaskDialog(
         }, Ui.TextSecondary).apply {
             gravity = Gravity.END
         }, LinearLayout.LayoutParams(0, ViewGroup.LayoutParams.WRAP_CONTENT, 1f))
-        content.addView(statusRow, fullWidth(top = 18))
-        content.addView(title(if (waiting.task.repeating) "距离下一轮执行" else "距离任务执行"), fullWidth(top = 14))
+        content.addView(statusRow, fullWidth(top = 12))
 
         val timer = panel(Ui.PrimaryContainer)
-        timer.addView(caption("剩余时间", Ui.OnPrimaryContainer))
+        timer.addView(caption(if (waiting.task.repeating) "距离下一轮执行" else "距离任务执行", Ui.OnPrimaryContainer))
         countdown = TextView(activity).apply {
-            textSize = 57f
+            textSize = 53f
             typeface = Typeface.create(Typeface.MONOSPACE, Typeface.BOLD)
             setTextColor(Ui.OnPrimaryContainer)
             includeFontPadding = false
             maxLines = 1
             TextViewCompat.setAutoSizeTextTypeUniformWithConfiguration(
-                this, 32, 57, 2, android.util.TypedValue.COMPLEX_UNIT_SP
+                this, 30, 53, 2, android.util.TypedValue.COMPLEX_UNIT_SP
             )
             accessibilityLiveRegion = View.ACCESSIBILITY_LIVE_REGION_NONE
         }
-        timer.addView(countdown, fullWidth(top = 4))
+        timer.addView(countdown, fullWidth(top = 2))
         progress = ProgressBar(activity, null, android.R.attr.progressBarStyleHorizontal).apply {
             isIndeterminate = false
             max = 1000
@@ -180,19 +178,20 @@ internal class DemoDelayedTaskDialog(
             importantForAccessibility = View.IMPORTANT_FOR_ACCESSIBILITY_NO
         }
         timer.addView(progress, LinearLayout.LayoutParams(ViewGroup.LayoutParams.MATCH_PARENT, activity.dp(5)).apply {
-            topMargin = activity.dp(12)
+            topMargin = activity.dp(8)
         })
         remainingLabel = caption("", Ui.OnPrimaryContainer)
-        timer.addView(remainingLabel, fullWidth(top = 10))
-        content.addView(timer, fullWidth(top = 16))
-        content.addView(taskPanel("到点后执行", waiting.task.instruction), fullWidth(top = 10))
-        if (waiting.task.repeating && !waiting.latestResult.isNullOrBlank()) {
-            content.addView(caption("上轮结果 · 详情见对话", Ui.TextSecondary), fullWidth(top = 12))
-            content.addView(body(waiting.latestResult).apply {
-                maxLines = 2
-                ellipsize = TextUtils.TruncateAt.END
-            }, fullWidth(top = 4))
-        }
+        timer.addView(remainingLabel, fullWidth(top = 8))
+        content.addView(timer, fullWidth(top = 12))
+        content.addView(caption("到点后执行", Ui.TextSecondary), fullWidth(top = 12))
+        content.addView(TextView(activity).apply {
+            text = waiting.task.instruction
+            textSize = 15f
+            setTextColor(Ui.TextPrimary)
+            maxLines = 2
+            ellipsize = TextUtils.TruncateAt.END
+            contentDescription = waiting.task.instruction
+        }, fullWidth(top = 4))
         card.footer.addView(action(
             if (waiting.task.repeating) "停止周期任务" else "停止任务",
             primary = false,
@@ -233,7 +232,6 @@ internal class DemoDelayedTaskDialog(
 
     private fun present(taskId: String, phase: Phase, content: View) {
         if (activity.isFinishing || activity.isDestroyed) return
-        val visible = Rect().also { activity.window.decorView.getWindowVisibleDisplayFrame(it) }
         val next = Dialog(activity, Ui.dialogTheme()).apply {
             requestWindowFeature(Window.FEATURE_NO_TITLE)
             setContentView(content)
@@ -250,9 +248,7 @@ internal class DemoDelayedTaskDialog(
                 } else {
                     Gravity.BOTTOM or Gravity.CENTER_HORIZONTAL
                 }
-                y = if (phase == Phase.PROPOSAL) {
-                    max(activity.dp(28), visible.top + activity.dp(8))
-                } else 0
+                y = 0
                 windowAnimations = if (phase == Phase.PROPOSAL) {
                     R.style.DemoTopDialogMotion
                 } else {
@@ -264,25 +260,16 @@ internal class DemoDelayedTaskDialog(
         shownTaskId = taskId
         shownPhase = phase
         next.show()
-        next.window?.setLayout(
-            if (phase == Phase.PROPOSAL) {
-                min(activity.resources.displayMetrics.widthPixels - activity.dp(32), activity.dp(460))
-            } else {
-                ViewGroup.LayoutParams.MATCH_PARENT
-            },
-            ViewGroup.LayoutParams.WRAP_CONTENT
-        )
+        next.window?.setLayout(ViewGroup.LayoutParams.MATCH_PARENT, ViewGroup.LayoutParams.WRAP_CONTENT)
     }
 
     private fun card(phase: Phase): Card {
         val visible = Rect().also { activity.window.decorView.getWindowVisibleDisplayFrame(it) }
         val availableHeight = visible.height().takeIf { it > 0 } ?: activity.resources.displayMetrics.heightPixels
-        val bodyMaxHeight = ((availableHeight * if (phase == Phase.PROPOSAL) 0.47f else 0.53f).toInt() -
-            activity.dp(82)).coerceAtLeast(activity.dp(150))
         val root = LinearLayout(activity).apply {
             orientation = LinearLayout.VERTICAL
             background = if (phase == Phase.PROPOSAL) {
-                Ui.rounded(activity, Ui.SurfaceElevated, 26, Ui.OutlineSubtle)
+                Ui.asymmetricRounded(activity, Ui.SurfaceElevated, 0, 0, 28, 28)
             } else {
                 Ui.asymmetricRounded(activity, Ui.SurfaceElevated, 28, 28, 0, 0)
             }
@@ -293,12 +280,18 @@ internal class DemoDelayedTaskDialog(
             setPadding(activity.dp(22), activity.dp(if (phase == Phase.PROPOSAL) 22 else 12),
                 activity.dp(22), activity.dp(10))
         }
-        root.addView(LimitedHeightScrollView(activity, bodyMaxHeight).apply {
-            isFillViewport = false
-            isVerticalScrollBarEnabled = true
-            overScrollMode = View.OVER_SCROLL_NEVER
-            addView(content)
-        }, LinearLayout.LayoutParams(ViewGroup.LayoutParams.MATCH_PARENT, ViewGroup.LayoutParams.WRAP_CONTENT))
+        if (phase == Phase.PROPOSAL) {
+            val bodyMaxHeight = ((availableHeight * 0.47f).toInt() - activity.dp(82))
+                .coerceAtLeast(activity.dp(150))
+            root.addView(LimitedHeightScrollView(activity, bodyMaxHeight).apply {
+                isFillViewport = false
+                isVerticalScrollBarEnabled = true
+                overScrollMode = View.OVER_SCROLL_NEVER
+                addView(content)
+            }, fullWidth())
+        } else {
+            root.addView(content, fullWidth())
+        }
         val footer = LinearLayout(activity).apply {
             orientation = LinearLayout.VERTICAL
             setPadding(activity.dp(22), activity.dp(6), activity.dp(22), activity.dp(18))
