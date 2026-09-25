@@ -15,9 +15,4 @@
         <item name="android:windowNoTitle">true</item>
         <item name="android:windowBackground">@android:color/transparent</item>
     </style>
-
-    <style name="DemoBottomDialogMotion">
-        <item name="android:windowEnterAnimation">@anim/demo_dialog_enter_bottom</item>
-        <item name="android:windowExitAnimation">@anim/demo_dialog_exit_bottom</item>
-    </style>
 </resources>

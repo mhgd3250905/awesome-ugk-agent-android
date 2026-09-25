@@ -181,6 +181,10 @@ object DemoToolSemanticMapper {
         "schedule_create" -> "创建定时任务"
         "schedule_list" -> "查看定时任务"
         "schedule_cancel" -> "取消定时任务"
+        "demo_delay_propose" -> "准备计时安排"
+        "demo_delay_cancel" -> "停止计时任务"
+        "agent_send_notification" -> "发送提醒"
+        "agent_show_urgent_message" -> "展示重要提醒"
         "system_open_url" -> "打开系统链接"
         "system_request_permission" -> "请求系统权限"
         else -> name

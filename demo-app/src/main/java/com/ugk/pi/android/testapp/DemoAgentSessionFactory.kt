@@ -11,7 +11,10 @@ internal fun createDemoAgentSession(conversation: DemoConversation): AgentSessio
     val messages = mutableListOf<AgentMessage>(
         AgentMessage.System(DEMO_AGENT_SYSTEM_PROMPT)
     )
-    conversation.messages.forEach { stored ->
+    // The UI store keeps the newest MAX_MESSAGES entries, which can leave an
+    // assistant reply at the front. Keep that reply in the visible history,
+    // but start the Runtime transcript at the first complete user turn.
+    conversation.messages.dropWhile { it.role != "user" }.forEach { stored ->
         when (stored.role) {
             "user" -> messages += AgentMessage.User(stored.content)
             "assistant" -> messages += AgentMessage.Assistant(stored.content)

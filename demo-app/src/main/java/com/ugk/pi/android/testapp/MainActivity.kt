@@ -455,7 +455,7 @@ class MainActivity : ComponentActivity() {
     override fun onPause() {
         activityResumed = false
         super.onPause()
-        delayedDialog.dismiss()
+        delayedDialog.dismiss(animate = false)
         showFloatingWindowIfNeeded()
         suppressOverlayForInAppNavigation = false
         confirmationPresenter.onActivityPaused()
@@ -463,7 +463,7 @@ class MainActivity : ComponentActivity() {
 
     override fun onDestroy() {
         cancelPendingStreamingRender()
-        delayedDialog.dismiss()
+        delayedDialog.dismiss(animate = false)
         delayedTasks.detach(activityToken)
         inAppUpdateController.release()
         val finishing = isFinishing && !isChangingConfigurations
@@ -1489,6 +1489,7 @@ class MainActivity : ComponentActivity() {
         hasPendingStreamingRender = false
         lastStreamingRenderTime = android.os.SystemClock.uptimeMillis()
         val text = streamingAssistantText?.toString() ?: return
+        floatingWindow.setAssistantPreview(text)
         if (assistantMessageView == null) {
             assistantMessageView = addChatMessage(DemoChatMessageRole.ASSISTANT, text)
         } else {
@@ -1570,6 +1571,7 @@ class MainActivity : ComponentActivity() {
                 cancelPendingStreamingRender()
                 val content = event.content
                 if (content.isNotBlank()) {
+                    floatingWindow.setAssistantPreview(content)
                     streamingAssistantText = null
                     if (assistantMessageView == null) {
                         assistantMessageView = addChatMessage(DemoChatMessageRole.ASSISTANT, content)
@@ -1743,82 +1745,30 @@ class MainActivity : ComponentActivity() {
         } else {
             null
         }
-        val latestStep = state.steps.lastOrNull()
-        val stage = when (state.status) {
-            DemoRunStatus.THINKING -> DemoChatProcessStage.THINKING
-            DemoRunStatus.TOOL_RUNNING -> DemoChatProcessStage.TOOL_CALL
-            DemoRunStatus.WAITING_CONFIRMATION -> DemoChatProcessStage.WAITING_CONFIRMATION
-            DemoRunStatus.TOOL_SUCCESS -> DemoChatProcessStage.RESULT
-            DemoRunStatus.COMPLETED -> DemoChatProcessStage.COMPLETED
-            DemoRunStatus.TOOL_FAILURE, DemoRunStatus.FAILED, DemoRunStatus.CANCELLED -> DemoChatProcessStage.ERROR
-            DemoRunStatus.IDLE -> DemoChatProcessStage.THINKING
-        }
-        if (processCard != null) {
-            val processSteps = state.steps.map { step ->
-                DemoChatProcessStep(
-                    id = step.id,
-                    title = step.title,
-                    status = when (step.status) {
-                        DemoRunStatus.COMPLETED, DemoRunStatus.TOOL_SUCCESS ->
-                            DemoChatProcessStepStatus.COMPLETE
-                        DemoRunStatus.THINKING, DemoRunStatus.TOOL_RUNNING ->
-                            DemoChatProcessStepStatus.ACTIVE
-                        DemoRunStatus.WAITING_CONFIRMATION ->
-                            DemoChatProcessStepStatus.WAITING
-                        DemoRunStatus.TOOL_FAILURE, DemoRunStatus.FAILED, DemoRunStatus.CANCELLED ->
-                            DemoChatProcessStepStatus.ERROR
-                        DemoRunStatus.IDLE -> DemoChatProcessStepStatus.PENDING
-                    },
-                    detail = step.detailLabel,
-                    resultSummary = step.resultSummary
-                )
-            }
-            floatingWindow.bindSnapshot(
-                AgentOverlaySnapshot(
-                    title = activeConversation.title,
-                    statusLabel = state.statusLabel,
-                    statusDetail = state.detailLabel,
-                    latestMessage = activeConversation.messages.lastOrNull()?.content,
-                    latestMessageRole = activeConversation.messages.lastOrNull()?.role,
-                    steps = state.steps.map { step ->
-                        AgentOverlayStep(
-                            id = step.id,
-                            title = step.title,
-                            statusLabel = step.status.label,
-                            detail = step.detailLabel,
-                            resultSummary = step.resultSummary
-                        )
-                    },
-                    isBusy = state.isBusy,
-                    queuedMessages = runCoordinator.snapshot().queuedMessages
-                )
+        val processState = state.toChatProcessState()
+        processCard?.bind(processState)
+        val recent = activeConversation.messages.takeLast(12)
+        val firstIndex = activeConversation.messages.size - recent.size
+        floatingWindow.bindSnapshot(
+            AgentOverlaySnapshot(
+                title = activeConversation.title,
+                statusLabel = state.statusLabel,
+                conversationId = activeConversation.id,
+                runId = state.taskId,
+                messages = recent.mapIndexed { index, message ->
+                    AgentOverlayMessage(
+                        id = "${activeConversation.id}:${firstIndex + index}:${message.createdAt}",
+                        role = message.role,
+                        content = message.content,
+                        imagePaths = message.imagePaths
+                    )
+                },
+                process = processState.takeIf { state.isBusy || state.steps.isNotEmpty() },
+                isBusy = state.isBusy,
+                queuedMessages = runCoordinator.snapshot().queuedMessages
             )
-            processCard?.bind(
-                DemoChatProcessState(
-                    stage = stage,
-                    toolName = latestStep?.takeIf { it.kind == DemoRunStepKind.TOOL }?.title,
-                    resultSummary = state.resultSummary ?: state.detailLabel,
-                    steps = processSteps,
-                    footerLeft = if (processSteps.isEmpty()) null else "${processSteps.size} 个步骤",
-                    footerRight = state.statusLabel,
-                    expanded = state.detailsExpanded
-                )
-            )
-        } else {
-            floatingWindow.bindSnapshot(
-                AgentOverlaySnapshot(
-                    title = activeConversation.title,
-                    statusLabel = state.statusLabel,
-                    statusDetail = state.detailLabel,
-                    latestMessage = activeConversation.messages.lastOrNull()?.content,
-                    latestMessageRole = activeConversation.messages.lastOrNull()?.role,
-                    isBusy = state.isBusy,
-                    queuedMessages = runCoordinator.snapshot().queuedMessages
-                )
-            )
-        }
+        )
         updateComposerState()
-        floatingWindow.setStatus(state.statusLabel)
         if (state.isBusy) scrollToEnd()
     }
 
@@ -2648,82 +2598,6 @@ internal fun shouldShowFloatingWindowOnPause(
     activityResumed = false,
     inAppNavigating = inAppNavigating,
 )
-
-private class SendActionButton(context: android.content.Context) : View(context) {
-    enum class State {
-        DISABLED,
-        ACTIVE,
-        BUSY
-    }
-
-    var buttonState: State = State.DISABLED
-        set(value) {
-            field = value
-            invalidate()
-        }
-
-    private val bgPaint = Paint(Paint.ANTI_ALIAS_FLAG).apply {
-        style = Paint.Style.FILL
-    }
-    private val iconPaint = Paint(Paint.ANTI_ALIAS_FLAG).apply {
-        style = Paint.Style.STROKE
-        strokeCap = Paint.Cap.ROUND
-        strokeJoin = Paint.Join.ROUND
-    }
-    private val squarePaint = Paint(Paint.ANTI_ALIAS_FLAG).apply {
-        style = Paint.Style.FILL
-    }
-
-    override fun onDraw(canvas: Canvas) {
-        super.onDraw(canvas)
-        val w = width.toFloat()
-        val h = height.toFloat()
-        val cx = w / 2f
-        val cy = h / 2f
-        val radius = (minOf(cx, cy) - context.dp(6).toFloat()).coerceAtLeast(0f)
-
-        // 背景圆（完全受控件自身尺寸约束，100% 圆形绝不发生边缘裁剪）
-        bgPaint.color = when (buttonState) {
-            State.DISABLED -> Ui.SurfaceSoft
-            State.ACTIVE -> Ui.Primary
-            State.BUSY -> Ui.Danger
-        }
-        canvas.drawCircle(cx, cy, radius, bgPaint)
-
-        when (buttonState) {
-            State.DISABLED, State.ACTIVE -> {
-                iconPaint.color = if (buttonState == State.ACTIVE) Ui.OnPrimary else Ui.DisabledContent
-                iconPaint.strokeWidth = radius * 0.16f
-
-                val stemHalf = radius * 0.36f
-                val topY = cy - stemHalf
-                val bottomY = cy + stemHalf
-                // 箭头垂直主干
-                canvas.drawLine(cx, bottomY, cx, topY, iconPaint)
-
-                // 箭头两侧翼
-                val wingSpan = radius * 0.32f
-                val wingLen = radius * 0.30f
-                canvas.drawLine(cx - wingSpan, topY + wingLen, cx, topY, iconPaint)
-                canvas.drawLine(cx + wingSpan, topY + wingLen, cx, topY, iconPaint)
-            }
-            State.BUSY -> {
-                squarePaint.color = Ui.OnDanger
-                val halfSide = radius * 0.30f
-                val corner = radius * 0.08f
-                canvas.drawRoundRect(
-                    cx - halfSide,
-                    cy - halfSide,
-                    cx + halfSide,
-                    cy + halfSide,
-                    corner,
-                    corner,
-                    squarePaint
-                )
-            }
-        }
-    }
-}
 
 private class ImportActionButton(context: android.content.Context) : View(context) {
     var hasAttachments: Boolean = false

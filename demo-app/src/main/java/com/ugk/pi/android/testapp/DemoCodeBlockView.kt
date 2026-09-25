@@ -219,6 +219,8 @@ class DemoCodeBlockView @JvmOverloads constructor(
 
     private val langLabel = TextView(context).apply {
         setTextSize(TypedValue.COMPLEX_UNIT_SP, 11f)
+        maxLines = 1
+        ellipsize = android.text.TextUtils.TruncateAt.END
         typeface = Typeface.create("sans-serif-medium", Typeface.NORMAL)
         letterSpacing = 0.025f
         setTextColor(Ui.TextSecondary)
@@ -303,6 +305,7 @@ class DemoCodeBlockView @JvmOverloads constructor(
         applyThemeColors()
         currentCode = code
         langLabel.text = if (language.isNotBlank()) language.uppercase() else "CODE"
+        langLabel.contentDescription = langLabel.text
         codeTextView.text = code
     }
 }
