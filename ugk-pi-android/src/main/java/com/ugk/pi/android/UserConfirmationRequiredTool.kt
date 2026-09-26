@@ -3,12 +3,14 @@ package com.ugk.pi.android
 import kotlinx.serialization.json.Json
 import kotlinx.serialization.json.JsonObject
 import kotlinx.serialization.json.JsonPrimitive
+import kotlinx.serialization.json.booleanOrNull
 import kotlinx.serialization.json.contentOrNull
 import kotlinx.serialization.json.jsonObject
 
 class UserConfirmationRequiredTool(
     private val delegate: AgentTool,
     private val acceptedButtonIds: Set<String> = setOf("confirm", "continue", "ok", "yes", "allow"),
+    private val declinedButtonIds: Set<String> = setOf("cancel", "deny", "no", "reject", "decline", "stop"),
     private val shouldBypassConfirmation: () -> Boolean = { false },
     private val nowEpochMillis: () -> Long = System::currentTimeMillis
 ) : AgentTool {
@@ -57,36 +59,19 @@ class UserConfirmationRequiredTool(
     }
 
     /**
-     * True when the most recent confirmation dialog answered this exact protected
-     * call and the user selected a button outside the accepted set, i.e. a refusal
-     * rather than a not-yet-confirmed attempt.
+     * The dialog result that still owns the current confirmation context for
+     * [call], or null when nothing confirms or refuses it.
+     *
+     * Both the accepted and the refused decision read this single view, so neither
+     * one can be judged against a dialog that the conversation already moved past.
      */
-    private fun ToolExecutionContext.declinedConfirmationFor(call: ToolCall): Boolean {
+    private fun ToolExecutionContext.immediateDialogResult(call: ToolCall): JsonObject? {
         val lastToolIndex = priorMessages.indexOfLast { it is AgentMessage.Tool }
-        if (lastToolIndex < 0) return false
-        val result = (priorMessages[lastToolIndex] as? AgentMessage.Tool)?.result
-            ?: return false
-        if (result.name != "show_user_confirmation_dialog" || result.isError) return false
-        val confirmation = runCatching {
-            Json.parseToJsonElement(result.content).jsonObject
-        }.getOrNull() ?: return false
-        val selectedButtonId = confirmation.stringField("selectedButtonId")
-            ?: return false
-        if (selectedButtonId in acceptedButtonIds) return false
-        // Bind the refusal to this call: a dialog that declined a different Tool
-        // says nothing about this one, and must not block a legitimate confirmation.
-        val ticket = (confirmation["ticket"] as? JsonObject)?.toTicketOrNull()
-            ?: return false
-        return ticket.sessionId == sessionId && ticket.toolName == call.name
-    }
-
-    private fun ToolExecutionContext.hasImmediateUserConfirmation(call: ToolCall): Boolean {
-        val lastToolIndex = priorMessages.indexOfLast { it is AgentMessage.Tool }
-        if (lastToolIndex < 0) return false
+        if (lastToolIndex < 0) return null
 
         val result = (priorMessages[lastToolIndex] as? AgentMessage.Tool)?.result
-            ?: return false
-        if (result.name != "show_user_confirmation_dialog" || result.isError) return false
+            ?: return null
+        if (result.name != "show_user_confirmation_dialog" || result.isError) return null
 
         // AgentRuntime appends the model's Assistant(toolCalls) envelope before
         // executing that response's ToolCall. It is transport context, not a
@@ -94,7 +79,7 @@ class UserConfirmationRequiredTool(
         // call; any user/system message or additional ToolResult invalidates
         // the confirmation.
         val messagesAfterConfirmation = priorMessages.drop(lastToolIndex + 1)
-        if (messagesAfterConfirmation.size > 1) return false
+        if (messagesAfterConfirmation.size > 1) return null
         val assistantEnvelope = messagesAfterConfirmation.singleOrNull()
             as? AgentMessage.Assistant
         if (messagesAfterConfirmation.isNotEmpty() &&
@@ -102,12 +87,38 @@ class UserConfirmationRequiredTool(
                 it.name == call.name && it.input == call.input
             } != true
         ) {
-            return false
+            return null
         }
 
-        val confirmation = runCatching {
+        return runCatching {
             Json.parseToJsonElement(result.content).jsonObject
-        }.getOrNull() ?: return false
+        }.getOrNull()
+    }
+
+    /**
+     * True only when the user pressed a decline button for this exact protected
+     * call.
+     *
+     * A selection outside the accepted set is deliberately not enough: an
+     * unrecognized id (for example `approve`) says nothing about what the user
+     * meant, and telling the model "the user declined" would then block an action
+     * the user actually authorized. Only an id that means refusal, resolved while
+     * the dialog was still the current context and bound to this Tool by its
+     * ticket, is reported as a refusal.
+     */
+    private fun ToolExecutionContext.declinedConfirmationFor(call: ToolCall): Boolean {
+        val confirmation = immediateDialogResult(call) ?: return false
+        val selectedButtonId = confirmation.stringField("selectedButtonId")
+            ?: return false
+        if (selectedButtonId !in declinedButtonIds) return false
+        if (confirmation.booleanField("withoutUserDecision")) return false
+        val ticket = (confirmation["ticket"] as? JsonObject)?.toTicketOrNull()
+            ?: return false
+        return ticket.sessionId == sessionId && ticket.toolName == call.name
+    }
+
+    private fun ToolExecutionContext.hasImmediateUserConfirmation(call: ToolCall): Boolean {
+        val confirmation = immediateDialogResult(call) ?: return false
         val selectedButtonId = confirmation.stringField("selectedButtonId")
             ?: return false
         if (selectedButtonId !in acceptedButtonIds) return false
@@ -123,6 +134,9 @@ class UserConfirmationRequiredTool(
         }.getOrNull() ?: return false
         return ticket.inputFingerprint == inputFingerprint
     }
+
+    private fun JsonObject.booleanField(name: String): Boolean =
+        (this[name] as? JsonPrimitive)?.booleanOrNull ?: false
 
     private fun JsonObject.stringField(name: String): String? {
         val value = this[name] as? JsonPrimitive ?: return null

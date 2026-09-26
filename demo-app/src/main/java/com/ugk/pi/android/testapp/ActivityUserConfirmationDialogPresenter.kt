@@ -289,7 +289,9 @@ class ActivityUserConfirmationDialogPresenter(
         }
 
         fun cancelFromLifecycle() {
-            finish(fallbackResult, dismiss = true)
+            // The window owner was destroyed: the user never decided anything, so
+            // this must not reach the Agent as "the user declined".
+            finish(fallbackResult.copy(withoutUserDecision = true), dismiss = true)
         }
 
         fun cancelFromCoroutine() {

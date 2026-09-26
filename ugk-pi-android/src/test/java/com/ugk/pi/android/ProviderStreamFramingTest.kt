@@ -3,6 +3,7 @@ package com.ugk.pi.android
 import kotlinx.coroutines.flow.Flow
 import kotlinx.coroutines.flow.asFlow
 import kotlinx.coroutines.flow.flow
+import kotlinx.coroutines.flow.flowOf
 import kotlinx.coroutines.flow.toList
 import kotlinx.coroutines.runBlocking
 import org.junit.Assert.assertEquals
@@ -59,6 +60,41 @@ class ProviderStreamFramingTest {
                 override fun postStream(request: HttpRequest): Flow<String> = flow {
                     body.lineSequence().chunked(3).forEach { emit(it.joinToString("\n")) }
                 }
+            }
+        )
+
+        val chunks = provider.generateStream(request()).toList()
+
+        assertEquals("第一段内容", chunks.contentDeltas().joinToString(separator = ""))
+        assertEquals("第一段内容", chunks.completed().content)
+    }
+
+    @Test
+    fun anthropicReadsEventsWhenTheBodyUsesCrlfTerminators() = runBlocking {
+        // CRLF must terminate one line, not "CR terminates plus a stray empty line
+        // for the LF": that stray boundary would close the multi-line event below
+        // while its first fragment is still buffered, and the stream would be
+        // reported as malformed. This is what pins the delimiter order in
+        // String.split("\r\n", "\n", "\r").
+        val crlfBody = listOf(
+            "event: message_start",
+            """data: {"type":"message_start","message":{"id":"msg_1","role":"assistant","content":[]}}""",
+            "",
+            "event: content_block_delta",
+            "data: {\"type\":\"content_block_delta\",\"index\":0,",
+            "data: \"delta\":{\"type\":\"text_delta\",\"text\":\"第一段内容\"}}",
+            "",
+            """data: {"type":"message_delta","delta":{"stop_reason":"end_turn"}}""",
+            "",
+            """data: {"type":"message_stop"}"""
+        ).joinToString("\r\n")
+        val provider = AnthropicMessagesProvider(
+            apiKey = "test-key",
+            model = "claude-3-7-sonnet",
+            baseUrl = "https://example.com/anthropic",
+            transport = object : HttpTransport {
+                override suspend fun post(request: HttpRequest) = error("Unexpected non-stream call")
+                override fun postStream(request: HttpRequest): Flow<String> = flowOf(crlfBody)
             }
         )
 
@@ -182,6 +218,90 @@ class ProviderStreamFramingTest {
         val chunks = provider.generateStream(request()).toList()
 
         assertEquals("第一段内容", chunks.contentDeltas().joinToString(separator = ""))
+    }
+
+    @Test
+    fun anthropicKeepsDeliveringEventsAfterAnUnparsableDataLine() = runBlocking {
+        // Some gateways emit `data:` lines with no blank line between events. One
+        // malformed payload must cost that one event, not every event after it:
+        // buffering it and demanding a continuation would make each following
+        // well-formed line unparsable too, and the whole turn would end as an
+        // error instead of an answer.
+        val lines = listOf(
+            """data: {"type":"content_block_start","index":0,"content_block":{"type":"text","text":""}}""",
+            "data: {\"type\":\"broken",
+            """data: {"type":"content_block_delta","index":0,"delta":{"type":"text_delta","text":"第一段内容"}}""",
+            """data: {"type":"content_block_stop","index":0}""",
+            """data: {"type":"message_delta","delta":{"stop_reason":"end_turn"}}""",
+            """data: {"type":"message_stop"}"""
+        )
+        val provider = AnthropicMessagesProvider(
+            apiKey = "test-key",
+            model = "claude-3-7-sonnet",
+            baseUrl = "https://example.com/anthropic",
+            transport = streamingTransport(lines)
+        )
+
+        val chunks = provider.generateStream(request()).toList()
+
+        assertEquals("第一段内容", chunks.contentDeltas().joinToString(separator = ""))
+        assertEquals("第一段内容", chunks.completed().content)
+    }
+
+    @Test
+    fun anthropicReadsAPrettyPrintedJsonDocumentFromAPostOnlyTransport() = runBlocking {
+        // The providers accept a whole JSON document for endpoints that ignore
+        // `stream`. A host that only implements post() previously got that
+        // document in one emission; the fallback must not split a JSON document
+        // into lines before the provider can recognize it.
+        val prettyJson = """
+            {
+              "id": "msg_1",
+              "type": "message",
+              "role": "assistant",
+              "content": [{"type": "text", "text": "第一段内容"}],
+              "stop_reason": "end_turn"
+            }
+        """.trimIndent()
+        val provider = AnthropicMessagesProvider(
+            apiKey = "test-key",
+            model = "claude-3-7-sonnet",
+            baseUrl = "https://example.com/anthropic",
+            transport = object : HttpTransport {
+                override suspend fun post(request: HttpRequest) = HttpResponse(200, prettyJson)
+            }
+        )
+
+        val chunks = provider.generateStream(request()).toList()
+
+        assertEquals("第一段内容", chunks.completed().content)
+    }
+
+    @Test
+    fun anthropicStopsBufferingBeyondOneEventWorthOfFragments() = runBlocking {
+        // The buffer exists to join the lines of one event, not to accumulate a
+        // broken endpoint: without a bound, every extra line re-joins the whole
+        // buffer, which is quadratic in bytes and can push gigabytes of copies
+        // through one turn. A well-formed event follows the oversized fragments,
+        // so the only way this stream fails is the bound itself.
+        val fragment = "data: {\"a\":\"" + "z".repeat(600_000)
+        val lines = listOf(
+            fragment,
+            fragment,
+            """data: {"type":"content_block_delta","index":0,"delta":{"type":"text_delta","text":"第一段内容"}}""",
+            """data: {"type":"message_stop"}"""
+        )
+        val provider = AnthropicMessagesProvider(
+            apiKey = "test-key",
+            model = "claude-3-7-sonnet",
+            baseUrl = "https://example.com/anthropic",
+            transport = streamingTransport(lines)
+        )
+
+        assertThrows(IllegalStateException::class.java) {
+            runBlocking { provider.generateStream(request()).toList() }
+        }
+        Unit
     }
 
     private fun streamingTransport(lines: List<String>) = object : HttpTransport {

@@ -3,6 +3,7 @@ package com.ugk.pi.android.testapp
 import android.content.Context
 import android.os.SystemClock
 import android.util.Log
+import com.ugk.pi.android.AgentEvent
 import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.Job
@@ -44,6 +45,21 @@ internal enum class DemoDelayedTaskRound {
     COMPLETED,
     FAILED
 }
+
+/**
+ * The round outcome of one Agent turn.
+ *
+ * A `Completed` event that carries no content did not do what the scheduled
+ * instruction asked, so it counts as a failed round: treating it as a success
+ * would reset the failure budget and let a provider that answers empty restart
+ * the loop forever, which is the failure this budget exists to stop.
+ */
+internal fun demoDelayedTaskRound(event: AgentEvent): DemoDelayedTaskRound =
+    if (event is AgentEvent.Completed && event.content.isNotBlank()) {
+        DemoDelayedTaskRound.COMPLETED
+    } else {
+        DemoDelayedTaskRound.FAILED
+    }
 
 /** One process-owned delay slot. No platform alarm or independent Agent session is created. */
 internal class DemoDelayedTaskController(

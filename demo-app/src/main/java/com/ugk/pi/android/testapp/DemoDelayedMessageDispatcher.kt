@@ -46,7 +46,7 @@ internal class DemoDelayedMessageDispatcher(
         }
         var resultPersisted = false
         var latestResult: String? = null
-        var runSucceeded = true
+        var round = DemoDelayedTaskRound.COMPLETED
         coordinator.start(
             runtime = runtime,
             session = session,
@@ -57,7 +57,7 @@ internal class DemoDelayedMessageDispatcher(
             taskId = task.id,
             onOutcome = { event ->
                 val completed = event is AgentEvent.Completed
-                runSucceeded = completed
+                round = demoDelayedTaskRound(event)
                 val answer = when (event) {
                     is AgentEvent.Completed -> event.content
                     is AgentEvent.Failed -> "任务未完成：${event.message}"
@@ -98,7 +98,7 @@ internal class DemoDelayedMessageDispatcher(
                     processScope.delayedTasks.complete(
                         task.id,
                         latestResult,
-                        if (runSucceeded) DemoDelayedTaskRound.COMPLETED else DemoDelayedTaskRound.FAILED
+                        round
                     )
                     if (processScope.delayedTasks.snapshot() is DemoDelayedTaskState.Waiting) {
                         processScope.overlayController.window.setStatus("周期任务等待中")

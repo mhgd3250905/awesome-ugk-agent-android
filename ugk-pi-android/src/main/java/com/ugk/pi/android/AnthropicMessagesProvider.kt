@@ -148,22 +148,33 @@ class AnthropicMessagesProvider(
             }
 
             val dataStr = line.removePrefix("data:").trim()
-            if (dataStr == "[DONE]" || dataStr.isEmpty()) {
+            if (dataStr == "[DONE]") {
                 pendingDataPayload?.let { throw malformedSseEvent(it) }
                 return@collect
             }
+            if (dataStr.isEmpty()) {
+                return@collect
+            }
 
-            // Join with the fragments already buffered for this event before
-            // parsing, so a payload split over several `data:` lines is read as
-            // one event instead of being discarded as unparsable.
-            val eventPayload = pendingDataPayload?.let { "$it\n$dataStr" } ?: dataStr
-            val dataElement = runCatching { json.parseToJsonElement(eventPayload) }.getOrNull()
-            if (dataElement == null) {
-                pendingDataPayload = eventPayload
+            // Try the line on its own first. Endpoints that leave out the blank
+            // line between events are still readable that way, and a buffered
+            // fragment must not swallow every well-formed event after it. Only
+            // when the line cannot stand alone does it continue the event
+            // currently being read.
+            val standalone = runCatching { json.parseToJsonElement(dataStr) }.getOrNull()
+            val joined = standalone ?: pendingDataPayload?.let { buffered ->
+                runCatching { json.parseToJsonElement("$buffered\n$dataStr") }.getOrNull()
+            }
+            if (joined == null) {
+                val buffered = pendingDataPayload?.let { "$it\n$dataStr" } ?: dataStr
+                if (buffered.length > MAX_BUFFERED_SSE_EVENT_CHARS) {
+                    throw malformedSseEvent(buffered)
+                }
+                pendingDataPayload = buffered
                 return@collect
             }
             pendingDataPayload = null
-            val dataObj = dataElement as? JsonObject ?: return@collect
+            val dataObj = joined as? JsonObject ?: return@collect
 
             when (dataObj["type"]?.jsonPrimitive?.contentOrNull) {
                 "content_block_start" -> {

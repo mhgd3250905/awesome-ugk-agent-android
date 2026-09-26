@@ -70,4 +70,26 @@ class AgentTaskScheduleNextRunTest {
 
         assertNull(schedule.nextRunAtMillis(nowMillis = 5_000L))
     }
+
+    @Test
+    fun `non-positive persisted interval yields no next run instead of a past one`() {
+        // Tool input is validated at creation, but this function also reads
+        // records decoded from persisted JSON, and its own contract is that a
+        // hostile or corrupted schedule never yields a past timestamp. With a
+        // negative interval the ceiling-division truncates to zero occurrences,
+        // so the "next" run collapses back onto startAtMillis in the past -
+        // which the platform then treats as immediately due, refiring forever.
+        listOf(-60_000L, 0L).forEach { interval ->
+            val schedule = AgentTaskSchedule.RepeatingUntil(
+                startAtMillis = 1_000L,
+                intervalMillis = interval,
+                endAtMillis = Long.MAX_VALUE
+            )
+
+            assertNull(
+                "intervalMillis=$interval must not produce a next run",
+                schedule.nextRunAtMillis(nowMillis = 5_000L)
+            )
+        }
+    }
 }

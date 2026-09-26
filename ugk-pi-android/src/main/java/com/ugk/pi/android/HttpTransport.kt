@@ -45,6 +45,8 @@ interface HttpTransport {
         if (response.statusCode !in 200..299) {
             throw IllegalStateException("HTTP request failed: ${response.statusCode} ${response.body}")
         }
+        // asSseLines keeps a single JSON document intact and otherwise emits one
+        // line per emission, which is what the provider parsers read.
         emitAll(flowOf(response.body).asSseLines())
     }
 }
