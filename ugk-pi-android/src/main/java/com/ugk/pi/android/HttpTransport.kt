@@ -5,7 +5,9 @@ import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.channels.awaitClose
 import kotlinx.coroutines.flow.Flow
 import kotlinx.coroutines.flow.channelFlow
+import kotlinx.coroutines.flow.emitAll
 import kotlinx.coroutines.flow.flow
+import kotlinx.coroutines.flow.flowOf
 import kotlinx.coroutines.flow.flowOn
 import kotlinx.coroutines.launch
 import kotlinx.coroutines.withContext
@@ -32,14 +34,18 @@ interface HttpTransport {
 
     /**
      * 以流式长连接发起 POST 请求，逐行发射响应数据（如 SSE 协议行）。
-     * 默认回退实现：调用普通 post 并在成功后一次性发射响应体。
+     * 默认回退实现：调用普通 post，并把响应体拆成完整的行后逐行发射。
+     *
+     * Emitting the body as one emission would break every line-oriented parser:
+     * an SSE event spanning several lines cannot be parsed as a single line, so
+     * the caller would silently see an empty answer.
      */
     fun postStream(request: HttpRequest): Flow<String> = flow {
         val response = post(request)
         if (response.statusCode !in 200..299) {
             throw IllegalStateException("HTTP request failed: ${response.statusCode} ${response.body}")
         }
-        emit(response.body)
+        emitAll(flowOf(response.body).asSseLines())
     }
 }
 

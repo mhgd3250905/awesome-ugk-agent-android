@@ -29,15 +29,55 @@ class UserConfirmationRequiredTool(
             return delegate.execute(call, context)
         }
         if (!context.hasImmediateUserConfirmation(call)) {
+            // A refusal must not be answered with the same wording as a missing
+            // confirmation: telling the model to "call show_user_confirmation_dialog
+            // and then retry" turns the user's "no" into another modal prompt on the
+            // same action, and the user can only escape by answering a dialog that
+            // was already answered.
+            val refusal = context.declinedConfirmationFor(call)
             return ToolResult(
                 toolCallId = call.id,
                 name = name,
-                content = "User confirmation required for this exact Tool input. Call show_user_confirmation_dialog with target.toolName and the exact target.input first, then retry only with an unexpired ticket and an accepted selectedButtonId from ${acceptedButtonIds.sorted()}.",
+                content = if (refusal) {
+                    "The user declined this exact operation ($name) at the confirmation " +
+                        "dialog. Do not call show_user_confirmation_dialog again for it " +
+                        "and do not retry it in this run; continue without it or ask the " +
+                        "user a new question."
+                } else {
+                    "User confirmation required for this exact Tool input. Call " +
+                        "show_user_confirmation_dialog with target.toolName and the exact " +
+                        "target.input first, then retry only with an unexpired ticket and " +
+                        "an accepted selectedButtonId from ${acceptedButtonIds.sorted()}."
+                },
                 isError = true
             )
         }
 
         return delegate.execute(call, context)
+    }
+
+    /**
+     * True when the most recent confirmation dialog answered this exact protected
+     * call and the user selected a button outside the accepted set, i.e. a refusal
+     * rather than a not-yet-confirmed attempt.
+     */
+    private fun ToolExecutionContext.declinedConfirmationFor(call: ToolCall): Boolean {
+        val lastToolIndex = priorMessages.indexOfLast { it is AgentMessage.Tool }
+        if (lastToolIndex < 0) return false
+        val result = (priorMessages[lastToolIndex] as? AgentMessage.Tool)?.result
+            ?: return false
+        if (result.name != "show_user_confirmation_dialog" || result.isError) return false
+        val confirmation = runCatching {
+            Json.parseToJsonElement(result.content).jsonObject
+        }.getOrNull() ?: return false
+        val selectedButtonId = confirmation.stringField("selectedButtonId")
+            ?: return false
+        if (selectedButtonId in acceptedButtonIds) return false
+        // Bind the refusal to this call: a dialog that declined a different Tool
+        // says nothing about this one, and must not block a legitimate confirmation.
+        val ticket = (confirmation["ticket"] as? JsonObject)?.toTicketOrNull()
+            ?: return false
+        return ticket.sessionId == sessionId && ticket.toolName == call.name
     }
 
     private fun ToolExecutionContext.hasImmediateUserConfirmation(call: ToolCall): Boolean {

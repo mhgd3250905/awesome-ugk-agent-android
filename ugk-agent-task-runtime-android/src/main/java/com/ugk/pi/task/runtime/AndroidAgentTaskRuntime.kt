@@ -545,7 +545,7 @@ class AndroidAgentTaskRuntime(
             // A self-healing pass must never take the constructor (or the
             // process) down; per-task scheduling failures are already
             // isolated and reported inside the convergence.
-            runReceiverTask { convergeScheduledTasks(skipBusyTasks = true) }
+            runReceiverTask { convergeScheduledTasks() }
         }
     }
 
@@ -694,23 +694,30 @@ class AndroidAgentTaskRuntime(
 
     /**
      * Re-arms every persisted SCHEDULED task on its platform route (device
-     * boot, package replacement, or the construction-time convergence pass).
+     * boot, package replacement, the job-finished pass, or the
+     * construction-time convergence pass).
      *
-     * Each task is re-armed under its per-task handle lock — the restore may
-     * run while a firing alarm handles the same task on another runtime
-     * instance — and scheduling failures are isolated per task: the platform
-     * refusing one task (for example the prompt route's
-     * IllegalStateException when JobScheduler returns RESULT_FAILURE) is
-     * logged and reported in the result instead of aborting the re-arm of
-     * every task stored after it.
+     * Each task is re-armed under its per-task handle lock, and a task whose
+     * lock is already held is skipped instead of waited for: the in-flight
+     * delivery owns that task's next occurrence and re-arms it through its own
+     * write-back (or, for the JobService route, through its own
+     * [AgentTaskJobService.finishJob]). Waiting instead would be wrong on every
+     * caller but the cold-boot one:
      *
-     * [skipBusyTasks] (used by the construction-time pass) leaves every task
-     * whose handle lock is currently held to its in-flight delivery instead
-     * of waiting: re-arming a RUNNING prompt job with the same job id would
-     * replace and cancel the in-flight run, and the delivery's own write-back
-     * re-arms the task anyway. The boot/replace restore keeps the blocking
-     * behavior: after a reboot nothing is in flight, so waiting is harmless
-     * and converges everything.
+     * - [AgentTaskJobService.finishJob] runs this pass from the coroutine that
+     *   is also responsible for posting `jobFinished()`. A prompt execution of
+     *   a *different* task holds its own lock for minutes, so a blocking
+     *   acquire parks the whole loop behind it: every task stored after it is
+     *   left un-armed, `jobFinished()` is never posted, Android keeps counting
+     *   the already-finished job as running until it force-stops the JobService,
+     *   and the force-stop also drops this job's running-id reservation.
+     * - After a reboot nothing is in flight in this process, so the try-lock
+     *   succeeds immediately and converges everything anyway.
+     *
+     * Scheduling failures are isolated per task: the platform refusing one task
+     * (for example the prompt route's IllegalStateException when JobScheduler
+     * returns RESULT_FAILURE) is logged and reported in the result instead of
+     * aborting the re-arm of every task stored after it.
      */
     suspend fun restoreScheduledTasks(): AgentTaskRestoreResult =
         convergeScheduledTasks()
@@ -733,23 +740,17 @@ class AndroidAgentTaskRuntime(
         (scheduler as? TerminalTaskJobIdReleaser)?.completeTerminalJobIdRelease(taskId, jobIds)
     }
 
-    private suspend fun convergeScheduledTasks(skipBusyTasks: Boolean = false): AgentTaskRestoreResult {
+    private suspend fun convergeScheduledTasks(): AgentTaskRestoreResult {
         val rearmedTaskIds = mutableListOf<String>()
         val failures = mutableListOf<AgentTaskRestoreFailure>()
         store.list()
             .filter { it.status == AgentTaskStatus.SCHEDULED && it.nextRunAtMillis != null }
             .forEach { persisted ->
                 val handleLock = taskHandleLock(persisted.id)
-                val lockAcquired = if (skipBusyTasks) {
-                    handleLock.tryLock()
-                } else {
-                    handleLock.lock()
-                    true
-                }
-                if (!lockAcquired) {
-                    // An in-flight delivery owns this task; its write-back
-                    // re-arms it. Touching it here could replace a RUNNING
-                    // job and cancel the very execution we are converging.
+                // Never wait behind an in-flight delivery: see
+                // [restoreScheduledTasks]. A held lock means that delivery owns
+                // this task's next occurrence.
+                if (!handleLock.tryLock()) {
                     return@forEach
                 }
                 try {

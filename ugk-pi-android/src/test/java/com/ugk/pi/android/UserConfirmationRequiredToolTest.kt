@@ -28,6 +28,62 @@ class UserConfirmationRequiredToolTest {
     }
 
     @Test
+    fun answersARefusalAsARefusalInsteadOfInvitingAnotherDialog() = runBlocking {
+        val delegate = RecordingTool()
+        val input = buildJsonObject { put("target", "open_url") }
+        val tool = UserConfirmationRequiredTool(delegate, nowEpochMillis = { NOW })
+        // The user pressed a button outside the accepted set: a decline whose
+        // ticket is inert, which must not read as "no confirmation yet".
+        val declined = AgentMessage.Tool(
+            confirmationResult(SESSION, tool.name, input, selectedButtonId = "cancel")
+        )
+
+        val result = tool.execute(
+            ToolCall("intent-1", tool.name, input),
+            ToolExecutionContext(sessionId = SESSION, priorMessages = listOf(declined))
+        )
+
+        assertTrue(result.isError)
+        assertFalse(delegate.executed)
+        assertTrue(
+            "the model must learn the user declined, got: ${result.content}",
+            result.content.contains("declined")
+        )
+        assertFalse(
+            "a refusal must not tell the model to request the dialog again, got: ${result.content}",
+            result.content.contains("then retry")
+        )
+    }
+
+    @Test
+    fun keepsAskingWordingWhenNoConfirmationHasBeenShownAtAll() = runBlocking {
+        val delegate = RecordingTool()
+        val input = buildJsonObject { put("target", "open_url") }
+        val tool = UserConfirmationRequiredTool(delegate, nowEpochMillis = { NOW })
+
+        val result = tool.execute(
+            ToolCall("intent-1", tool.name, input),
+            ToolExecutionContext(
+                sessionId = SESSION,
+                priorMessages = listOf(
+                    AgentMessage.Tool(
+                        ToolResult(
+                            toolCallId = "other-1",
+                            name = "screen_read",
+                            content = "ok"
+                        )
+                    )
+                )
+            )
+        )
+
+        assertTrue(result.isError)
+        assertFalse(delegate.executed)
+        assertTrue(result.content.contains("User confirmation required"))
+        assertFalse(result.content.contains("declined"))
+    }
+
+    @Test
     fun executesDelegateWhenConfirmationBypassIsEnabled() = runBlocking {
         val delegate = RecordingTool()
         val tool = UserConfirmationRequiredTool(

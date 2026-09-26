@@ -46,6 +46,7 @@ internal class DemoDelayedMessageDispatcher(
         }
         var resultPersisted = false
         var latestResult: String? = null
+        var runSucceeded = true
         coordinator.start(
             runtime = runtime,
             session = session,
@@ -56,6 +57,7 @@ internal class DemoDelayedMessageDispatcher(
             taskId = task.id,
             onOutcome = { event ->
                 val completed = event is AgentEvent.Completed
+                runSucceeded = completed
                 val answer = when (event) {
                     is AgentEvent.Completed -> event.content
                     is AgentEvent.Failed -> "任务未完成：${event.message}"
@@ -90,7 +92,14 @@ internal class DemoDelayedMessageDispatcher(
                     } == true
                 }.getOrDefault(false)
                 if (resultPersisted || fallbackPersisted) {
-                    processScope.delayedTasks.complete(task.id, latestResult)
+                    // A failed Agent turn is a failed round: the controller owns
+                    // the repeating restart decision, so the outcome must reach it
+                    // instead of being reported as a saved success.
+                    processScope.delayedTasks.complete(
+                        task.id,
+                        latestResult,
+                        if (runSucceeded) DemoDelayedTaskRound.COMPLETED else DemoDelayedTaskRound.FAILED
+                    )
                     if (processScope.delayedTasks.snapshot() is DemoDelayedTaskState.Waiting) {
                         processScope.overlayController.window.setStatus("周期任务等待中")
                         processScope.overlayController.window.addLog("本轮结束，等待下一次执行")

@@ -96,7 +96,7 @@ class AnthropicMessagesProvider(
             body = requestBody(request, stream = true).toString()
         )
 
-        val rawLinesFlow = effectiveTransport.postStream(httpRequest)
+        val rawLinesFlow = effectiveTransport.postStream(httpRequest).asSseLines()
         emitAll(parseSseStream(rawLinesFlow))
     }
 
@@ -110,10 +110,19 @@ class AnthropicMessagesProvider(
         var currentToolName: String? = null
         val currentToolInputJson = StringBuilder()
         var completedEmitted = false
+        // Payload fragments of the event currently being read: one event may
+        // carry its JSON across several `data:` lines.
+        var pendingDataPayload: String? = null
 
         rawLines.collect { rawLine ->
             val line = rawLine.trim()
-            if (line.isEmpty() || line.startsWith(":")) {
+            if (line.isEmpty()) {
+                // Event boundary. An event that never became parsable is a
+                // broken stream, not content to skip.
+                pendingDataPayload?.let { throw malformedSseEvent(it) }
+                return@collect
+            }
+            if (line.startsWith(":")) {
                 // SSE 注释或心跳行
                 return@collect
             }
@@ -140,10 +149,20 @@ class AnthropicMessagesProvider(
 
             val dataStr = line.removePrefix("data:").trim()
             if (dataStr == "[DONE]" || dataStr.isEmpty()) {
+                pendingDataPayload?.let { throw malformedSseEvent(it) }
                 return@collect
             }
 
-            val dataElement = runCatching { json.parseToJsonElement(dataStr) }.getOrNull() ?: return@collect
+            // Join with the fragments already buffered for this event before
+            // parsing, so a payload split over several `data:` lines is read as
+            // one event instead of being discarded as unparsable.
+            val eventPayload = pendingDataPayload?.let { "$it\n$dataStr" } ?: dataStr
+            val dataElement = runCatching { json.parseToJsonElement(eventPayload) }.getOrNull()
+            if (dataElement == null) {
+                pendingDataPayload = eventPayload
+                return@collect
+            }
+            pendingDataPayload = null
             val dataObj = dataElement as? JsonObject ?: return@collect
 
             when (dataObj["type"]?.jsonPrimitive?.contentOrNull) {
@@ -242,6 +261,13 @@ class AnthropicMessagesProvider(
                 }
             }
         }
+
+        // A stream that stops in the middle of an event delivered an event
+        // payload that never became parsable. Reporting it must take priority
+        // over the completed-response fallback below: emitting the accumulated
+        // prefix as the model's final answer is how a truncated response silently
+        // enters the transcript.
+        pendingDataPayload?.let { throw malformedSseEvent(it) }
 
         // 流正常完结兜底：如果服务端未正常发送 message_stop 便关闭了数据流
         if (!completedEmitted) {
