@@ -3,6 +3,7 @@ package com.ugk.pi.android
 import kotlinx.serialization.json.Json
 import kotlinx.serialization.json.JsonArray
 import kotlinx.serialization.json.JsonElement
+import kotlinx.serialization.json.JsonNull
 import kotlinx.serialization.json.JsonObject
 import kotlinx.serialization.json.JsonPrimitive
 import kotlinx.serialization.json.buildJsonArray
@@ -207,21 +208,27 @@ class OpenAiChatCompletionsProvider(
             // limits, content filters, upstream disconnects) as a data event
             // carrying an `error` object. Dropping it here would finish a
             // truncated answer as a normal completion, so surface the error.
-            dataObj["error"]?.let { errorElement ->
+            // `"error":null` is how a POJO-serialized gateway spells "no
+            // error", and JsonNull is a value rather than an absent key.
+            val errorElement = dataObj["error"]
+            if (errorElement != null && errorElement !is JsonNull) {
                 val message = (errorElement as? JsonObject)
                     ?.get("message")?.jsonPrimitive?.contentOrNull
                     ?: dataStr
                 throw IllegalStateException("OpenAI stream error: $message")
             }
 
-            val choices = dataObj["choices"]?.jsonArray ?: return@collect
-            val firstChoice = choices.firstOrNull()?.jsonObject ?: return@collect
+            // The remaining fields are optional in the protocol and arrive as
+            // JSON null from real gateways; `JsonNull.jsonObject` throws, so
+            // read them with safe casts and treat null as absent.
+            val choices = (dataObj["choices"] as? JsonArray) ?: return@collect
+            val firstChoice = (choices.firstOrNull() as? JsonObject) ?: return@collect
             val finishReason = firstChoice["finish_reason"]?.jsonPrimitive?.contentOrNull
             if (!finishReason.isNullOrBlank()) {
                 currentStopReason = finishReason
             }
 
-            val delta = firstChoice["delta"]?.jsonObject ?: return@collect
+            val delta = firstChoice["delta"] as? JsonObject ?: return@collect
 
             // 思考链增量（Reasoning / CoT，OpenAI 协议常用 reasoning_content）。
             // contentText 容错处理部分网关用 content-parts 数组回传的形态。
@@ -239,9 +246,9 @@ class OpenAiChatCompletionsProvider(
             }
 
             // 工具调用分片
-            val toolCallsArray = delta["tool_calls"]?.jsonArray
+            val toolCallsArray = delta["tool_calls"] as? JsonArray
             toolCallsArray?.forEach { toolElement ->
-                val toolObj = toolElement.jsonObject
+                val toolObj = toolElement as? JsonObject ?: return@forEach
                 val explicitIndex = toolObj["index"]?.jsonPrimitive?.contentOrNull?.toIntOrNull()
                 val id = toolObj["id"]?.jsonPrimitive?.contentOrNull
                 // The spec requires `index` on streamed tool_calls, but some
@@ -265,7 +272,7 @@ class OpenAiChatCompletionsProvider(
                     draft.id = id
                 }
 
-                val functionObj = toolObj["function"]?.jsonObject
+                val functionObj = toolObj["function"] as? JsonObject
                 if (functionObj != null) {
                     val name = functionObj["name"]?.jsonPrimitive?.contentOrNull
                     if (!name.isNullOrBlank()) {
@@ -445,18 +452,15 @@ class OpenAiChatCompletionsProvider(
                 ?: body.take(200)
             throw IllegalStateException("OpenAI API error: $message")
         }
-        val choice = root["choices"]
-            ?.jsonArray
-            ?.firstOrNull()
-            ?.jsonObject
+        val choices = (root["choices"] as? JsonArray)
             ?: error("OpenAI response missing choices[0]")
-        val message = choice["message"]
-            ?.jsonObject
+        val choice = (choices.firstOrNull() as? JsonObject)
+            ?: error("OpenAI response missing choices[0]")
+        val message = (choice["message"] as? JsonObject)
             ?: error("OpenAI response missing choices[0].message")
 
         val content = contentText(message["content"])
-        val toolCalls = message["tool_calls"]
-            ?.jsonArray
+        val toolCalls = (message["tool_calls"] as? JsonArray)
             ?.mapNotNull { it.toToolCallOrNull() }
             ?: emptyList()
 
@@ -469,8 +473,8 @@ class OpenAiChatCompletionsProvider(
     }
 
     private fun JsonElement.toToolCallOrNull(): ToolCall? {
-        val objectValue = jsonObject
-        val function = objectValue["function"]?.jsonObject ?: return null
+        val objectValue = this as? JsonObject ?: return null
+        val function = objectValue["function"] as? JsonObject ?: return null
         // Same policy as the streaming path (parseToolArgumentsOrNull):
         // missing or blank arguments are a legitimate no-argument call;
         // anything that does not parse as a JSON object is dropped instead
@@ -480,8 +484,13 @@ class OpenAiChatCompletionsProvider(
         val input = parseToolArgumentsOrNull(arguments ?: "") ?: return null
 
         return ToolCall(
-            id = objectValue["id"]?.jsonPrimitive?.contentOrNull ?: return null,
-            name = function["name"]?.jsonPrimitive?.contentOrNull ?: return null,
+            // Same policy as the streaming path's buildFinalToolCalls: a blank
+            // id or name reaches the transcript and then invalidates every
+            // later request.
+            id = objectValue["id"]?.jsonPrimitive?.contentOrNull
+                ?.takeIf { it.isNotBlank() } ?: return null,
+            name = function["name"]?.jsonPrimitive?.contentOrNull
+                ?.takeIf { it.isNotBlank() } ?: return null,
             input = input
         )
     }

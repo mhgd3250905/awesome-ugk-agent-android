@@ -222,7 +222,7 @@ class AgentSkillRuntimePluginTest {
     }
 
     @Test
-    fun fileBackedIdCollisionFailsBeforeLoadPolicyResolver() = runBlocking {
+    fun fileBackedIdCollisionDegradesToTheHostSkill() = runBlocking {
         val skillRoot = skillRoot()
         val memoryRoot = memoryRoot()
         writeSkill(
@@ -233,6 +233,7 @@ class AgentSkillRuntimePluginTest {
         )
         val repository = SkillRepository(skillRoot)
         var resolverCalls = 0
+        var assembledSkills: List<AndroidSkill> = emptyList()
         val resolver = object : AndroidSkillResolver {
             private val delegate = LoadPolicySkillResolver(repository)
 
@@ -242,6 +243,7 @@ class AgentSkillRuntimePluginTest {
                 availableToolNames: Set<String>
             ): List<AndroidSkill> {
                 resolverCalls++
+                assembledSkills = skills
                 return delegate.resolve(userMessage, skills, availableToolNames)
             }
         }
@@ -265,13 +267,31 @@ class AgentSkillRuntimePluginTest {
 
         val events = runtime.run(session, "assemble").toList()
 
-        val failure = events.filterIsInstance<AgentEvent.Failed>().single()
-        assertTrue(failure.message.contains("Duplicate skill id 'colliding-skill'"))
-        assertTrue(failure.message.contains("agent-skill-runtime"))
-        assertTrue(failure.message.contains("custom skillProvider()"))
-        assertEquals(0, resolverCalls)
-        assertTrue(llm.requests.isEmpty())
-        assertEquals(listOf(AgentMessage.User("assemble")), session.messages)
+        // Round 7 changed this outcome on purpose. Failing the run was a brick,
+        // not a guard: assembly happens before the tool loop, so the model never
+        // got a chance to remove the colliding file, and every later run failed
+        // the same way. A file-backed contribution is model-authored, so it now
+        // loses the id to the host's own skill and the run proceeds.
+        assertTrue(
+            "the run must survive the collision: " + events.map { it::class.simpleName },
+            events.none { it is AgentEvent.Failed }
+        )
+        assertEquals(1, resolverCalls)
+        assertEquals(
+            "the host-provided skill keeps the id and the file-backed impostor is dropped",
+            listOf("CUSTOM_COLLISION"),
+            assembledSkills.map { it.instructions }
+        )
+        assertTrue("the run reaches the model", llm.requests.isNotEmpty())
+        assertFalse(
+            "a file in the skill directory must not be able to speak for a host skill id",
+            llm.requests.first().messages.filterIsInstance<AgentMessage.System>()
+                .any { it.content.contains("FILE_COLLISION") }
+        )
+        assertTrue(
+            "the run completes normally, so the transcript keeps its shape",
+            session.messages.last() is AgentMessage.Assistant
+        )
     }
 
     @Test

@@ -62,11 +62,11 @@
 
 - `nonce` 使用宿主运行环境的密码学安全随机源生成，至少 128 bit；它不是业务输入，也不能由模型指定。
 - 默认票据有效期为 120 秒；`now >= expiresAtEpochMillis` 即过期。时钟由 Core 注入，便于测试。
-- 受保护 Tool 只有在其 `priorMessages` 的最后一条 ToolResult 是本次确认结果、其后至多只有一个包含当前完整 ToolCall 的 Assistant(tool-call) 外壳、按钮属于允许集合、票据未过期且所有绑定字段匹配时才执行。该 Assistant 外壳是 Runtime 的消息封装，不代表新的执行；User/System 消息或任何其他 ToolResult 出现在确认之后都必须拒绝。
+- 受保护 Tool 只有在其 `priorMessages` 的最后一条 ToolResult 是本次确认结果、其后至多只有一个包含当前完整 ToolCall 的 Assistant(tool-call) 外壳、按钮属于允许集合、结果未声明 `withoutUserDecision=true`、票据未过期且所有绑定字段匹配时才执行。该 Assistant 外壳是 Runtime 的消息封装，不代表新的执行；User/System 消息或任何其他 ToolResult 出现在确认之后都必须拒绝。
 - 目标 Tool 执行成功、失败或被拒绝后，确认结果不再是下一次 Tool 的最近 ToolResult；下一次尝试必须重新确认。这是 v1 的“紧邻结果一次性”语义。
 - 不匹配、缺字段、JSON 非法、过期、拒绝按钮、不同 Session 或重复使用均 fail-closed，不调用 delegate。
 - “用户拒绝”的判定条件（与授权判定共用同一条“紧邻上下文”规则，强度不得不对称）：最后一条 ToolResult 仍是本次 `show_user_confirmation_dialog` 的结果、其后至多只有包含当前完整 ToolCall 的 Assistant 外壳、`selectedButtonId` 属于**拒绝集合**（`declinedButtonIds`，默认 `cancel/deny/no/reject/decline/stop`）、结果不含 `withoutUserDecision=true`，且票据的 `sessionId` 与 `toolName` 绑定到当前受保护 Tool。四条中任何一条不满足都不得宣称“用户已拒绝”：尤其是 `selectedButtonId` 只是不在允许集合内（例如宿主使用了 `approve` 这类未被识别的肯定按钮）时，仍返回列出允许集合的“需要确认”提示，让模型可以自我纠正；把这种情形说成拒绝会阻断用户其实已经授权的动作。
-- `UserConfirmationDialogResult.withoutUserDecision`（默认 `false`）由宿主声明“该结果不是用户作出的决定”——窗口随宿主销毁、协程被取消等。宿主无法区分时保持 `false`，SDK 视同一次真实按钮选择。Demo 的 Activity presenter 在生命周期销毁路径上置为 `true`。该字段为 `true` 时确认结果里不写 `withoutUserDecision` 之外的语义变化，票据照常返回但依旧不可执行。
+- `UserConfirmationDialogResult.withoutUserDecision`（默认 `false`）由宿主声明“该结果不是用户作出的决定”——窗口随宿主销毁、协程被取消、无 UI 的后台运行等。宿主无法区分时保持 `false`，SDK 视同一次真实按钮选择。该字段是**授权与拒绝两侧共同的硬条件**：为 `true` 时票据照常返回，但既不构成授权（否则宿主自己兜底选出的允许集合按钮就能让受保护 Tool 在无用户参与时执行），也不构成“用户已拒绝”。Demo 的 Activity presenter 在生命周期销毁路径上置为 `true`；Headless presenter 在按钮集合里没有可用拒绝按钮时置为 `true`。
 - v1 不宣称对宿主手工伪造的 `priorMessages` 提供持久化防重放能力；如果未来支持跨进程/排队确认，必须增加共享的 TicketStore，并把消费状态纳入新的协议版本。
 
 ## 5. 旁路与兼容策略

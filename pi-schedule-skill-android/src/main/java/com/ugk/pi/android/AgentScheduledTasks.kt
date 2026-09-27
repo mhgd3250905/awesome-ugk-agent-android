@@ -281,6 +281,17 @@ class AgentTaskCreateTool(
         )
         if (parsed is TaskParseResult.Error) return errorResult(call, name, parsed.code, parsed.message)
         val task = (parsed as TaskParseResult.Success).task
+        if (task.nextRunAtMillis == null) {
+            // The same impossible state the update path refuses: a device clock
+            // the schedule cannot be armed against (a pre-1970 RTC is settable by
+            // the user) must not create a record that no trigger will ever back.
+            return errorResult(
+                call,
+                name,
+                "SCHEDULE_WINDOW_PASSED",
+                "The schedule has no future occurrence for the current clock; nothing was created."
+            )
+        }
         store.upsert(task)
         try {
             scheduler.schedule(task)
@@ -409,12 +420,29 @@ class AgentTaskUpdateTool(
         } else {
             existing.action
         }
+        val nextRunAtMillis = schedule.nextRunAtMillis(now)
+        if (nextRunAtMillis == null) {
+            // Persisting this would leave the record SCHEDULED with no next run:
+            // AndroidAgentTaskRuntime.schedule answers such a record by cancelling
+            // the trigger, and every convergence filter skips null occurrences, so
+            // a title-only edit would silently destroy an armed task that the
+            // platform was still holding - while reporting success. Leave the
+            // stored record and its live trigger untouched.
+            return errorResult(
+                call,
+                name,
+                "SCHEDULE_WINDOW_PASSED",
+                "Scheduled task ${existing.id} has no future occurrence left for its " +
+                    "current schedule, so the update was refused and nothing was changed. " +
+                    "Supply a new schedule, or cancel the task."
+            )
+        }
         val updated = existing.copy(
             title = call.input.string("title") ?: existing.title,
             schedule = schedule,
             action = action,
             updatedAtMillis = now,
-            nextRunAtMillis = schedule.nextRunAtMillis(now)
+            nextRunAtMillis = nextRunAtMillis
         )
         store.upsert(updated)
         try {
