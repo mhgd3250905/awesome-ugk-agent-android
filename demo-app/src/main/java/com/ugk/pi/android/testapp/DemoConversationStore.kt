@@ -287,7 +287,6 @@ class DemoConversationStore(context: Context) {
     fun update(conversation: DemoConversation) = save(conversation)
 
     @Synchronized
-    @Synchronized
     fun rename(id: String, title: String): DemoConversation? {
         // Read-modify-write in ONE critical section. The previous
         // get()->save() pair read outside the lock and save() replaces the
