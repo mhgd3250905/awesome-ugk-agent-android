@@ -72,11 +72,13 @@ class SkillRepository(
     private val rootDir: File,
     /**
      * Skill ids the HOST already contributes through statically registered
-     * capability plugins. A file skill saved under such an id would collide
-     * with the plugin skill at runtime skill-assembly time and fail every
-     * later run with "Duplicate skill id" — with the skill tools themselves
-     * unreachable, so the agent could not even clean it up. Saving one of
-     * these names fails with [SKILL_NAME_RESERVED_CODE] instead.
+     * capability plugins. Saving under such a name is refused because
+     * assembly resolves an id collision by provenance and a file-backed
+     * contribution always yields (round 7): the saved file would stay on disk,
+     * keep appearing in `skill_list`, and never reach the model - a silently
+     * dead skill is worse than an explicit [SKILL_NAME_RESERVED_CODE]. The
+     * same collision no longer ends later runs, so this guard is about the
+     * author's expectation, not about bricking the runtime.
      */
     private val reservedSkillIds: Set<String> = emptySet()
 ) {

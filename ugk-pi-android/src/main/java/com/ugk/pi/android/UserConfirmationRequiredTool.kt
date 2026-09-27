@@ -37,19 +37,33 @@ class UserConfirmationRequiredTool(
             // same action, and the user can only escape by answering a dialog that
             // was already answered.
             val refusal = context.declinedConfirmationFor(call)
+            val unanswered = context.unresolvedConfirmationFor(call)
             return ToolResult(
                 toolCallId = call.id,
                 name = name,
-                content = if (refusal) {
-                    "The user declined this exact operation ($name) at the confirmation " +
-                        "dialog. Do not call show_user_confirmation_dialog again for it " +
-                        "and do not retry it in this run; continue without it or ask the " +
-                        "user a new question."
-                } else {
-                    "User confirmation required for this exact Tool input. Call " +
-                        "show_user_confirmation_dialog with target.toolName and the exact " +
-                        "target.input first, then retry only with an unexpired ticket and " +
-                        "an accepted selectedButtonId from ${acceptedButtonIds.sorted()}."
+                content = when {
+                    refusal -> {
+                        "The user declined this exact operation ($name) at the confirmation " +
+                            "dialog. Do not call show_user_confirmation_dialog again for it " +
+                            "and do not retry it in this run; continue without it or ask the " +
+                            "user a new question."
+                    }
+                    // Nothing decided this, and asking again cannot reach a user
+                    // that was unreachable the first time: the missing-confirmation
+                    // wording below would send the model straight back to the same
+                    // dialog that just closed without an answer.
+                    unanswered -> {
+                        "The confirmation dialog for this operation ($name) closed without " +
+                            "a user decision. Do not call show_user_confirmation_dialog " +
+                            "again for it in this run; continue without it or report that " +
+                            "the user could not be reached."
+                    }
+                    else -> {
+                        "User confirmation required for this exact Tool input. Call " +
+                            "show_user_confirmation_dialog with target.toolName and the exact " +
+                            "target.input first, then retry only with an unexpired ticket and " +
+                            "an accepted selectedButtonId from ${acceptedButtonIds.sorted()}."
+                    }
                 },
                 isError = true
             )
@@ -117,11 +131,32 @@ class UserConfirmationRequiredTool(
         return ticket.sessionId == sessionId && ticket.toolName == call.name
     }
 
+    /**
+     * True when a dialog did appear for this Tool and closed with the host
+     * declaring that no user decided anything (`withoutUserDecision`).
+     *
+     * Neither an authorization nor a refusal, but it does answer the question
+     * "should the model ask again?", which the plain missing-confirmation
+     * wording cannot.
+     */
+    private fun ToolExecutionContext.unresolvedConfirmationFor(call: ToolCall): Boolean {
+        val confirmation = immediateDialogResult(call) ?: return false
+        if (!confirmation.booleanField("withoutUserDecision")) return false
+        val ticket = (confirmation["ticket"] as? JsonObject)?.toTicketOrNull()
+            ?: return false
+        return ticket.sessionId == sessionId && ticket.toolName == call.name
+    }
+
     private fun ToolExecutionContext.hasImmediateUserConfirmation(call: ToolCall): Boolean {
         val confirmation = immediateDialogResult(call) ?: return false
         val selectedButtonId = confirmation.stringField("selectedButtonId")
             ?: return false
         if (selectedButtonId !in acceptedButtonIds) return false
+        // An accepted id is only authorization if somebody actually chose it. The
+        // host can resolve a dialog on its own (destroyed window, no UI present),
+        // and the ticket it issues is well-formed for exactly that input, so the
+        // remaining checks cannot tell a fabricated decision from a real one.
+        if (confirmation.booleanField("withoutUserDecision")) return false
 
         val ticket = (confirmation["ticket"] as? JsonObject)
             ?.toTicketOrNull()

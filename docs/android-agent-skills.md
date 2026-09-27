@@ -74,8 +74,12 @@ memory:rules.md`，宿主注册 `memory → <filesDir>/agent-memory`（demo 的 
   set/replace 一个 custom provider，不清空 plugin-declared skills。Runtime 每次 run 按稳定顺序组合
   plugin dynamic providers（plugin/provider 注册顺序）、custom provider（若有）、plugin-declared
   skills（plugin 注册顺序），其中 `plugin.skills()` 也每 run 重新查询。所有来源的 skill id 必须非空且
-  精确、区分大小写；同一 id 在同 provider、跨 provider、custom、plugin 或 file-backed 来源重复时，
-  assembly 立即以包含来源的描述失败，不进入 resolver，也不调用模型。`Foo` 与 `foo` 是两个合法 id。
+  精确、区分大小写；`Foo` 与 `foo` 是两个合法 id。id 冲突时按来源裁决（第七轮修订）：
+  `FILE_BACKED` 来源一律让位——它落在宿主可写目录内，bash、文件工具、导入包或恢复备份都能放进
+  同名文件，若 assembly 直接失败，异常发生在 tool 循环之前，模型连 `skill_delete` 都来不及调用，
+  之后每一轮都同样失败（这正是第五轮记录并只在 `skill_save` 侧堵住的风险）。因此文件来源与任何
+  其它来源重复时，文件条目被丢弃、保留者占据原有位置、run 继续；两个非文件来源（custom、plugin、
+  dynamic）互相重复仍是宿主接线错误，继续以包含来源的描述立即失败。
 - `LoadPolicySkillResolver(repository)`：always/indexed 只对本轮 assembly 明确标记为
   `AndroidSkillProviderSource.FILE_BACKED` 的 skill id 无条件通过；所有非 `FILE_BACKED` skills（含
   generic dynamic、custom、plugin-declared）以及 `FILE_BACKED` 的 triggered skills 走
@@ -84,7 +88,8 @@ memory:rules.md`，宿主注册 `memory → <filesDir>/agent-memory`（demo 的 
   source-aware overload。Provider 默认是 `GENERIC`，文件 provider 必须显式声明 `FILE_BACKED`，resolver
   绝不按 skill id、description 或 instructions 猜来源。因此 custom provider 即使复用 repository 中
   always manifest 的 id，也不会被当作 file skill；直接调用三参数 overload 没有文件来源，全部按 keyword
-  语义处理。文件 repository id 与其它来源冲突时，先由 assembly 报错，resolver 不会被调用。
+  语义处理。文件 repository id 与其它来源冲突时，先由 assembly 按上面的来源裁决处理：文件条目被丢弃，
+  resolver 只会看到赢得该 id 的非文件来源 skill，因此文件无法冒充宿主 skill。
 - `AgentSkillRuntimePlugin`（id=`agent-skill-runtime`）：文件型 skill runtime 的完整单入口，注册工具、
   全局 instructions 和动态 `FileBackedSkillProvider`；`skills()` 返回空以避免双重注入。构造参数
   `embedRoots` 同时交给 provider 和 `skill_read`。

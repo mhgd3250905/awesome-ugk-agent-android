@@ -58,7 +58,21 @@ class AndroidAgentTaskStore(context: Context) : AgentTaskStore {
     )
     private val recordStore = TaskRecordStore(
         readRaw = { preferences.getString(KEY_TASKS, null) },
-        writeRaw = { raw -> preferences.edit().putString(KEY_TASKS, raw).commit() },
+        // commit() answers whether the snapshot reached the disk. Its own
+        // in-memory view is already updated when a flush fails, so ignoring the
+        // answer lets this instance - and every Tool that reads success from it -
+        // treat an unpersisted state as durable: a cancelled task comes back as
+        // SCHEDULED after process death and fires again. Same contract as
+        // SharedPreferencesTaskJobIdAssignmentStore below, which already checks.
+        writeRaw = { raw ->
+            check(preferences.edit().putString(KEY_TASKS, raw).commit()) {
+                "Unable to persist the Agent task record."
+            }
+        },
+        // The backup copy of a corrupt record stays best-effort on purpose: this
+        // read path must keep working after a salvage, and refusing to serve the
+        // store because the forensic copy could not be written would turn one
+        // bad write into a permanently unusable task list.
         writeBackup = { raw -> preferences.edit().putString(KEY_TASKS_BACKUP, raw).commit() }
     )
 
@@ -698,7 +712,26 @@ class AndroidAgentTaskRuntime(
             // returns null for every current == null branch, so no extra
             // null-check is needed here.
             if (updated != null) {
-                store.upsert(updated)
+                // The tool paths (create/update/cancel) let a failed durable
+                // write surface as an error, because there the caller is being
+                // told "done". This path is different: the occurrence was
+                // already consumed, and skipping the re-arm would end a
+                // repeating task over a bookkeeping failure, so it is logged
+                // and the re-arm and notification still run. Cancellation is
+                // never a bookkeeping failure: onStopJob asks for a retry, and
+                // swallowing it here would report success for a run Android
+                // just canceled.
+                try {
+                    store.upsert(updated)
+                } catch (cancellation: CancellationException) {
+                    throw cancellation
+                } catch (@Suppress("TooGenericExceptionCaught") error: Throwable) {
+                    Log.w(
+                        LOG_TAG,
+                        "Failed to persist task ${updated.id} after execution.",
+                        error
+                    )
+                }
                 if (reschedule) {
                     if (updated.status == AgentTaskStatus.SCHEDULED) {
                         scheduler.schedule(updated)
@@ -777,11 +810,47 @@ class AndroidAgentTaskRuntime(
         (scheduler as? TerminalTaskJobIdReleaser)?.completeTerminalJobIdRelease(taskId, jobIds)
     }
 
+    /**
+     * Resolves a SCHEDULED record that carries no occurrence: re-arms it when
+     * its schedule still has a future run, and otherwise retires it as
+     * EXPIRED so it stops being reported as an active task it can never
+     * trigger again.
+     */
+    private suspend fun repairRecordWithoutOccurrence(task: AgentTask): AgentTask? {
+        val now = clock.nowMillis()
+        val recomputed = task.schedule.nextRunAtMillis(now)
+        if (recomputed == null) {
+            store.upsert(
+                task.copy(
+                    status = AgentTaskStatus.EXPIRED,
+                    updatedAtMillis = now,
+                    nextRunAtMillis = null
+                )
+            )
+            // Retire the platform side too where it exists (the legacy defect
+            // could leave a trigger armed next to a null-occurrence record). A
+            // late delivery against a terminal record is already refused by
+            // handle(), so this is tidy-up rather than what prevents a second
+            // notification.
+            try {
+                scheduler.cancel(task.id)
+            } catch (cancellation: CancellationException) {
+                throw cancellation
+            } catch (@Suppress("TooGenericExceptionCaught") error: Throwable) {
+                Log.w(LOG_TAG, "Failed to cancel triggers for retired task ${task.id}.", error)
+            }
+            return null
+        }
+        val repaired = task.copy(nextRunAtMillis = recomputed, updatedAtMillis = now)
+        store.upsert(repaired)
+        return repaired
+    }
+
     private suspend fun convergeScheduledTasks(): AgentTaskRestoreResult {
         val rearmedTaskIds = mutableListOf<String>()
         val failures = mutableListOf<AgentTaskRestoreFailure>()
         store.list()
-            .filter { it.status == AgentTaskStatus.SCHEDULED && it.nextRunAtMillis != null }
+            .filter { it.status == AgentTaskStatus.SCHEDULED }
             .forEach { persisted ->
                 val handleLock = taskHandleLock(persisted.id)
                 // Never wait behind an in-flight delivery: see
@@ -794,13 +863,20 @@ class AndroidAgentTaskRuntime(
                     // Re-read under the lock: the list snapshot may predate a
                     // write-back from an in-flight handle of this very task.
                     val current = store.get(persisted.id)
-                    if (current != null &&
-                        current.status == AgentTaskStatus.SCHEDULED &&
-                        current.nextRunAtMillis != null
-                    ) {
+                    if (current != null && current.status == AgentTaskStatus.SCHEDULED) {
                         try {
-                            scheduler.schedule(current)
-                            rearmedTaskIds += current.id
+                            // A SCHEDULED record with no occurrence cannot be
+                            // armed and is invisible to this filter, yet
+                            // agent_task_list still counts it as active. Such
+                            // records exist on devices that hit the pre-round-7
+                            // update defect, so convergence repairs or retires
+                            // them instead of leaving them undead forever.
+                            val armed = current.nextRunAtMillis?.let { current }
+                                ?: repairRecordWithoutOccurrence(current)
+                            if (armed != null) {
+                                scheduler.schedule(armed)
+                                rearmedTaskIds += armed.id
+                            }
                         } catch (cancellation: CancellationException) {
                             throw cancellation
                         } catch (@Suppress("TooGenericExceptionCaught") error: Throwable) {

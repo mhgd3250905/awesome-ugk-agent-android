@@ -683,6 +683,7 @@ private data class RuntimeSkillAssembly(
 
 private class RuntimeSkillAccumulator {
     private val seenIds = mutableMapOf<String, String>()
+    private val seenFileBacked = mutableMapOf<String, Boolean>()
     private val assembledSkills = mutableListOf<AndroidSkill>()
     private val fileBackedSkillIds = linkedSetOf<String>()
 
@@ -704,14 +705,50 @@ private class RuntimeSkillAccumulator {
                 "Skill id must not be blank: $source[$index]"
             }
             val contribution = "$source[$index]"
-            val previous = seenIds.put(nonNullSkill.id, contribution)
-            require(previous == null) {
-                "Duplicate skill id '${nonNullSkill.id}': $contribution conflicts with $previous"
+            val incomingIsFileBacked =
+                nonNullProviderSource == AndroidSkillProviderSource.FILE_BACKED
+            var replacedAt = -1
+            val previous = seenIds[nonNullSkill.id]
+            if (previous != null) {
+                val previousWasFileBacked = seenFileBacked[nonNullSkill.id] == true
+                when {
+                    // File-backed content is authored by the model or by any tool
+                    // that can write the skill directory, so a collision here is
+                    // reachable without `skill_save` (bash, the file tools, an
+                    // imported pack, a restored backup). Failing assembly would
+                    // end every later run before the tool loop starts, so the
+                    // agent could never reach `skill_delete` to undo it - the
+                    // hazard round 5 recorded when it guarded the save path. The
+                    // model-authored contribution loses; the run continues.
+                    incomingIsFileBacked -> return@forEachIndexed
+
+                    previousWasFileBacked -> {
+                        // The host skill takes the losing entry's position, so the
+                        // injection order stays a property of the contributions
+                        // and not of which one happened to be file-backed.
+                        replacedAt = assembledSkills.indexOfLast { it.id == nonNullSkill.id }
+                        if (replacedAt >= 0) assembledSkills.removeAt(replacedAt)
+                        fileBackedSkillIds.remove(nonNullSkill.id)
+                    }
+
+                    // Two host contributions claiming one id is a wiring bug in
+                    // the consuming app: nothing the agent can do at runtime
+                    // fixes it, so it stays loud.
+                    else -> throw IllegalArgumentException(
+                        "Duplicate skill id '${nonNullSkill.id}': $contribution conflicts with $previous"
+                    )
+                }
             }
-            if (nonNullProviderSource == AndroidSkillProviderSource.FILE_BACKED) {
+            seenIds[nonNullSkill.id] = contribution
+            seenFileBacked[nonNullSkill.id] = incomingIsFileBacked
+            if (incomingIsFileBacked) {
                 fileBackedSkillIds += nonNullSkill.id
             }
-            assembledSkills += nonNullSkill
+            if (replacedAt >= 0) {
+                assembledSkills.add(replacedAt, nonNullSkill)
+            } else {
+                assembledSkills += nonNullSkill
+            }
         }
     }
 
@@ -725,7 +762,10 @@ private class RuntimeSkillAccumulator {
  * Runtime-owned skill assembly. Every source is queried for each run.
  * Contributions are ordered as plugin dynamic providers, the optional custom
  * provider, then plugin-declared skills. Skill ids are exact and
- * case-sensitive; every non-blank id must be unique across all sources.
+ * case-sensitive. A non-blank id claimed twice is resolved by provenance: a
+ * file-backed contribution always yields to any other source (see
+ * RuntimeSkillAccumulator) so a file dropped into the skill directory cannot
+ * end every run, while two host contributions still fail loudly.
  */
 private class CompositeAndroidSkillProvider(
     private val customProvider: AndroidSkillProvider?,

@@ -4,6 +4,7 @@ import kotlinx.serialization.json.Json
 import kotlinx.serialization.json.JsonArray
 import kotlinx.serialization.json.JsonArrayBuilder
 import kotlinx.serialization.json.JsonElement
+import kotlinx.serialization.json.JsonNull
 import kotlinx.serialization.json.JsonObject
 import kotlinx.serialization.json.JsonPrimitive
 import kotlinx.serialization.json.buildJsonArray
@@ -187,8 +188,15 @@ class AnthropicMessagesProvider(
                     val block = dataObj["content_block"] as? JsonObject
                     val blockType = block?.get("type")?.jsonPrimitive?.contentOrNull
                     if (blockType == "tool_use") {
+                        // A blank id or name must not become a ToolCall: the
+                        // result is appended to the transcript under that id, so
+                        // every following request serializes an invalid
+                        // tool_use and the API rejects the whole conversation.
+                        // Same policy as the OpenAI reader's buildFinalToolCalls.
                         currentToolId = block["id"]?.jsonPrimitive?.contentOrNull
+                            ?.takeIf { it.isNotBlank() }
                         currentToolName = block["name"]?.jsonPrimitive?.contentOrNull
+                            ?.takeIf { it.isNotBlank() }
                         currentToolInputJson.clear()
                     }
                 }
@@ -577,10 +585,10 @@ class AnthropicMessagesProvider(
                 ?: body.take(200)
             throw IllegalStateException("Anthropic API error: $message")
         }
-        val contentBlocks = root["content"]?.jsonArray ?: JsonArray(emptyList())
+        val contentBlocks = root["content"] as? JsonArray ?: JsonArray(emptyList())
         val text = contentBlocks
             .mapNotNull { block ->
-                val objectValue = block.jsonObject
+                val objectValue = block as? JsonObject ?: return@mapNotNull null
                 if (objectValue["type"]?.jsonPrimitive?.contentOrNull == "text") {
                     objectValue["text"]?.jsonPrimitive?.contentOrNull
                 } else {
@@ -590,7 +598,7 @@ class AnthropicMessagesProvider(
             .joinToString(separator = "\n")
         val reasoningContent = contentBlocks
             .mapNotNull { block ->
-                val objectValue = block.jsonObject
+                val objectValue = block as? JsonObject ?: return@mapNotNull null
                 if (objectValue["type"]?.jsonPrimitive?.contentOrNull == "thinking") {
                     objectValue["thinking"]?.jsonPrimitive?.contentOrNull
                 } else {
@@ -610,15 +618,24 @@ class AnthropicMessagesProvider(
     }
 
     private fun JsonElement.toToolCallOrNull(): ToolCall? {
-        val objectValue = jsonObject
+        val objectValue = this as? JsonObject ?: return null
         if (objectValue["type"]?.jsonPrimitive?.contentOrNull != "tool_use") {
             return null
         }
 
         return ToolCall(
-            id = objectValue["id"]?.jsonPrimitive?.contentOrNull ?: return null,
-            name = objectValue["name"]?.jsonPrimitive?.contentOrNull ?: return null,
-            input = objectValue["input"] as? JsonObject ?: JsonObject(emptyMap())
+            id = objectValue["id"]?.jsonPrimitive?.contentOrNull
+                ?.takeIf { it.isNotBlank() } ?: return null,
+            name = objectValue["name"]?.jsonPrimitive?.contentOrNull
+                ?.takeIf { it.isNotBlank() } ?: return null,
+            // An absent input is the protocol's no-argument call; anything
+            // present but not an object is truncated or corrupted, and the
+            // streaming path drops it rather than running the Tool with
+            // arguments the model never chose. Same rule here.
+            input = when (val rawInput = objectValue["input"]) {
+                null, JsonNull -> JsonObject(emptyMap())
+                else -> rawInput as? JsonObject ?: return null
+            }
         )
     }
 }

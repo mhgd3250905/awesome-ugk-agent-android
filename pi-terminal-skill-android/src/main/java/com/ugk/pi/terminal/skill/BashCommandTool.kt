@@ -251,6 +251,14 @@ class BashCommandTool(
     override suspend fun execute(call: ToolCall, context: ToolExecutionContext): ToolResult {
         val script = call.input.string("script")?.takeIf { it.isNotBlank() }
             ?: return error(call, "MISSING_SCRIPT", "script is required.")
+        // Environment values already reject NUL. The script needs the same
+        // screen because it is the argument handed to `bash -c`, and argv
+        // entries end at a NUL: the child would run a truncated command while
+        // the confirmation ticket is bound to the full text, so what the user
+        // approved is not what executed.
+        if ('\u0000' in script) {
+            return error(call, "INVALID_SCRIPT", "script must not contain a NUL character.")
+        }
         // A wrong-typed timeoutMillis (object/array/boolean or a non-numeric
         // string) must surface as INVALID_TIMEOUT instead of silently running
         // with the default timeout the model never chose.
@@ -280,7 +288,8 @@ class BashCommandTool(
             ?: return error(
                 call,
                 "INVALID_WORKSPACE_PATH",
-                "workingDirectory must be a relative path inside the terminal workspace and must not contain . or ..."
+                "workingDirectory must be a relative path inside the terminal workspace, " +
+                    "must not contain . or .., and must not contain a NUL character."
             )
         val environment = parseEnvironment(call.input["environment"])
             ?: return error(
@@ -343,6 +352,11 @@ class BashCommandTool(
     private fun resolveWorkingDirectory(rawPath: String?): File? {
         val normalized = rawPath?.trim().orEmpty()
         if (normalized.isEmpty()) return canonicalWorkspaceRoot
+        // Part of the ticket-fingerprinted input, and the child receives it as a
+        // C string, so a NUL here would make the confirmed path and the used path
+        // differ. The segment checks below compare exact strings and would not
+        // catch it.
+        if ('\u0000' in normalized) return null
         if (File(normalized).isAbsolute || normalized.startsWith('/') || normalized.contains('\\')) return null
 
         val segments = normalized.split('/').filter { it.isNotBlank() }
