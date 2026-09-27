@@ -57,9 +57,10 @@ internal object DemoAgentRuntimeFactory {
         // File-backed skills live in the app-private agent-skills directory;
         // packaged skills are seeded once and never overwrite user changes.
         // The ids contributed by the statically registered plugins are passed
-        // as reserved: a skill_save under such an id would otherwise collide
-        // at skill-assembly time and fail every later run with
-        // "Duplicate skill id" (unrecoverable by the agent itself).
+        // as reserved so `skill_save` refuses to write a file that assembly
+        // would then shadow: the file-backed side yields on an id collision
+        // (round 7), so such a save would silently never reach the model while
+        // still listing as installed.
         val importedFilePlugin = DemoImportedFilePlugin(
             DemoFileImportStore(appContext).workspaceRoot
         )

@@ -717,15 +717,21 @@ class AndroidAgentTaskRuntime(
                 // told "done". This path is different: the occurrence was
                 // already consumed, and skipping the re-arm would end a
                 // repeating task over a bookkeeping failure, so it is logged
-                // and the re-arm and notification still run.
-                runCatching { store.upsert(updated) }
-                    .onFailure { error ->
-                        Log.w(
-                            LOG_TAG,
-                            "Failed to persist task ${updated.id} after execution.",
-                            error
-                        )
-                    }
+                // and the re-arm and notification still run. Cancellation is
+                // never a bookkeeping failure: onStopJob asks for a retry, and
+                // swallowing it here would report success for a run Android
+                // just canceled.
+                try {
+                    store.upsert(updated)
+                } catch (cancellation: CancellationException) {
+                    throw cancellation
+                } catch (@Suppress("TooGenericExceptionCaught") error: Throwable) {
+                    Log.w(
+                        LOG_TAG,
+                        "Failed to persist task ${updated.id} after execution.",
+                        error
+                    )
+                }
                 if (reschedule) {
                     if (updated.status == AgentTaskStatus.SCHEDULED) {
                         scheduler.schedule(updated)
@@ -813,16 +819,28 @@ class AndroidAgentTaskRuntime(
     private suspend fun repairRecordWithoutOccurrence(task: AgentTask): AgentTask? {
         val now = clock.nowMillis()
         val recomputed = task.schedule.nextRunAtMillis(now)
-            ?: run {
-                store.upsert(
-                    task.copy(
-                        status = AgentTaskStatus.EXPIRED,
-                        updatedAtMillis = now,
-                        nextRunAtMillis = null
-                    )
+        if (recomputed == null) {
+            store.upsert(
+                task.copy(
+                    status = AgentTaskStatus.EXPIRED,
+                    updatedAtMillis = now,
+                    nextRunAtMillis = null
                 )
-                return null
+            )
+            // Retire the platform side too where it exists (the legacy defect
+            // could leave a trigger armed next to a null-occurrence record). A
+            // late delivery against a terminal record is already refused by
+            // handle(), so this is tidy-up rather than what prevents a second
+            // notification.
+            try {
+                scheduler.cancel(task.id)
+            } catch (cancellation: CancellationException) {
+                throw cancellation
+            } catch (@Suppress("TooGenericExceptionCaught") error: Throwable) {
+                Log.w(LOG_TAG, "Failed to cancel triggers for retired task ${task.id}.", error)
             }
+            return null
+        }
         val repaired = task.copy(nextRunAtMillis = recomputed, updatedAtMillis = now)
         store.upsert(repaired)
         return repaired

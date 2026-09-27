@@ -321,9 +321,8 @@ class LocalHttpServerManager(
     }
 
     private fun resolveWorkspaceDirectory(relativePath: String): File {
-        require(relativePath.isNotBlank()) { "directory must not be blank" }
-        require(!File(relativePath).isAbsolute && !relativePath.contains('\\')) {
-            "directory must be a relative path inside the terminal workspace"
+        directoryScreeningError(relativePath)?.let { reason ->
+            throw IllegalArgumentException(reason)
         }
         val workspace = runtime.defaultWorkspace().apply {
             if (!exists()) check(mkdirs()) { "Unable to create terminal workspace: $absolutePath" }
@@ -633,6 +632,27 @@ class LocalHttpServerManager(
          * process-wide lock instead of the instance.
          */
         private val PROCESS_LOCK = Any()
+
+        /**
+         * Screens a model-authored directory before it becomes an argv element of
+         * the server process and the root its handler serves from. Returns the
+         * refusal reason, or null when the value may be resolved.
+         *
+         * Split out from [resolveWorkspaceDirectory] because the rest of that
+         * path needs an Android Context and a native process: the screen itself
+         * is pure, so JVM tests can pin it.
+         */
+        internal fun directoryScreeningError(relativePath: String): String? = when {
+            relativePath.isBlank() -> "directory must not be blank"
+            File(relativePath).isAbsolute || relativePath.contains('\\') -> {
+                "directory must be a relative path inside the terminal workspace"
+            }
+            // argv entries end at a NUL, so an unscreened value would make the
+            // child serve a truncated prefix of the directory the caller - and
+            // the confirmation ticket - named.
+            relativePath.contains('\u0000') -> "directory must not contain a NUL character"
+            else -> null
+        }
 
         const val MIN_PORT = 1_024
         const val MAX_PORT = 65_535

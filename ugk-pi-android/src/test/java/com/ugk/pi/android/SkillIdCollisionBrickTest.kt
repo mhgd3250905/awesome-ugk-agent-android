@@ -85,6 +85,31 @@ class SkillIdCollisionBrickTest {
         )
     }
 
+    @Test
+    fun hostSkillTakesThePositionOfTheFileSkillItReplaces() = runBlocking {
+        // The replacement must be in-place: skill injection order is part of the
+        // context the model sees, and must not depend on which contribution
+        // happened to be file-backed.
+        val resolver = RecordingSkillResolver()
+        val runtime = AgentRuntime.Builder()
+            .llmProvider(RecordingLLMProvider())
+            .skillResolver(resolver)
+            .register(FileBackedNeighbourPlugin())
+            .register(HostSkillInTheMiddlePlugin())
+            .build()
+
+        runtime.run(AgentSession("collision-order"), "hello").toList()
+
+        assertEquals(
+            listOf("file-first", "shared-file-id", "host-last"),
+            resolver.receivedSkills.single().map { it.id }
+        )
+        assertEquals(
+            "HOST_INSTRUCTIONS",
+            resolver.receivedSkills.single()[1].instructions
+        )
+    }
+
     private class FileBackedCollisionPlugin : AgentCapabilityPlugin {
         override val id: String = "file-backed-collision"
         override fun tools(): List<AgentTool> = emptyList()
@@ -133,6 +158,34 @@ class SkillIdCollisionBrickTest {
 
         override fun skills(): List<AndroidSkill> = listOf(
             AndroidSkill(id = skillId, description = "Host skill.", instructions = "HOST_INSTRUCTIONS")
+        )
+    }
+
+    private class FileBackedNeighbourPlugin : AgentCapabilityPlugin {
+        override val id: String = "file-backed-neighbours"
+        override fun tools(): List<AgentTool> = emptyList()
+        override fun skills(): List<AndroidSkill> = emptyList()
+
+        override fun skillProviders(): List<AndroidSkillProvider> = listOf(
+            object : AndroidSkillProvider {
+                override val source: AndroidSkillProviderSource =
+                    AndroidSkillProviderSource.FILE_BACKED
+
+                override fun skills(): List<AndroidSkill> = listOf(
+                    AndroidSkill("file-first", "before", "FILE_BEFORE"),
+                    AndroidSkill("shared-file-id", "contested", "FILE_IMPOSTOR")
+                )
+            }
+        )
+    }
+
+    private class HostSkillInTheMiddlePlugin : AgentCapabilityPlugin {
+        override val id: String = "host-neighbours"
+        override fun tools(): List<AgentTool> = emptyList()
+
+        override fun skills(): List<AndroidSkill> = listOf(
+            AndroidSkill("shared-file-id", "contested", "HOST_INSTRUCTIONS"),
+            AndroidSkill("host-last", "after", "HOST_AFTER")
         )
     }
 

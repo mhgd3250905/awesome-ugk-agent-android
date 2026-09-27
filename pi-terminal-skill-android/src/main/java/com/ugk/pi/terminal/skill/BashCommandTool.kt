@@ -288,7 +288,8 @@ class BashCommandTool(
             ?: return error(
                 call,
                 "INVALID_WORKSPACE_PATH",
-                "workingDirectory must be a relative path inside the terminal workspace and must not contain . or ..."
+                "workingDirectory must be a relative path inside the terminal workspace, " +
+                    "must not contain . or .., and must not contain a NUL character."
             )
         val environment = parseEnvironment(call.input["environment"])
             ?: return error(

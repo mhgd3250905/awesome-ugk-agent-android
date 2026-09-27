@@ -453,8 +453,10 @@ class AgentTaskUpdateTool(
             // Restore the previous record: the task must not keep a new
             // schedule that no platform trigger actually backs. schedule()
             // may have cleared the old alarm before failing, so re-arm it on
-            // a best-effort basis.
-            store.upsert(existing)
+            // a best-effort basis - and re-arm even when the restore write
+            // itself cannot be persisted, which is why the store call is
+            // wrapped rather than sequenced before it.
+            runCatching { store.upsert(existing) }
             runCatching { scheduler.schedule(existing) }
             return errorResult(
                 call,
