@@ -28,6 +28,124 @@ class UserConfirmationRequiredToolTest {
     }
 
     @Test
+    fun answersARefusalAsARefusalInsteadOfInvitingAnotherDialog() = runBlocking {
+        val delegate = RecordingTool()
+        val input = buildJsonObject { put("target", "open_url") }
+        val tool = UserConfirmationRequiredTool(delegate, nowEpochMillis = { NOW })
+        // The user pressed a button outside the accepted set: a decline whose
+        // ticket is inert, which must not read as "no confirmation yet".
+        val declined = AgentMessage.Tool(
+            confirmationResult(SESSION, tool.name, input, selectedButtonId = "cancel")
+        )
+
+        val result = tool.execute(
+            ToolCall("intent-1", tool.name, input),
+            ToolExecutionContext(sessionId = SESSION, priorMessages = listOf(declined))
+        )
+
+        assertTrue(result.isError)
+        assertFalse(delegate.executed)
+        assertTrue(
+            "the model must learn the user declined, got: ${result.content}",
+            result.content.contains("declined")
+        )
+        assertFalse(
+            "a refusal must not tell the model to request the dialog again, got: ${result.content}",
+            result.content.contains("then retry")
+        )
+    }
+
+    @Test
+    fun doesNotClaimRefusalForAnUnrecognizedButtonId() = runBlocking {
+        // An id the SDK does not know (an affirmative the host words differently,
+        // or a button the model invented) must not be reported as the user's "no":
+        // that would block an action the user may well have authorized. The model
+        // instead sees the accepted id list and can ask again correctly.
+        val delegate = RecordingTool()
+        val input = buildJsonObject { put("target", "open_url") }
+        val tool = UserConfirmationRequiredTool(delegate, nowEpochMillis = { NOW })
+
+        val result = tool.execute(
+            ToolCall("intent-1", tool.name, input),
+            ToolExecutionContext(
+                sessionId = SESSION,
+                priorMessages = listOf(
+                    AgentMessage.Tool(
+                        confirmationResult(SESSION, tool.name, input, selectedButtonId = "approve")
+                    )
+                )
+            )
+        )
+
+        assertTrue(result.isError)
+        assertFalse(delegate.executed)
+        assertFalse(result.content.contains("declined"))
+        assertTrue(result.content.contains("User confirmation required"))
+    }
+
+    @Test
+    fun doesNotClaimRefusalWhenTheHostResolvedWithoutAUserDecision() = runBlocking {
+        // A destroyed dialog window resolves with its cancellation button, but the
+        // user never answered; reporting that as a refusal would silently abandon
+        // the action the user was about to approve.
+        val delegate = RecordingTool()
+        val input = buildJsonObject { put("target", "open_url") }
+        val tool = UserConfirmationRequiredTool(delegate, nowEpochMillis = { NOW })
+        val ticket = confirmationTicket(SESSION, tool.name, input)
+        val unresolved = AgentMessage.Tool(
+            ToolResult(
+                toolCallId = "dialog-1",
+                name = "show_user_confirmation_dialog",
+                content = buildJsonObject {
+                    put("selectedButtonId", "cancel")
+                    put("withoutUserDecision", true)
+                    put("ticket", ticket.toJsonObject())
+                }.toString()
+            )
+        )
+
+        val result = tool.execute(
+            ToolCall("intent-1", tool.name, input),
+            ToolExecutionContext(sessionId = SESSION, priorMessages = listOf(unresolved))
+        )
+
+        assertTrue(result.isError)
+        assertFalse(delegate.executed)
+        assertFalse(
+            "an unanswered dialog is not a user refusal, got: ${result.content}",
+            result.content.contains("declined")
+        )
+    }
+
+    @Test
+    fun keepsAskingWordingWhenNoConfirmationHasBeenShownAtAll() = runBlocking {
+        val delegate = RecordingTool()
+        val input = buildJsonObject { put("target", "open_url") }
+        val tool = UserConfirmationRequiredTool(delegate, nowEpochMillis = { NOW })
+
+        val result = tool.execute(
+            ToolCall("intent-1", tool.name, input),
+            ToolExecutionContext(
+                sessionId = SESSION,
+                priorMessages = listOf(
+                    AgentMessage.Tool(
+                        ToolResult(
+                            toolCallId = "other-1",
+                            name = "screen_read",
+                            content = "ok"
+                        )
+                    )
+                )
+            )
+        )
+
+        assertTrue(result.isError)
+        assertFalse(delegate.executed)
+        assertTrue(result.content.contains("User confirmation required"))
+        assertFalse(result.content.contains("declined"))
+    }
+
+    @Test
     fun executesDelegateWhenConfirmationBypassIsEnabled() = runBlocking {
         val delegate = RecordingTool()
         val tool = UserConfirmationRequiredTool(

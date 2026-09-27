@@ -3,6 +3,7 @@ package com.ugk.pi.android.testapp
 import android.content.Context
 import android.os.SystemClock
 import android.util.Log
+import com.ugk.pi.android.AgentEvent
 import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.Job
@@ -29,13 +30,36 @@ internal sealed interface DemoDelayedTaskState {
         val deadlineElapsedMillis: Long,
         val deadlineWallMillis: Long,
         val completedRuns: Long = 0L,
-        val latestResult: String? = null
+        val latestResult: String? = null,
+        val consecutiveFailedRounds: Int = 0
     ) : DemoDelayedTaskState
     data class Executing(
         val task: DemoDelayedTask,
-        val completedRuns: Long = 0L
+        val completedRuns: Long = 0L,
+        val consecutiveFailedRounds: Int = 0
     ) : DemoDelayedTaskState
 }
+
+/** How one round of a delayed task ended, as reported by the Agent turn owner. */
+internal enum class DemoDelayedTaskRound {
+    COMPLETED,
+    FAILED
+}
+
+/**
+ * The round outcome of one Agent turn.
+ *
+ * A `Completed` event that carries no content did not do what the scheduled
+ * instruction asked, so it counts as a failed round: treating it as a success
+ * would reset the failure budget and let a provider that answers empty restart
+ * the loop forever, which is the failure this budget exists to stop.
+ */
+internal fun demoDelayedTaskRound(event: AgentEvent): DemoDelayedTaskRound =
+    if (event is AgentEvent.Completed && event.content.isNotBlank()) {
+        DemoDelayedTaskRound.COMPLETED
+    } else {
+        DemoDelayedTaskRound.FAILED
+    }
 
 /** One process-owned delay slot. No platform alarm or independent Agent session is created. */
 internal class DemoDelayedTaskController(
@@ -184,7 +208,11 @@ internal class DemoDelayedTaskController(
         return true
     }
 
-    fun complete(taskId: String, latestResult: String? = null) {
+    fun complete(
+        taskId: String,
+        latestResult: String? = null,
+        round: DemoDelayedTaskRound = DemoDelayedTaskRound.COMPLETED
+    ) {
         val executing = state as? DemoDelayedTaskState.Executing ?: return
         if (executing.task.id != taskId) return
         timerJob = null
@@ -193,7 +221,26 @@ internal class DemoDelayedTaskController(
             publish(DemoDelayedTaskState.Idle)
             return
         }
-        val intervalMillis = executing.task.delaySeconds * 1_000L
+        val failedRounds = if (round == DemoDelayedTaskRound.FAILED) {
+            executing.consecutiveFailedRounds + 1
+        } else {
+            0
+        }
+        if (failedRounds >= MAX_CONSECUTIVE_FAILED_ROUNDS) {
+            // A round that failed still costs a model request, and each failure
+            // appends another "任务未完成" turn that pushes the reader's own
+            // history out of the stored window. Repeating that forever turns a
+            // broken key, an exhausted quota or a dead network into an endless
+            // spend, so the loop stops on a bounded streak of failures and tells
+            // the user why instead of silently restarting.
+            appendStatus(
+                executing.task,
+                "周期任务已连续 $failedRounds 轮未完成，已停止：${executing.task.instruction}"
+            )
+            clearMarker()
+            publish(DemoDelayedTaskState.Idle)
+            return
+        }
         if (!prefs.edit().putBoolean(KEY_EXECUTING, false).commit()) {
             appendStatus(executing.task, "周期任务状态保存失败，已停止后续执行：${executing.task.instruction}")
             clearMarker()
@@ -202,8 +249,16 @@ internal class DemoDelayedTaskController(
         }
         // Start the next full interval after this Agent turn has finished and
         // its result has been saved. Processing time never consumes it.
+        val intervalMillis = executing.task.delaySeconds * 1_000L
         val nextElapsed = SystemClock.elapsedRealtime() + intervalMillis
         val nextWall = System.currentTimeMillis() + intervalMillis
+        if (failedRounds > 0) {
+            appendStatus(
+                executing.task,
+                "本轮周期任务未完成，第 $failedRounds/$MAX_CONSECUTIVE_FAILED_ROUNDS 次失败，" +
+                    "${executing.task.delaySeconds} 秒后重试：${executing.task.instruction}"
+            )
+        }
         val waiting = DemoDelayedTaskState.Waiting(
             executing.task,
             nextElapsed,
@@ -213,7 +268,8 @@ internal class DemoDelayedTaskController(
                 if (result.length > MAX_LATEST_RESULT_CHARS) {
                     result.take(MAX_LATEST_RESULT_CHARS) + "…（完整结果保存在对话中）"
                 } else result
-            }
+            },
+            failedRounds
         )
         publish(waiting)
         startTimer(waiting)
@@ -244,7 +300,13 @@ internal class DemoDelayedTaskController(
                 publish(DemoDelayedTaskState.Idle)
                 return@launch
             }
-            publish(DemoDelayedTaskState.Executing(waiting.task, waiting.completedRuns))
+            publish(
+                DemoDelayedTaskState.Executing(
+                    waiting.task,
+                    waiting.completedRuns,
+                    waiting.consecutiveFailedRounds
+                )
+            )
             runCatching { onDue(waiting.task) }
                 .onFailure {
                     fail(waiting.task.id, "定时任务启动失败：${it.message ?: "未知错误"}")
@@ -272,7 +334,7 @@ internal class DemoDelayedTaskController(
         prefs.edit().clear().commit()
     }
 
-    private companion object {
+    internal companion object {
         const val TAG = "DemoDelayedTask"
         const val PREFS_NAME = "demo_conversation_delay_task"
         const val KEY_TASK_ID = "task_id"
@@ -281,5 +343,8 @@ internal class DemoDelayedTaskController(
         const val KEY_REPEATING = "repeating"
         const val KEY_EXECUTING = "executing"
         const val MAX_LATEST_RESULT_CHARS = 2_000
+
+        /** Consecutive failed rounds a repeating task tolerates before it stops. */
+        const val MAX_CONSECUTIVE_FAILED_ROUNDS = 3
     }
 }

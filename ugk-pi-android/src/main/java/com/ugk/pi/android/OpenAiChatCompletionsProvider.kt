@@ -77,7 +77,7 @@ class OpenAiChatCompletionsProvider(
             body = requestBody(request, stream = true).toString()
         )
 
-        val rawLinesFlow = effectiveTransport.postStream(httpRequest)
+        val rawLinesFlow = effectiveTransport.postStream(httpRequest).asSseLines()
         emitAll(parseOpenAiSseStream(rawLinesFlow))
     }
 
@@ -93,6 +93,9 @@ class OpenAiChatCompletionsProvider(
         val toolDrafts = mutableMapOf<Int, ToolCallDraft>()
         var currentStopReason: String? = null
         var completedEmitted = false
+        // Payload fragments of the event currently being read: one event may
+        // carry its JSON across several `data:` lines.
+        var pendingDataPayload: String? = null
 
         // A non-empty accumulation that no longer parses as a JSON object
         // means the stream was truncated or corrupted mid-arguments:
@@ -114,7 +117,13 @@ class OpenAiChatCompletionsProvider(
 
         rawLines.collect { rawLine ->
             val line = rawLine.trim()
-            if (line.isEmpty() || line.startsWith(":")) {
+            if (line.isEmpty()) {
+                // Event boundary: an event that never became parsable is a
+                // broken stream, not content to skip.
+                pendingDataPayload?.let { throw malformedSseEvent(it) }
+                return@collect
+            }
+            if (line.startsWith(":")) {
                 return@collect
             }
 
@@ -140,6 +149,9 @@ class OpenAiChatCompletionsProvider(
 
             val dataStr = line.removePrefix("data:").trim()
             if (dataStr == "[DONE]") {
+                // An unfinished event must fail the stream instead of being
+                // swept into the completion emitted below.
+                pendingDataPayload?.let { throw malformedSseEvent(it) }
                 if (!completedEmitted) {
                     val finalToolCalls = buildFinalToolCalls()
                     val response = ModelResponse(
@@ -154,8 +166,31 @@ class OpenAiChatCompletionsProvider(
                 return@collect
             }
 
-            val dataElement = runCatching { json.parseToJsonElement(dataStr) }.getOrNull() ?: return@collect
-            val dataObj = dataElement as? JsonObject ?: return@collect
+            if (dataStr.isEmpty()) {
+                // An empty payload carries no event; buffering it would leave a
+                // fragment open that the stream end then reports as malformed.
+                return@collect
+            }
+
+            // Try the line on its own first. Endpoints that leave out the blank
+            // line between events are still readable that way, and a buffered
+            // fragment must not swallow every well-formed event after it. Only
+            // when the line cannot stand alone does it continue the event
+            // currently being read.
+            val standalone = runCatching { json.parseToJsonElement(dataStr) }.getOrNull()
+            val joined = standalone ?: pendingDataPayload?.let { buffered ->
+                runCatching { json.parseToJsonElement("$buffered\n$dataStr") }.getOrNull()
+            }
+            if (joined == null) {
+                val buffered = pendingDataPayload?.let { "$it\n$dataStr" } ?: dataStr
+                if (buffered.length > MAX_BUFFERED_SSE_EVENT_CHARS) {
+                    throw malformedSseEvent(buffered)
+                }
+                pendingDataPayload = buffered
+                return@collect
+            }
+            pendingDataPayload = null
+            val dataObj = joined as? JsonObject ?: return@collect
 
             val choices = dataObj["choices"]?.jsonArray ?: return@collect
             val firstChoice = choices.firstOrNull()?.jsonObject ?: return@collect
@@ -206,6 +241,11 @@ class OpenAiChatCompletionsProvider(
                 }
             }
         }
+
+        // A stream that stops in the middle of an event delivered a payload that
+        // never became parsable: that must fail the stream instead of falling
+        // back to an answer built from the truncated prefix.
+        pendingDataPayload?.let { throw malformedSseEvent(it) }
 
         // 流结束兜底
         if (!completedEmitted) {

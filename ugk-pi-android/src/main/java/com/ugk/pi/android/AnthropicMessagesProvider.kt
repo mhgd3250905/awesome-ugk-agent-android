@@ -96,7 +96,7 @@ class AnthropicMessagesProvider(
             body = requestBody(request, stream = true).toString()
         )
 
-        val rawLinesFlow = effectiveTransport.postStream(httpRequest)
+        val rawLinesFlow = effectiveTransport.postStream(httpRequest).asSseLines()
         emitAll(parseSseStream(rawLinesFlow))
     }
 
@@ -110,10 +110,19 @@ class AnthropicMessagesProvider(
         var currentToolName: String? = null
         val currentToolInputJson = StringBuilder()
         var completedEmitted = false
+        // Payload fragments of the event currently being read: one event may
+        // carry its JSON across several `data:` lines.
+        var pendingDataPayload: String? = null
 
         rawLines.collect { rawLine ->
             val line = rawLine.trim()
-            if (line.isEmpty() || line.startsWith(":")) {
+            if (line.isEmpty()) {
+                // Event boundary. An event that never became parsable is a
+                // broken stream, not content to skip.
+                pendingDataPayload?.let { throw malformedSseEvent(it) }
+                return@collect
+            }
+            if (line.startsWith(":")) {
                 // SSE 注释或心跳行
                 return@collect
             }
@@ -139,12 +148,33 @@ class AnthropicMessagesProvider(
             }
 
             val dataStr = line.removePrefix("data:").trim()
-            if (dataStr == "[DONE]" || dataStr.isEmpty()) {
+            if (dataStr == "[DONE]") {
+                pendingDataPayload?.let { throw malformedSseEvent(it) }
+                return@collect
+            }
+            if (dataStr.isEmpty()) {
                 return@collect
             }
 
-            val dataElement = runCatching { json.parseToJsonElement(dataStr) }.getOrNull() ?: return@collect
-            val dataObj = dataElement as? JsonObject ?: return@collect
+            // Try the line on its own first. Endpoints that leave out the blank
+            // line between events are still readable that way, and a buffered
+            // fragment must not swallow every well-formed event after it. Only
+            // when the line cannot stand alone does it continue the event
+            // currently being read.
+            val standalone = runCatching { json.parseToJsonElement(dataStr) }.getOrNull()
+            val joined = standalone ?: pendingDataPayload?.let { buffered ->
+                runCatching { json.parseToJsonElement("$buffered\n$dataStr") }.getOrNull()
+            }
+            if (joined == null) {
+                val buffered = pendingDataPayload?.let { "$it\n$dataStr" } ?: dataStr
+                if (buffered.length > MAX_BUFFERED_SSE_EVENT_CHARS) {
+                    throw malformedSseEvent(buffered)
+                }
+                pendingDataPayload = buffered
+                return@collect
+            }
+            pendingDataPayload = null
+            val dataObj = joined as? JsonObject ?: return@collect
 
             when (dataObj["type"]?.jsonPrimitive?.contentOrNull) {
                 "content_block_start" -> {
@@ -242,6 +272,13 @@ class AnthropicMessagesProvider(
                 }
             }
         }
+
+        // A stream that stops in the middle of an event delivered an event
+        // payload that never became parsable. Reporting it must take priority
+        // over the completed-response fallback below: emitting the accumulated
+        // prefix as the model's final answer is how a truncated response silently
+        // enters the transcript.
+        pendingDataPayload?.let { throw malformedSseEvent(it) }
 
         // 流正常完结兜底：如果服务端未正常发送 message_stop 便关闭了数据流
         if (!completedEmitted) {

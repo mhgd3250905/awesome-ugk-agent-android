@@ -33,7 +33,7 @@ ugk-agent-task-runtime-android
 - “10 分钟后提醒我休息”会创建一个 `ONE_SHOT` 任务，到期后发送 Android 通知。
 - “10 分钟后检查微信是否有新消息”应创建 `RUN_AGENT_PROMPT`；到点后系统启动 `AgentTaskJobService`，恢复任务关联的会话，使用 `AgentRunSource.SCHEDULED_TASK` 调用 AgentRuntime 的完整模型/Tool 循环，并把用户任务和最终结果写回同一会话。
 - `REPEATING_UNTIL` 会在每次到点处理后重新计算下一次执行时间，不在进程里维持常驻循环。
-- 设备重启或应用升级后，广播接收器从持久化 Store 恢复 `SCHEDULED` 任务；Prompt 任务重新交给 `JobScheduler`。Job ID 通过 App 私有持久映射分配；不同 task ID 保持不同 Job ID，遇到哈希碰撞时探测空位。映射分配、平台 schedule/cancel 与释放在进程内串行化；平台已有 Job 的组件身份用于区分本 SDK 与宿主其他服务：外部 Job ID 参与占用检查，但不会被本 SDK 迁移或取消。若 SharedPreferences 删除失败，该 ID 在当前进程继续保留；被取消的执行中 Job 会保留到 JobService 清理回调，正常结束的终态 Prompt 任务在 `jobFinished()` 后释放映射。重复任务保留稳定 ID。除广播外，进程内首次初始化 Task Runtime 时也会在后台线程执行一次幂等 re-arm：对全部 `SCHEDULED` 任务按记录重新 schedule（同 task ID 的同 jobId 为替换语义），自愈"alarm 已消费但进程在 handle 写回前被杀"造成的断链。
+- 设备重启或应用升级后，广播接收器从持久化 Store 恢复 `SCHEDULED` 任务；Prompt 任务重新交给 `JobScheduler`。Job ID 通过 App 私有持久映射分配；不同 task ID 保持不同 Job ID，遇到哈希碰撞时探测空位。映射分配、平台 schedule/cancel 与释放在进程内串行化；平台已有 Job 的组件身份用于区分本 SDK 与宿主其他服务：外部 Job ID 参与占用检查，但不会被本 SDK 迁移或取消。若 SharedPreferences 删除失败，该 ID 在当前进程继续保留；被取消的执行中 Job 会保留到 JobService 清理回调，正常结束的终态 Prompt 任务在 `jobFinished()` 后释放映射。重复任务保留稳定 ID。除广播外，进程内首次初始化 Task Runtime 时也会在后台线程执行一次幂等 re-arm：对 `SCHEDULED` 任务按记录重新 schedule（同 task ID 的同 jobId 为替换语义），自愈"alarm 已消费但进程在 handle 写回前被杀"造成的断链。**每一条收敛路径（构造期、开机/升级广播、`finishJob`）都按同一个规则跳过正被 handle 锁占用的任务**：持锁方就是该任务这次投递的所有者，它自己的写回或它自己的 `finishJob` 会负责装上下一次触发；等待这把锁会把整轮收敛排在一次可能持续数分钟的 Prompt 执行之后，而 `finishJob` 的收敛协程同时负责提交 `jobFinished()`，被卡住会让 Android 认为该 Job 仍在运行并强停服务。被跳过的任务因此不出现在 `AgentTaskRestoreResult.rearmedTaskIds` 中，调用方不能把"未重新调度"读成"没有待办任务"。
 - Android 13（API 33）及以上需要用户授予通知权限；闹钟使用普通非精确调度，可能受到 Doze 和小米系统省电策略影响。
 - Prompt 任务要求有可用网络；没有网络时由 `JobScheduler` 等待可用网络，而不是由应用进程自建轮询线程。
 

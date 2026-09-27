@@ -42,16 +42,18 @@ API 内容不得复制进源码、文档或提交；Release 默认不嵌入 API 
 # 构建原有无障碍 demo
 .\gradlew.bat :demo-app:assembleDebug --console=plain
 
-# 跑全部单元测试
+# 跑全部单元测试（十个 testDebugUnitTest：SDK、各 skill、terminal runtime、demo-app）
 .\gradlew.bat `
   :ugk-pi-android:testDebugUnitTest `
   :pi-file-skill-android:testDebugUnitTest `
   :pi-schedule-skill-android:testDebugUnitTest `
+  :pi-attention-skill-android:testDebugUnitTest `
   :ugk-agent-task-runtime-android:testDebugUnitTest `
   :pi-system-skill-android:testDebugUnitTest `
   :pi-agent-skill-runtime-android:testDebugUnitTest `
   :ugk-terminal-runtime-android:testDebugUnitTest `
   :pi-terminal-skill-android:testDebugUnitTest `
+  :demo-app:testDebugUnitTest `
   --console=plain
 
 # 终端 Runtime 的双 applicationId 仪器测试（设备在线后执行）
