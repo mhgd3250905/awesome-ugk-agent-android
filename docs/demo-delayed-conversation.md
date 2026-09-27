@@ -1,6 +1,6 @@
 # Demo 单对话计时任务
 
-更新时间：2026-09-25。本文描述 `demo-app` 当前的单次延时与固定间隔周期任务；SDK 通用持久化调度器另见 [android-scheduled-tasks.md](android-scheduled-tasks.md)。
+更新时间：2026-09-27。本文描述 `demo-app` 当前的单次延时与固定间隔周期任务；SDK 通用持久化调度器另见 [android-scheduled-tasks.md](android-scheduled-tasks.md)。
 
 ## 目标与流程
 
@@ -25,6 +25,8 @@
 计时以 `SystemClock.elapsedRealtime()` 的截止时间为准；它包含设备深度休眠时间，但后台执行仍受 Android 与厂商的进程和电池策略约束。[Android SystemClock](https://developer.android.com/reference/android/os/SystemClock)、[后台优化](https://developer.android.com/topic/performance/background-optimization)。后台进程若暂时得不到执行时间，恢复后检查当前截止时间并尽快执行这一轮；该轮结束后才重新计时完整间隔。进程死亡会终止内存计时与 Agent 运行；本地只存一个中断标记，下次启动明确报告中断并停止后续周期，绝不自动补跑。用户按“停止任务”会取消等待或当前执行并在对话里记录。
 
 ## 接线与验收边界
+
+2026-09-27 已验收补充：计时确认的“后台设置”改为打开共享的可选后台运行建议卡，提供电池/耗电、自启动设置及近期任务锁定说明。进入建议时临时收起确认卡，退出后按当前任务状态恢复；不会确认、取消或重置计时。设置页也可主动查看，“我已了解，不再提醒”仅保存建议阅读版本。最新完整包获用户反馈“可以了 测试通过”；建议页与设置往返的具体验证见 [权限与后台引导规范](demo-app-permission-guide.md)。本轮未重做真实模型计时链路或长期后台存活测试，不改变本文的进程存活和到点执行边界。
 
 - `DemoModelIntentRouter`：每个直接用户回合的模型 JSON 路由；只按模型结构化结果选择单次/周期提案或继续原 Agent 流程。
 - `DemoDelayAgentPlugin`：单次/周期提案工具、参数校验、首回合结束。

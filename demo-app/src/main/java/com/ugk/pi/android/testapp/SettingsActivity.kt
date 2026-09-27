@@ -1,6 +1,6 @@
 package com.ugk.pi.android.testapp
 
-import android.app.Activity
+import androidx.activity.ComponentActivity
 import android.graphics.Color
 import android.graphics.Typeface
 import android.os.Build
@@ -29,7 +29,8 @@ import java.util.UUID
  * 独立的通用设置页面，负责管理 API 供应商预设、模型规格参数、通信连通性检测、
  * 平台额度查询、全授权安全模式以及全局界面主题切换。
  */
-class SettingsActivity : Activity() {
+class SettingsActivity : ComponentActivity() {
+    private val backgroundGuidance = DemoBackgroundGuidanceHost(this)
 
     private val apiStore by lazy { ApiProviderSettingsStore(this) }
     private val authorizationStore by lazy { AgentAuthorizationSettingsStore(this) }
@@ -87,6 +88,7 @@ class SettingsActivity : Activity() {
 
     private lateinit var themeCard: LinearLayout
     private lateinit var themeTitle: TextView
+    private lateinit var backgroundGuidanceButton: android.widget.Button
     private val themeButtons = mutableMapOf<AppThemeMode, TextView>()
 
     private lateinit var authCard: LinearLayout
@@ -137,6 +139,7 @@ class SettingsActivity : Activity() {
 
     override fun onCreate(savedInstanceState: Bundle?) {
         super.onCreate(savedInstanceState)
+        backgroundGuidance.restore(savedInstanceState)
         ThemeManager.init(this)
         ThemeManager.addListener(themeListener)
 
@@ -170,9 +173,21 @@ class SettingsActivity : Activity() {
     override fun onResume() {
         super.onResume()
         (application as DemoApplication).processScope.overlayController.window.hide()
+        backgroundGuidance.onResume()
+    }
+
+    override fun onPause() {
+        backgroundGuidance.onPause()
+        super.onPause()
+    }
+
+    override fun onSaveInstanceState(outState: Bundle) {
+        backgroundGuidance.save(outState)
+        super.onSaveInstanceState(outState)
     }
 
     override fun onDestroy() {
+        backgroundGuidance.release()
         super.onDestroy()
         ThemeManager.removeListener(themeListener)
         scope.cancel()
@@ -263,6 +278,10 @@ class SettingsActivity : Activity() {
         themeCard.addView(themeTitle)
         themeCard.addView(themeRow)
         contentLayout.addView(themeCard, cardLayoutParams())
+        backgroundGuidanceButton = TaskNoteUi.button(this, "后台运行建议", false) {
+            backgroundGuidance.show()
+        }.apply { tag = "settings_background_guidance" }
+        contentLayout.addView(backgroundGuidanceButton, cardLayoutParams())
 
         // 2.2 全授权模式卡片
         authCard = sectionCard()
@@ -838,6 +857,10 @@ class SettingsActivity : Activity() {
 
         themeCard.background = Ui.rounded(this, Ui.Surface, 14)
         themeTitle.setTextColor(Ui.TextPrimary)
+        backgroundGuidanceButton.setTextColor(TaskNoteUi.Ink)
+        backgroundGuidanceButton.background = Ui.clickableRounded(
+            this, TaskNoteUi.Paper, TaskNoteUi.Sticker, 16, TaskNoteUi.Rule
+        )
         themeButtons.forEach { (mode, btn) ->
             val isSelected = ThemeManager.currentMode == mode
             btn.text = if (isSelected) "✓ ${mode.displayName}" else mode.displayName

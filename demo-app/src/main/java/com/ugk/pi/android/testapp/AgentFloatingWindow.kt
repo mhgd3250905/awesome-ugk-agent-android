@@ -680,7 +680,7 @@ class AgentFloatingWindow(private val context: Context) : ConfirmationOverlayHos
         }
         val container = LinearLayout(context).apply {
             orientation = LinearLayout.VERTICAL
-            setPadding(dp(4), dp(6), dp(4), dp(6))
+            setPadding(dp(2), dp(3), dp(2), dp(3))
         }
         contentContainer = container
         confirmationContainer = LinearLayout(context).apply {
@@ -704,7 +704,7 @@ class AgentFloatingWindow(private val context: Context) : ConfirmationOverlayHos
         container.addView(emptyView, LinearLayout.LayoutParams(-1, -2))
         queueView = TextView(context).apply {
             tag = "overlay-queue"
-            textSize = 12f
+            textSize = 11f
             setTextColor(Ui.TextSecondary)
             setPadding(dp(12), dp(6), dp(12), dp(6))
             accessibilityLiveRegion = View.ACCESSIBILITY_LIVE_REGION_POLITE
@@ -712,7 +712,7 @@ class AgentFloatingWindow(private val context: Context) : ConfirmationOverlayHos
         container.addView(queueView, LinearLayout.LayoutParams(-1, -2))
         activityToggle = TextView(context).apply {
             tag = "overlay-activity-toggle"
-            textSize = 12f
+            textSize = 11f
             setTextColor(Ui.TextSecondary)
             gravity = Gravity.CENTER_VERTICAL
             minHeight = dp(48)
@@ -724,10 +724,10 @@ class AgentFloatingWindow(private val context: Context) : ConfirmationOverlayHos
         container.addView(activityToggle, LinearLayout.LayoutParams(-1, -2))
         activityDetails = TextView(context).apply {
             tag = "overlay-activity-details"
-            textSize = 12f
+            textSize = 11f
             setTextColor(Ui.TextSecondary)
             setTextIsSelectable(true)
-            setLineSpacing(dp(4).toFloat(), 1f)
+            setLineSpacing(0f, 1.1f)
             setPadding(dp(12), 0, dp(12), dp(12))
         }
         container.addView(activityDetails, LinearLayout.LayoutParams(-1, -2))
@@ -746,7 +746,7 @@ class AgentFloatingWindow(private val context: Context) : ConfirmationOverlayHos
             hint = "发消息"
             setHintTextColor(Ui.TextMuted)
             setTextColor(Ui.TextPrimary)
-            textSize = 15f
+            textSize = 13f
             minLines = 1
             maxLines = 4
             minHeight = dp(48)

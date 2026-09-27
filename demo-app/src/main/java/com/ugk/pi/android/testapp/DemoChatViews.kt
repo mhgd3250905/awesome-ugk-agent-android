@@ -31,6 +31,14 @@ import kotlin.math.roundToInt
  * [DemoChatProcessCardView.bind] 和 [DemoChatProcessCardView.setExpanded] 更新 UI。
  */
 
+/** Shared views keep the main chat unchanged; overlays opt into compact spacing. */
+enum class DemoChatStyle {
+    STANDARD, COMPACT;
+
+    fun size(standard: Int, compact: Int): Int = if (this == COMPACT) compact else standard
+    fun size(standard: Float, compact: Float): Float = if (this == COMPACT) compact else standard
+}
+
 /** 消息在聊天流中的视觉角色。 */
 enum class DemoChatMessageRole(val accessibilityLabel: String) {
     USER("你"),
@@ -93,25 +101,26 @@ data class DemoChatProcessState(
  */
 class DemoChatMessageView @JvmOverloads constructor(
     context: Context,
-    attrs: AttributeSet? = null
+    attrs: AttributeSet? = null,
+    private val style: DemoChatStyle = DemoChatStyle.STANDARD
 ) : FrameLayout(context, attrs) {
 
     /** An overlay host may supply a preview window with its own WindowManager type. */
     var onImageClick: ((String) -> Unit)? = null
 
     private val userBubble = TextView(context).apply {
-        setTextSize(TypedValue.COMPLEX_UNIT_SP, 15f)
+        setTextSize(TypedValue.COMPLEX_UNIT_SP, style.size(15f, 13f))
         setTextColor(DemoChatPalette.onUserBubble)
         typeface = Typeface.create("sans-serif", Typeface.NORMAL)
-        setLineSpacing(0f, 1.18f)
+        setLineSpacing(0f, style.size(1.18f, 1.1f))
         letterSpacing = 0.012f
         includeFontPadding = false
-        minHeight = context.chatDp(40)
+        minHeight = context.chatDp(style.size(40, 32))
         setPadding(
-            context.chatDp(16),
-            context.chatDp(11),
-            context.chatDp(16),
-            context.chatDp(11)
+            context.chatDp(style.size(16, 10)),
+            context.chatDp(style.size(11, 8)),
+            context.chatDp(style.size(16, 10)),
+            context.chatDp(style.size(11, 8))
         )
         background = asymmetricRoundedBackground(
             context = context,
@@ -137,7 +146,7 @@ class DemoChatMessageView @JvmOverloads constructor(
     private val userAvatar = ImageView(context).apply {
         setImageResource(R.drawable.ic_person)
         scaleType = ImageView.ScaleType.CENTER_INSIDE
-        setPadding(context.chatDp(7), context.chatDp(7), context.chatDp(7), context.chatDp(7))
+        setPadding(context.chatDp(style.size(7, 5)), context.chatDp(style.size(7, 5)), context.chatDp(style.size(7, 5)), context.chatDp(style.size(7, 5)))
         imageTintList = android.content.res.ColorStateList.valueOf(DemoChatPalette.onUserAvatar)
         background = roundedBackground(
             context,
@@ -171,12 +180,12 @@ class DemoChatMessageView @JvmOverloads constructor(
 
     private val assistantBubble = LinearLayout(context).apply {
         orientation = LinearLayout.VERTICAL
-        minimumHeight = context.chatDp(40)
+        minimumHeight = context.chatDp(style.size(40, 32))
         setPadding(
-            context.chatDp(16),
-            context.chatDp(12),
-            context.chatDp(16),
-            context.chatDp(12)
+            context.chatDp(style.size(16, 10)),
+            context.chatDp(style.size(12, 8)),
+            context.chatDp(style.size(16, 10)),
+            context.chatDp(style.size(12, 8))
         )
         background = asymmetricRoundedBackground(
             context = context,
@@ -191,10 +200,10 @@ class DemoChatMessageView @JvmOverloads constructor(
     }
 
     private fun createAssistantTextView(): TextView = TextView(context).apply {
-        setTextSize(TypedValue.COMPLEX_UNIT_SP, 15f)
+        setTextSize(TypedValue.COMPLEX_UNIT_SP, style.size(15f, 13f))
         setTextColor(DemoChatPalette.textPrimary)
         typeface = Typeface.create("sans-serif", Typeface.NORMAL)
-        setLineSpacing(0f, 1.16f)
+        setLineSpacing(0f, style.size(1.16f, 1.1f))
         letterSpacing = 0.012f
         includeFontPadding = false
         setTextIsSelectable(true)
@@ -223,8 +232,8 @@ class DemoChatMessageView @JvmOverloads constructor(
         orientation = LinearLayout.HORIZONTAL
         gravity = Gravity.TOP or Gravity.END
         addView(userContentColumn, LinearLayout.LayoutParams(0, LinearLayout.LayoutParams.WRAP_CONTENT, 1f))
-        addView(userAvatar, LinearLayout.LayoutParams(context.chatDp(32), context.chatDp(32)).apply {
-            marginStart = context.chatDp(8)
+        addView(userAvatar, LinearLayout.LayoutParams(context.chatDp(style.size(32, 24)), context.chatDp(style.size(32, 24))).apply {
+            marginStart = context.chatDp(style.size(8, 6))
             topMargin = context.chatDp(2)
         })
     }
@@ -233,9 +242,9 @@ class DemoChatMessageView @JvmOverloads constructor(
     private val assistantContainer = LinearLayout(context).apply {
         orientation = LinearLayout.HORIZONTAL
         gravity = Gravity.TOP
-        val avatarParams = LinearLayout.LayoutParams(context.chatDp(30), context.chatDp(30)).apply {
+        val avatarParams = LinearLayout.LayoutParams(context.chatDp(style.size(30, 24)), context.chatDp(style.size(30, 24))).apply {
             topMargin = context.chatDp(2)
-            marginEnd = context.chatDp(8)
+            marginEnd = context.chatDp(style.size(8, 6))
         }
         addView(assistantAvatar, avatarParams)
 
@@ -247,17 +256,17 @@ class DemoChatMessageView @JvmOverloads constructor(
             ))
             addView(assistantCopyButton, copyButtonLayoutParams(Gravity.START))
         }
-        addView(rightColumn, LinearLayout.LayoutParams(0, LinearLayout.LayoutParams.WRAP_CONTENT, 0.86f))
+        addView(rightColumn, LinearLayout.LayoutParams(0, LinearLayout.LayoutParams.WRAP_CONTENT, style.size(0.86f, 1f)))
     }
 
     init {
         clipChildren = false
         clipToPadding = false
         setPadding(
-            context.chatDp(12),
-            context.chatDp(6),
-            context.chatDp(12),
-            context.chatDp(6)
+            context.chatDp(style.size(12, 8)),
+            context.chatDp(style.size(6, 3)),
+            context.chatDp(style.size(12, 8)),
+            context.chatDp(style.size(6, 3))
         )
         importantForAccessibility = View.IMPORTANT_FOR_ACCESSIBILITY_YES
         addView(
@@ -352,7 +361,7 @@ class DemoChatMessageView @JvmOverloads constructor(
                         context.chatDp(190),
                         context.chatDp(190)
                     ).apply {
-                        bottomMargin = context.chatDp(6)
+                        bottomMargin = context.chatDp(style.size(6, 3))
                     })
                 } else {
                     userImagesContainer.visibility = View.GONE
@@ -375,7 +384,7 @@ class DemoChatMessageView @JvmOverloads constructor(
                             context.chatDp(100),
                             context.chatDp(100)
                         ).apply {
-                            if (i < validPaths.size - 1) marginEnd = context.chatDp(6)
+                            if (i < validPaths.size - 1) marginEnd = context.chatDp(style.size(6, 3))
                         })
                         count++
                     }
@@ -385,7 +394,7 @@ class DemoChatMessageView @JvmOverloads constructor(
                         LinearLayout.LayoutParams.WRAP_CONTENT,
                         LinearLayout.LayoutParams.WRAP_CONTENT
                     ).apply {
-                        bottomMargin = context.chatDp(6)
+                        bottomMargin = context.chatDp(style.size(6, 3))
                     })
                 } else {
                     userImagesContainer.visibility = View.GONE
@@ -414,7 +423,7 @@ class DemoChatMessageView @JvmOverloads constructor(
                             context.chatDp(100),
                             context.chatDp(100)
                         ).apply {
-                            if ((i % itemsPerRow) < itemsPerRow - 1) marginEnd = context.chatDp(6)
+                            if ((i % itemsPerRow) < itemsPerRow - 1) marginEnd = context.chatDp(style.size(6, 3))
                         })
                         count++
                     }
@@ -425,7 +434,7 @@ class DemoChatMessageView @JvmOverloads constructor(
                         LinearLayout.LayoutParams.WRAP_CONTENT,
                         LinearLayout.LayoutParams.WRAP_CONTENT
                     ).apply {
-                        bottomMargin = context.chatDp(6)
+                        bottomMargin = context.chatDp(style.size(6, 3))
                     })
                     addedAny = true
                 }
@@ -434,7 +443,7 @@ class DemoChatMessageView @JvmOverloads constructor(
                         LinearLayout.LayoutParams.WRAP_CONTENT,
                         LinearLayout.LayoutParams.WRAP_CONTENT
                     ).apply {
-                        bottomMargin = context.chatDp(6)
+                        bottomMargin = context.chatDp(style.size(6, 3))
                     })
                     addedAny = true
                 }
@@ -520,7 +529,7 @@ class DemoChatMessageView @JvmOverloads constructor(
                 assistantBubble.removeAllViews()
                 createAssistantTextView().also { assistantBubble.addView(it) }
             }
-            DemoMarkdownFormatter.setMarkdown(tv, textContent, isStreaming = isStreaming)
+            DemoMarkdownFormatter.setMarkdown(tv, textContent, isStreaming = isStreaming, style = style)
             return
         }
 
@@ -540,18 +549,18 @@ class DemoChatMessageView @JvmOverloads constructor(
                         assistantBubble.addView(newTv, childIndex)
                         newTv
                     }
-                    DemoMarkdownFormatter.setMarkdown(tv, block.markdown, isStreaming = isStreaming)
+                    DemoMarkdownFormatter.setMarkdown(tv, block.markdown, isStreaming = isStreaming, style = style)
                     childIndex++
                 }
                 is DemoContentBlock.Code -> {
                     val existing = assistantBubble.getChildAt(childIndex) as? DemoCodeBlockView
-                    val codeView = existing ?: DemoCodeBlockView(context).apply {
+                    val codeView = existing ?: DemoCodeBlockView(context, style = style).apply {
                         val lp = LinearLayout.LayoutParams(
                             LinearLayout.LayoutParams.MATCH_PARENT,
                             LinearLayout.LayoutParams.WRAP_CONTENT
                         ).apply {
-                            topMargin = context.chatDp(6)
-                            bottomMargin = context.chatDp(6)
+                            topMargin = context.chatDp(style.size(6, 3))
+                            bottomMargin = context.chatDp(style.size(6, 3))
                         }
                         layoutParams = lp
                     }
@@ -566,13 +575,13 @@ class DemoChatMessageView @JvmOverloads constructor(
                 }
                 is DemoContentBlock.Table -> {
                     val existing = assistantBubble.getChildAt(childIndex) as? DemoTableView
-                    val tableView = existing ?: DemoTableView(context).apply {
+                    val tableView = existing ?: DemoTableView(context, style = style).apply {
                         val lp = LinearLayout.LayoutParams(
                             LinearLayout.LayoutParams.MATCH_PARENT,
                             LinearLayout.LayoutParams.WRAP_CONTENT
                         ).apply {
-                            topMargin = context.chatDp(6)
-                            bottomMargin = context.chatDp(6)
+                            topMargin = context.chatDp(style.size(6, 3))
+                            bottomMargin = context.chatDp(style.size(6, 3))
                         }
                         layoutParams = lp
                     }
@@ -607,7 +616,7 @@ class DemoChatMessageView @JvmOverloads constructor(
     override fun onMeasure(widthMeasureSpec: Int, heightMeasureSpec: Int) {
         val availableWidth = MeasureSpec.getSize(widthMeasureSpec)
         val maxBubbleWidth = if (availableWidth > 0) {
-            (availableWidth * MAX_BUBBLE_WIDTH_FRACTION).roundToInt()
+            (availableWidth * style.size(MAX_BUBBLE_WIDTH_FRACTION, 0.88f)).roundToInt()
         } else {
             context.chatDp(DEFAULT_BUBBLE_MAX_WIDTH_DP)
         }
@@ -617,7 +626,7 @@ class DemoChatMessageView @JvmOverloads constructor(
 
     private fun createCopyButton(): TextView = TextView(context).apply {
         text = "复制"
-        setTextSize(TypedValue.COMPLEX_UNIT_SP, 12f)
+        setTextSize(TypedValue.COMPLEX_UNIT_SP, style.size(12f, 11f))
         setTextColor(DemoChatPalette.textSecondary)
         gravity = Gravity.CENTER
         minWidth = context.chatDp(52)
@@ -636,7 +645,7 @@ class DemoChatMessageView @JvmOverloads constructor(
             LinearLayout.LayoutParams.WRAP_CONTENT
         ).apply {
             this.gravity = gravity
-            topMargin = context.chatDp(4)
+            topMargin = context.chatDp(style.size(4, 2))
         }
 
     private fun copyVisibleMessageToClipboard() {
@@ -656,15 +665,33 @@ class DemoChatMessageView @JvmOverloads constructor(
 }
 
 /**
- * 步骤展开详情专用的固定高度内嵌滚动容器。
+ * 步骤展开详情专用的内嵌滚动容器。
  *
- * 采用固定高度确保大段思考在流式增长时外部页面零抖动；
+ * 主界面采用固定高度稳定流式布局；悬浮窗短内容自适应，到高度上限后在内部滚动。
  * 显式禁用原生系统滚动条，从根本上消除流式刷新时滚动条因滑块重算而引发的上下跳动与闪烁。
  */
 class StepDetailScrollView @JvmOverloads constructor(
     context: Context,
     attrs: AttributeSet? = null
 ) : ScrollView(context, attrs) {
+    /** Optional ceiling for hosts using WRAP_CONTENT; null preserves fixed-height behavior. */
+    var maxHeightPx: Int? = null
+        set(value) {
+            field = value
+            requestLayout()
+        }
+
+    override fun onMeasure(widthMeasureSpec: Int, heightMeasureSpec: Int) {
+        val limit = maxHeightPx
+        val mode = MeasureSpec.getMode(heightMeasureSpec)
+        val boundedHeight = if (limit != null && mode != MeasureSpec.EXACTLY) {
+            val available = if (mode == MeasureSpec.UNSPECIFIED) limit
+                else minOf(limit, MeasureSpec.getSize(heightMeasureSpec))
+            MeasureSpec.makeMeasureSpec(available, MeasureSpec.AT_MOST)
+        } else heightMeasureSpec
+        super.onMeasure(widthMeasureSpec, boundedHeight)
+    }
+
     init {
         isNestedScrollingEnabled = true
         isVerticalScrollBarEnabled = false      // 彻底禁用原生滚动条，消除高频追加文本时的滑块闪烁与跳动

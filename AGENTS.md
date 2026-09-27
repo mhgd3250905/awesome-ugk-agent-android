@@ -118,4 +118,4 @@ v1 Terminal Core Profile：Bash、curl、OpenSSL、SQLite、CPython 3.14.6；Nod
 | `ApiSettings.kt` | API 源配置 + SharedPreferences 持久化 |
 | `Ui.kt` | 动态主题色彩 Token 与代码构建 UI 的样式辅助 |
 
-需要权限：无障碍服务 + SYSTEM_ALERT_WINDOW（悬浮窗）
+按功能申请：无障碍服务、SYSTEM_ALERT_WINDOW（悬浮窗）、CAMERA（拍照）、POST_NOTIFICATIONS（Android 13+ 通知），并检查实际通知分类开关。选图/导入走系统选择器，私有文件与终端工作区不申请广泛存储权限。后台耗电、自启动及任务卡片锁定属于可选建议，不将阅读记录当作系统授权。权限引导及完整功能核对见 `docs/demo-app-permission-guide.md`。

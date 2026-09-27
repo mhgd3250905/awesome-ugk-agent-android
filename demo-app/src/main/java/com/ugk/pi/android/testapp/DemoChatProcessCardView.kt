@@ -19,7 +19,8 @@ import android.widget.TextView
 /** A quiet activity row with an optional, independently expandable process record. */
 class DemoChatProcessCardView @JvmOverloads constructor(
     context: Context,
-    attrs: AttributeSet? = null
+    attrs: AttributeSet? = null,
+    private val style: DemoChatStyle = DemoChatStyle.STANDARD
 ) : LinearLayout(context, attrs) {
     private data class StepRowHolder(
         val rowView: LinearLayout,
@@ -49,7 +50,7 @@ class DemoChatProcessCardView @JvmOverloads constructor(
     init {
         orientation = VERTICAL
         // The conversation canvas remains visible in both collapsed and expanded states.
-        setPadding(context.dp(12), 0, context.dp(12), 0)
+        setPadding(context.dp(style.size(12, 8)), 0, context.dp(style.size(12, 8)), 0)
         minimumHeight = context.dp(48)
         importantForAccessibility = IMPORTANT_FOR_ACCESSIBILITY_NO
         setOnClickListener { setExpandedInternal(!expanded, notifyListener = true) }
@@ -75,12 +76,12 @@ class DemoChatProcessCardView @JvmOverloads constructor(
                 }
             }
         }
-        header.addView(indicator, LayoutParams(context.dp(24), context.dp(24)).apply {
-            marginEnd = context.dp(10)
+        header.addView(indicator, LayoutParams(context.dp(style.size(24, 20)), context.dp(style.size(24, 20))).apply {
+            marginEnd = context.dp(style.size(10, 8))
         })
         summaryView.apply {
             tag = "process-summary"
-            textSize = 15f
+            textSize = style.size(15f, 13f)
             typeface = Typeface.create("sans-serif", Typeface.NORMAL)
             setTextColor(Ui.TextSecondary)
             includeFontPadding = false
@@ -106,10 +107,10 @@ class DemoChatProcessCardView @JvmOverloads constructor(
         addView(stepsContainer, fullWidth())
         collapseFooterView.apply {
             text = "收起过程"
-            textSize = 12f
+            textSize = style.size(12f, 11f)
             setTextColor(Ui.TextSecondary)
             gravity = Gravity.CENTER_VERTICAL
-            setPadding(context.dp(34), 0, 0, 0)
+            setPadding(context.dp(style.size(34, 28)), 0, 0, 0)
             background = quietClickBackground()
             isFocusable = true
             contentDescription = "收起整个过程"
@@ -192,7 +193,7 @@ class DemoChatProcessCardView @JvmOverloads constructor(
                     stepsContainer.addView(View(context).apply {
                         setBackgroundColor(Ui.OutlineSubtle)
                         importantForAccessibility = IMPORTANT_FOR_ACCESSIBILITY_NO
-                    }, LayoutParams(context.dp(1).coerceAtLeast(1), context.dp(10)).apply {
+                    }, LayoutParams(context.dp(1).coerceAtLeast(1), context.dp(style.size(10, 4))).apply {
                         marginStart = context.dp(8)
                     })
                 }
@@ -271,21 +272,21 @@ class DemoChatProcessCardView @JvmOverloads constructor(
             }
         }
         val stepIndicator = ImageView(context).apply { importantForAccessibility = IMPORTANT_FOR_ACCESSIBILITY_NO }
-        toggle.addView(stepIndicator, LayoutParams(context.dp(16), context.dp(16)).apply { marginEnd = context.dp(14) })
+        toggle.addView(stepIndicator, LayoutParams(context.dp(16), context.dp(16)).apply { marginEnd = context.dp(style.size(14, 8)) })
         val texts = LinearLayout(context).apply {
             orientation = VERTICAL
-            setPadding(0, context.dp(5), 0, context.dp(5))
+            setPadding(0, context.dp(style.size(5, 3)), 0, context.dp(style.size(5, 3)))
             importantForAccessibility = IMPORTANT_FOR_ACCESSIBILITY_NO
         }
         val title = TextView(context).apply {
-            textSize = 13f
+            textSize = style.size(13f, 12f)
             setTextColor(Ui.TextSecondary)
             typeface = Typeface.create("sans-serif", Typeface.NORMAL)
             setLineSpacing(0f, 1.1f)
             importantForAccessibility = IMPORTANT_FOR_ACCESSIBILITY_NO
         }
         val compact = TextView(context).apply {
-            textSize = 12f
+            textSize = style.size(12f, 11f)
             setTextColor(Ui.TextSecondary)
             maxLines = 1
             ellipsize = TextUtils.TruncateAt.END
@@ -303,21 +304,23 @@ class DemoChatProcessCardView @JvmOverloads constructor(
         row.addView(toggle, fullWidth())
         val scroll = StepDetailScrollView(context).apply {
             tag = "process-detail:$id"
+            if (style == DemoChatStyle.COMPACT) maxHeightPx = context.dp(144)
             background = Ui.rounded(context, Ui.SurfaceSoft, 8)
         }
         val detail = TextView(context).apply {
-            textSize = 12.5f
+            textSize = style.size(12.5f, 12f)
             setTextColor(Ui.TextSecondary)
-            setLineSpacing(0f, 1.2f)
-            setPadding(context.dp(12), context.dp(10), context.dp(12), context.dp(10))
+            setLineSpacing(0f, style.size(1.2f, 1.1f))
+            setPadding(context.dp(style.size(12, 8)), context.dp(style.size(10, 6)), context.dp(style.size(12, 8)), context.dp(style.size(10, 6)))
             setTextIsSelectable(true)
             importantForAccessibility = IMPORTANT_FOR_ACCESSIBILITY_YES
         }
         scroll.addView(detail, ViewGroup.LayoutParams(LayoutParams.MATCH_PARENT, LayoutParams.WRAP_CONTENT))
-        row.addView(scroll, LayoutParams(LayoutParams.MATCH_PARENT, context.dp(170)).apply {
-            marginStart = context.dp(30)
+        val detailHeight = if (style == DemoChatStyle.COMPACT) LayoutParams.WRAP_CONTENT else context.dp(170)
+        row.addView(scroll, LayoutParams(LayoutParams.MATCH_PARENT, detailHeight).apply {
+            marginStart = context.dp(style.size(30, 24))
             topMargin = context.dp(4)
-            bottomMargin = context.dp(6)
+            bottomMargin = context.dp(style.size(6, 3))
         })
         return StepRowHolder(row, toggle, stepIndicator, title, compact, scroll, detail, disclosure, false)
     }

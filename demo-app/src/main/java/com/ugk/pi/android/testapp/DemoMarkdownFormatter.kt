@@ -3,6 +3,9 @@ package com.ugk.pi.android.testapp
 import android.content.Context
 import android.graphics.Color
 import android.graphics.Typeface
+import android.graphics.Paint
+import android.text.Spanned
+import android.text.style.LineHeightSpan
 import android.widget.TextView
 import io.noties.markwon.AbstractMarkwonPlugin
 import io.noties.markwon.Markwon
@@ -27,7 +30,14 @@ object DemoMarkdownFormatter {
     @Volatile
     private var darkMarkwon: Markwon? = null
 
-    private fun getMarkwon(context: Context): Markwon {
+    private val compactMarkwon = mutableMapOf<Boolean, Markwon>()
+
+    private fun getMarkwon(context: Context, style: DemoChatStyle = DemoChatStyle.STANDARD): Markwon {
+        if (style == DemoChatStyle.COMPACT) return synchronized(this) {
+            compactMarkwon.getOrPut(ThemeManager.isDark) {
+                buildMarkwon(context.applicationContext, isDark = ThemeManager.isDark, style = style)
+            }
+        }
         val isDark = ThemeManager.isDark
         return if (isDark) {
             darkMarkwon ?: synchronized(this) {
@@ -40,7 +50,7 @@ object DemoMarkdownFormatter {
         }
     }
 
-    private fun buildMarkwon(context: Context, isDark: Boolean): Markwon {
+    private fun buildMarkwon(context: Context, isDark: Boolean, style: DemoChatStyle = DemoChatStyle.STANDARD): Markwon {
         val density = context.resources.displayMetrics.density
         val dp = { value: Int -> (value * density).toInt() }
 
@@ -73,19 +83,36 @@ object DemoMarkdownFormatter {
             .usePlugin(TaskListPlugin.create(context))
             .usePlugin(object : AbstractMarkwonPlugin() {
                 override fun configureTheme(builder: MarkwonTheme.Builder) {
+                    if (style == DemoChatStyle.COMPACT) {
+                        builder.blockMargin(dp(12))
+                            .headingTextSizeMultipliers(floatArrayOf(1.3f, 1.2f, 1.1f, 1.05f, 1f, 1f))
+                    }
                     builder
                         .codeBackgroundColor(inlineCodeBg)
                         .codeTextColor(inlineCodeText)
                         .codeTypeface(Typeface.MONOSPACE)
-                        .codeTextSize(dp(13))
+                        .codeTextSize(dp(style.size(13, 12)))
                         .codeBlockBackgroundColor(codeBlockBg)
                         .codeBlockTextColor(codeBlockText)
                         .codeBlockTypeface(Typeface.MONOSPACE)
-                        .codeBlockTextSize(dp(13))
+                        .codeBlockTextSize(dp(style.size(13, 12)))
                         .blockQuoteColor(quoteColor)
                         .blockQuoteWidth(dp(3))
-                        .bulletWidth(dp(6))
+                        .bulletWidth(dp(style.size(6, 4)))
                         .headingBreakHeight(0)
+                }
+
+                override fun afterRender(node: org.commonmark.node.Node, visitor: MarkwonVisitor) {
+                    if (style != DemoChatStyle.COMPACT) return
+                    // Preserve Markdown structure; only shorten empty lines in the rendered text.
+                    val rendered = visitor.builder()
+                    val text = rendered.toString()
+                    for (index in 1 until text.length) {
+                        if (text[index] == '\n' && text[index - 1] == '\n') {
+                            rendered.setSpan(CompactBlankLineHeight(dp(6)), index, index + 1,
+                                Spanned.SPAN_EXCLUSIVE_EXCLUSIVE)
+                        }
+                    }
                 }
 
                 override fun configureVisitor(builder: MarkwonVisitor.Builder) {
@@ -130,6 +157,21 @@ object DemoMarkdownFormatter {
                 }
             })
             .build()
+    }
+
+    private class CompactBlankLineHeight(private val heightPx: Int) : LineHeightSpan {
+        override fun chooseHeight(
+            text: CharSequence, start: Int, end: Int, spanstartv: Int, v: Int,
+            fm: Paint.FontMetricsInt
+        ) {
+            // Paragraph spans can intersect an adjacent line at a boundary; never shrink content.
+            if ((start until end).any { text[it] != '\n' && text[it] != '\r' }) return
+            fm.ascent = -heightPx
+            fm.top = fm.ascent
+            fm.descent = 0
+            fm.bottom = 0
+            fm.leading = 0
+        }
     }
 
     private fun isInsideTableCell(node: org.commonmark.node.Node): Boolean {
@@ -223,7 +265,7 @@ object DemoMarkdownFormatter {
      *
      * @param isStreaming 是否处于流式打字生成中；若为 true 则开启表格平稳化补齐，防止网格重叠抖动
      */
-    fun setMarkdown(textView: TextView, markdown: String, isStreaming: Boolean = false) {
+    fun setMarkdown(textView: TextView, markdown: String, isStreaming: Boolean = false, style: DemoChatStyle = DemoChatStyle.STANDARD) {
         if (markdown.isBlank()) {
             textView.text = ""
             return
@@ -233,15 +275,15 @@ object DemoMarkdownFormatter {
         } else {
             compactSpacing(markdown)
         }
-        getMarkwon(textView.context).setMarkdown(textView, textToRender)
+        getMarkwon(textView.context, style).setMarkdown(textView, textToRender)
     }
 
     /**
      * 将 Markdown 解析为 SpannedCharSequence。
      */
-    fun toMarkdown(context: Context, markdown: String): CharSequence {
+    fun toMarkdown(context: Context, markdown: String, style: DemoChatStyle = DemoChatStyle.STANDARD): CharSequence {
         if (markdown.isBlank()) return ""
-        return getMarkwon(context).toMarkdown(compactSpacing(markdown))
+        return getMarkwon(context, style).toMarkdown(compactSpacing(markdown))
     }
 
     /**

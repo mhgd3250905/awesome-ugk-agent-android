@@ -13,7 +13,7 @@ Android Agent Runtime SDK：提供通用 Agent 工具循环、Android Skill，�
 - v1 不支持、不打包、不宣称 Node.js、Git、OpenSSH、jq。
 - Runtime 无 UI，不要求安装 Termux 或第二个 App；它与宿主共享 Android UID，不是安全沙箱。
 - `pi-system-skill-android` 提供白名单 Android 原生 Intent Tool；打开网页、相机、拨号、地图、分享等动作不通过终端执行。
-- `demo-app` 当前源码版本为本地测试 `1.10.0`（`versionCode 123`），包含视觉优先屏幕自动化、单对话单次/周期计时任务、重要提醒按钮与表单。计时提案从底部请求确认，等待倒计时从顶部显示；主聊天以一行进展及可展开的工具记录呈现过程，后台悬浮对话复用同一消息和过程组件。周期任务每轮结果写回后才重新等待完整间隔。用户已在真机反馈 `1.8.0` 便签界面和 `1.10.0` 悬浮对话测试通过；独立验证范围见 [`docs/demo-app-version-ledger.md`](docs/demo-app-version-ledger.md)。本版本尚未提交 Play。
+- `demo-app` 当前源码版本为本地测试 `1.10.0`（`versionCode 123`），包含视觉优先屏幕自动化、单对话单次/周期计时任务、重要提醒按钮与表单。计时提案从底部请求确认，等待倒计时从顶部显示；主聊天以一行进展及可展开的工具记录呈现过程，后台悬浮对话复用同一组件并采用紧凑字号和间距。进入 App 时按实际状态引导缺失权限，系统不再询问时提供设置入口；后台耗电、自启动另作可跳过的建议。周期任务每轮结果写回后才重新等待完整间隔。2026-09-27 补充阶段已获用户真机反馈“测试通过”；验证范围和原版本标签边界见 [`docs/demo-app-version-ledger.md`](docs/demo-app-version-ledger.md)。本版本尚未提交 Play。
 - 2026-08-29 已完成快速迭代后的模块化架构收敛：生命周期、配置、Provider、会话、transcript、capability assembly 与 Terminal/Screen interlock 均有单一 owner；本机 JVM、Debug/Release 构建和 Terminal 包验收通过，设备/发布矩阵仍未关闭。
 
 ## 模块
@@ -44,7 +44,7 @@ Windows PowerShell：
 
 完整单元测试、双宿主仪器测试和 Runtime 静态验收见 [`AGENTS.md`](AGENTS.md) 与 [`docs/terminal-runtime-validation.md`](docs/terminal-runtime-validation.md)。
 
-当前 Demo 真机验证使用用户授权的小米 `QSG6Q8IFDMDELVGQ`，操作前按序列号复核设备。`1.10.0 / 123` Debug APK 已在确认没有活动计时任务后以 `adb install -r` 保留数据覆盖安装，版本和进程已核对；用户随后反馈测试通过。API 35 模拟器定向界面测试与本地 JVM 结果见版本台账。[`HANDOVER.md`](HANDOVER.md) 是 2026-09-01 的历史快照，里面的设备、版本和权限描述不代表当前授权。
+当前 Demo 真机验证使用用户授权的小米 `QSG6Q8IFDMDELVGQ`，操作前按序列号复核设备。2026-09-27 13:55（Asia/Shanghai）最新 `1.10.0 / 123` Debug APK 已在确认没有活动计时任务后以 `adb install -r` 保留数据覆盖安装，版本和进程已核对；用户随后反馈“可以了 测试通过”。最终构建、179 项 JVM 和 API 35 上 12 项定向仪器测试通过，具体范围与 APK 校验值见版本台账；该结论不代表长期后台常驻。[`HANDOVER.md`](HANDOVER.md) 是 2026-09-01 的历史快照，里面的设备、版本和权限描述不代表当前授权。
 
 ## 文档入口
 
@@ -58,6 +58,7 @@ Windows PowerShell：
 - [`docs/terminal-runtime-decisions.md`](docs/terminal-runtime-decisions.md)：正式决策；
 - [`docs/terminal-runtime-release-checklist.md`](docs/terminal-runtime-release-checklist.md)：发布清单；
 - [`docs/demo-app-ui-redesign.md`](docs/demo-app-ui-redesign.md)：demo-app 聊天、过程、输入和悬浮窗的当前交互基线与验收记录；
+- [`docs/demo-app-permission-guide.md`](docs/demo-app-permission-guide.md)：权限申请、关闭后恢复、通知分类核对及可选后台运行建议；
 - [`docs/demo-app-version-ledger.md`](docs/demo-app-version-ledger.md)：demo-app 版本、变更和验收台账；
 - [`docs/android-accessibility-screen-automation.md`](docs/android-accessibility-screen-automation.md)：Android Accessibility 屏幕自动化 Tool/Skill、宿主接入和验证边界；
 - [`docs/android-clipboard.md`](docs/android-clipboard.md)：Android 文本剪贴板 Tool/Skill、确认策略、隐私和 API 限制。

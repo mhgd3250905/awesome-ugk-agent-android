@@ -8,8 +8,8 @@ import android.widget.LinearLayout
 internal class AgentOverlayTranscriptView(context: Context) : LinearLayout(context) {
     private data class MessageHolder(val view: DemoChatMessageView, var message: AgentOverlayMessage)
     private val messages = linkedMapOf<String, MessageHolder>()
-    private val processView = DemoChatProcessCardView(context).apply { tag = "overlay-process" }
-    private val previewView = DemoChatMessageView(context).apply { tag = "overlay-assistant-preview" }
+    private val processView = DemoChatProcessCardView(context, style = DemoChatStyle.COMPACT).apply { tag = "overlay-process" }
+    private val previewView = DemoChatMessageView(context, style = DemoChatStyle.COMPACT).apply { tag = "overlay-assistant-preview" }
     private var previewText: String? = null
     private var processExpanded = false
     private var scope: Pair<String?, String?>? = null
@@ -43,7 +43,7 @@ internal class AgentOverlayTranscriptView(context: Context) : LinearLayout(conte
             if (index == processIndex && process != null) ordered.add(processView)
             val holder = messages[message.id]
             val view = if (holder == null) {
-                DemoChatMessageView(context).apply {
+                DemoChatMessageView(context, style = DemoChatStyle.COMPACT).apply {
                     tag = "overlay-message:${message.id}"
                     onImageClick = { onImageOpen?.invoke(it) }
                     bind(message.chatRole(), message.content, message.imagePaths)
@@ -80,8 +80,8 @@ internal class AgentOverlayTranscriptView(context: Context) : LinearLayout(conte
                     if (view.parent === this) removeView(view)
                     addView(view, index, LayoutParams(LayoutParams.MATCH_PARENT, LayoutParams.WRAP_CONTENT).apply {
                         if (view === processView) {
-                            topMargin = context.dp(4)
-                            bottomMargin = context.dp(6)
+                            topMargin = context.dp(2)
+                            bottomMargin = context.dp(3)
                         }
                     })
                 }

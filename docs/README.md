@@ -1,6 +1,6 @@
 # 项目文档入口
 
-更新时间：2026-09-25
+更新时间：2026-09-27
 适用项目：`awesome-ugk-agent-android`
 源码目录：`E:\AII\ugk-android-new`
 
@@ -38,6 +38,7 @@
 | [terminal-runtime-decisions.md](terminal-runtime-decisions.md) | 影响范围或架构的正式决策记录 |
 | [terminal-runtime-release-checklist.md](terminal-runtime-release-checklist.md) | 发布前必须逐项关闭的技术、许可证和接入检查 |
 | [demo-app-ui-redesign.md](demo-app-ui-redesign.md) | demo-app 聊天、过程、输入和跨 App 悬浮窗的当前交互基线 |
+| [demo-app-permission-guide.md](demo-app-permission-guide.md) | 每次进入 App 的权限引导、关闭后恢复、通知分类及可选后台运行建议 |
 | [demo-app-version-ledger.md](demo-app-version-ledger.md) | demo-app 版本、变更范围和验收台账 |
 | [android-accessibility-screen-automation.md](android-accessibility-screen-automation.md) | Android Accessibility 屏幕自动化 Skill、Tool 协议、宿主接入和验证边界 |
 | [android-clipboard.md](android-clipboard.md) | Android 文本剪贴板 Tool/Skill、确认策略、隐私和 API 限制 |
@@ -68,7 +69,7 @@
 需要理解实现时，再读 `terminal-runtime-architecture.md`；需要改变方向时，先读并更新 `terminal-runtime-decisions.md`。
 
 涉及 `demo-app` 的聊天或悬浮窗 UI 时，补读 `demo-app-ui-redesign.md` 和
-`demo-app-version-ledger.md`；涉及延时任务再读 `demo-delayed-conversation.md`。这些文档记录宿主 Demo 的产品行为，不改变 Terminal Runtime 的 Gate 结论。
+`demo-app-version-ledger.md`；涉及权限或后台设置引导再读 `demo-app-permission-guide.md`，涉及延时任务再读 `demo-delayed-conversation.md`。这些文档记录宿主 Demo 的产品行为，不改变 Terminal Runtime 的 Gate 结论。
 
 ## 状态标签
 

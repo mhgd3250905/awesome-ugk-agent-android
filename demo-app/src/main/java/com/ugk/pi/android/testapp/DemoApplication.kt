@@ -17,6 +17,7 @@ class DemoApplication : Application() {
 
     override fun onCreate() {
         super.onCreate()
+        registerActivityLifecycleCallbacks(DemoPermissionForeground)
         // Remove credentials and diagnostics persisted by the retired Jev trial.
         deleteSharedPreferences("jev_screen_settings")
         File(filesDir, "jev-live-probe.json").delete()

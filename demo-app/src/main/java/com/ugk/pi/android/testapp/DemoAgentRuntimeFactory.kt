@@ -20,7 +20,6 @@ import com.ugk.pi.android.UserConfirmationDialogPresenter
 import com.ugk.pi.android.ScheduleTaskAgentPlugin
 import com.ugk.pi.terminal.skill.TerminalAgentPlugin
 import com.ugk.pi.attention.AgentAttentionPlugin
-import com.ugk.pi.attention.AgentNotificationConfig
 import com.ugk.pi.attention.AndroidNotificationPublisher
 import com.ugk.pi.attention.UrgentMessagePresenter
 import java.io.File
@@ -85,14 +84,7 @@ internal object DemoAgentRuntimeFactory {
                 AgentAttentionPlugin(
                     notificationPublisher = AndroidNotificationPublisher(
                         appContext,
-                        AgentNotificationConfig(
-                            // Channel importance is immutable after creation; use a new ID for heads-up eligibility.
-                            channelId = "ugk_agent_alerts_high_v1",
-                            channelName = "Agent 醒目提醒",
-                            channelDescription = "Agent 请求发送的通知与重要提醒",
-                            smallIconResId = R.drawable.ic_agent_notification,
-                            importance = android.app.NotificationManager.IMPORTANCE_HIGH
-                        )
+                        DemoNotificationSettings.config()
                     ),
                     urgentPresenter = urgentMessagePresenter
                 )

@@ -51,7 +51,6 @@ import android.view.ViewOutlineProvider
 import android.widget.ImageView
 import android.widget.ImageButton
 import androidx.core.app.ActivityCompat
-import androidx.core.content.ContextCompat
 import com.ugk.pi.android.AgentImageContent
 import java.io.File
 import kotlinx.coroutines.CoroutineScope
@@ -88,7 +87,6 @@ class MainActivity : ComponentActivity() {
     private val capabilityInterlock: DemoCapabilityInterlock
         get() = conversationRuntime.capabilityInterlock
     private val activityToken = Any()
-    private var overlayPermissionDialog: AlertDialog? = null
     private val confirmationPresenter by lazy {
         processScope.confirmationPresenter.also { presenter ->
             presenter.attach(
@@ -156,10 +154,44 @@ class MainActivity : ComponentActivity() {
         // user cancel or failure only needs to drop the download listener.
         if (result.resultCode != RESULT_OK) inAppUpdateController.onUpdateFlowAbandoned()
     }
-    private val inAppUpdateController: InAppUpdateController by lazy { InAppUpdateController(this, inAppUpdateLauncher) }
+    private val inAppUpdateController: InAppUpdateController by lazy {
+        InAppUpdateController(this, inAppUpdateLauncher,
+            canPresent = { permissionGuide.canShowUpdate() },
+            onExternalFlow = { permissionGuide.markExternalFlow() })
+    }
+
+    private val permissionGuide: DemoPermissionGuideController = DemoPermissionGuideController(this,
+        busy = { runState.isBusy || runCoordinator.isRunning() ||
+            delayedTasks.snapshot() !is DemoDelayedTaskState.Idle ||
+            processScope.urgentInteractionDispatcher.hasPending() || importingFile || processingImages || backgroundGuidance.isActive },
+        onFinished = { inAppUpdateController.checkOnResume() })
+    private val runtimePermissionHistory by lazy { DemoRuntimePermissionHistory(this) }
+    private val backgroundGuidance: DemoBackgroundGuidanceHost = DemoBackgroundGuidanceHost(this,
+        beforeExternal = {
+            suppressOverlayForInAppNavigation = true
+            permissionGuide.markExternalFlow()
+        },
+        onClosed = {
+            renderDelayedTaskState(delayedTasks.snapshot())
+            permissionGuide.reconsider()
+        })
+
+    override fun startActivity(intent: Intent, options: Bundle?) {
+        suppressOverlayForInAppNavigation = true
+        permissionGuide.markExternalFlow()
+        super.startActivity(intent, options)
+    }
+
+    override fun startActivityForResult(intent: Intent, requestCode: Int, options: Bundle?) {
+        suppressOverlayForInAppNavigation = true
+        permissionGuide.markExternalFlow()
+        super.startActivityForResult(intent, requestCode, options)
+    }
 
     override fun onCreate(savedInstanceState: Bundle?) {
         super.onCreate(savedInstanceState)
+        permissionGuide.restore(savedInstanceState)
+        backgroundGuidance.restore(savedInstanceState)
         ThemeManager.init(this)
         ThemeManager.addListener(themeListener)
         if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.R) {
@@ -214,7 +246,6 @@ class MainActivity : ComponentActivity() {
         delayedTasks.attach(activityToken) { state ->
             runOnUiThread { renderDelayedTaskState(state) }
         }
-        requestNotificationPermissionIfNeeded()
     }
 
     override fun onNewIntent(intent: Intent) {
@@ -226,6 +257,9 @@ class MainActivity : ComponentActivity() {
     @Deprecated("Use the file picker callback when the Activity Result API is adopted.")
     override fun onActivityResult(requestCode: Int, resultCode: Int, data: Intent?) {
         super.onActivityResult(requestCode, resultCode, data)
+        if (requestCode == REQUEST_PICK_IMAGE || requestCode == REQUEST_TAKE_PHOTO || requestCode == REQUEST_IMPORT_FILE) {
+            permissionGuide.onExternalResult()
+        }
         if (resultCode != RESULT_OK) return
         when (requestCode) {
             REQUEST_PICK_IMAGE -> {
@@ -279,8 +313,15 @@ class MainActivity : ComponentActivity() {
         grantResults: IntArray
     ) {
         super.onRequestPermissionsResult(requestCode, permissions, grantResults)
-        if (requestCode == REQUEST_CAMERA_PERMISSION && grantResults.firstOrNull() == PackageManager.PERMISSION_GRANTED) {
-            openCamera()
+        if (requestCode == REQUEST_CAMERA_PERMISSION) {
+            permissionGuide.onExternalResult()
+            val granted = grantResults.firstOrNull() == PackageManager.PERMISSION_GRANTED
+            runtimePermissionHistory.recordResult(Manifest.permission.CAMERA, granted)
+            when {
+                granted -> openCamera()
+                !ActivityCompat.shouldShowRequestPermissionRationale(this, Manifest.permission.CAMERA) -> showCameraPermissionSettings()
+                else -> showInlineNotice("尚未获得相机权限，你仍可以从相册选择图片")
+            }
         }
     }
 
@@ -319,9 +360,16 @@ class MainActivity : ComponentActivity() {
             showInlineNotice("最多支持添加 $MAX_PENDING_IMAGES 张图片")
             return
         }
-        if (ContextCompat.checkSelfPermission(this, Manifest.permission.CAMERA) != PackageManager.PERMISSION_GRANTED) {
-            ActivityCompat.requestPermissions(this, arrayOf(Manifest.permission.CAMERA), REQUEST_CAMERA_PERMISSION)
-            return
+        when (runtimePermissionHistory.action(this, Manifest.permission.CAMERA)) {
+            RuntimePermissionAction.SETTINGS -> { showCameraPermissionSettings(); return }
+            RuntimePermissionAction.REQUEST -> {
+                suppressOverlayForInAppNavigation = true
+                permissionGuide.markExternalFlow()
+                runtimePermissionHistory.markRequested(Manifest.permission.CAMERA)
+                ActivityCompat.requestPermissions(this, arrayOf(Manifest.permission.CAMERA), REQUEST_CAMERA_PERMISSION)
+                return
+            }
+            RuntimePermissionAction.GRANTED -> Unit
         }
         val photoFile = DemoImageUtils.createCameraPhotoFile(this)
         cameraPhotoFile = photoFile
@@ -331,6 +379,20 @@ class MainActivity : ComponentActivity() {
             addFlags(Intent.FLAG_GRANT_WRITE_URI_PERMISSION or Intent.FLAG_GRANT_READ_URI_PERMISSION)
         }
         startActivityForResult(intent, REQUEST_TAKE_PHOTO)
+    }
+
+    private fun showCameraPermissionSettings() {
+        AlertDialog.Builder(this, Ui.dialogTheme())
+            .setTitle("开启相机权限")
+            .setMessage("当前未获得权限，请在系统设置中开启。你也可以从相册选择图片。")
+            .setNegativeButton("暂时不用", null)
+            .setPositiveButton("去系统设置") { _, _ ->
+                try {
+                    startActivity(runtimePermissionHistory.settingsIntent(Manifest.permission.CAMERA))
+                } catch (_: Exception) {
+                    showInlineNotice("暂时无法打开系统设置，请稍后再试")
+                }
+            }.show()
     }
 
     private fun handleSelectedImageUris(uris: List<Uri>) {
@@ -449,11 +511,14 @@ class MainActivity : ComponentActivity() {
         // An urgent takeover remains visible until the user closes it.
         floatingWindow.hideOrdinaryForActivity()
         processScope.urgentInteractionDispatcher.resumePending()
-        inAppUpdateController.checkOnResume()
+        permissionGuide.onResume()
+        backgroundGuidance.onResume()
     }
 
     override fun onPause() {
         activityResumed = false
+        permissionGuide.onPause()
+        backgroundGuidance.onPause()
         super.onPause()
         delayedDialog.dismiss(animate = false)
         showFloatingWindowIfNeeded()
@@ -462,6 +527,8 @@ class MainActivity : ComponentActivity() {
     }
 
     override fun onDestroy() {
+        permissionGuide.release()
+        backgroundGuidance.release()
         cancelPendingStreamingRender()
         delayedDialog.dismiss(animate = false)
         delayedTasks.detach(activityToken)
@@ -501,21 +568,14 @@ class MainActivity : ComponentActivity() {
         if (AgentOverlayPolicy.shouldShowOnPause(
                 overlayPermissionGranted = Settings.canDrawOverlays(this),
                 activityResumed = false,
-                inAppNavigating = suppressOverlayForInAppNavigation
+                inAppNavigating = suppressOverlayForInAppNavigation || permissionGuide.isAwaitingPermission
             )
         ) {
             floatingWindow.show()
         }
     }
 
-    private fun isAccessibilityEnabled(): Boolean {
-        if (AgentAccessibilityService.running) return true
-        val enabledServices = Settings.Secure.getString(
-            contentResolver,
-            Settings.Secure.ENABLED_ACCESSIBILITY_SERVICES
-        ) ?: return false
-        return enabledServices.contains("$packageName/${packageName}.AgentAccessibilityService")
-    }
+    private fun isAccessibilityEnabled(): Boolean = DemoPermissionGuideController.accessibilityEnabled(this)
 
     private fun updateCapabilityBanner() {
         if (!::statusBanner.isInitialized) return
@@ -1090,22 +1150,6 @@ class MainActivity : ComponentActivity() {
         renderConversation()
     }
 
-    private fun requestNotificationPermissionIfNeeded() {
-        if (
-            Build.VERSION.SDK_INT >= Build.VERSION_CODES.TIRAMISU &&
-            ContextCompat.checkSelfPermission(
-                this,
-                Manifest.permission.POST_NOTIFICATIONS
-            ) != PackageManager.PERMISSION_GRANTED
-        ) {
-            ActivityCompat.requestPermissions(
-                this,
-                arrayOf(Manifest.permission.POST_NOTIFICATIONS),
-                REQUEST_NOTIFICATION_PERMISSION
-            )
-        }
-    }
-
     private fun sendMessage() {
         if (delayedTasks.snapshot() !is DemoDelayedTaskState.Idle) {
             stopAgent()
@@ -1141,12 +1185,6 @@ class MainActivity : ComponentActivity() {
                 showInlineNotice("消息队列已满，请稍后再试")
             }
             return
-        }
-        // A missing API configuration is handled by the placeholder runtime;
-        // it must not unexpectedly trigger a second, unrelated permission
-        // prompt before the user has configured a runnable provider.
-        if (apiStore.activeConfig() != null) {
-            maybeOfferOverlayPermission()
         }
         if (runAgent(text, attachments, images)) {
             conversationRuntime.draft = ""
@@ -1260,34 +1298,6 @@ class MainActivity : ComponentActivity() {
         val next = runCoordinator.removeNextQueued() ?: return
         floatingWindow.addLog("开始处理排队消息")
         runAgent(next)
-    }
-
-    private fun maybeOfferOverlayPermission() {
-        if (!AgentOverlayPolicy.shouldOfferPermission(
-                permissionGranted = Settings.canDrawOverlays(this),
-                hasActiveRun = true
-            ) || conversationRuntime.overlayPromptShown || isFinishing
-        ) {
-            return
-        }
-        conversationRuntime.overlayPromptShown = true
-        overlayPermissionDialog = AlertDialog.Builder(this, Ui.dialogTheme())
-            .setTitle("开启跨 App 悬浮窗")
-            .setMessage("离开 Agent Test 后，悬浮小窗可以继续显示任务进度，并发送后续消息，不会打断当前 Agent 操作。")
-            .setNegativeButton("暂不") { dialog, _ -> dialog.dismiss() }
-            .setPositiveButton("去开启") { _, _ ->
-                startActivity(
-                    Intent(
-                        Settings.ACTION_MANAGE_OVERLAY_PERMISSION,
-                        android.net.Uri.parse("package:$packageName")
-                    )
-                )
-            }
-            .create()
-            .also { dialog ->
-                dialog.setOnDismissListener { overlayPermissionDialog = null }
-                dialog.show()
-            }
     }
 
     private fun buildAgentMessage(
@@ -1716,6 +1726,7 @@ class MainActivity : ComponentActivity() {
     }
 
     private fun renderRunState() {
+        permissionGuide.reconsider()
         val state = runState
         runStatusLabel.text = state.statusLabel
         val (textColor, bgColor, strokeColor) = when (state.status) {
@@ -1773,6 +1784,7 @@ class MainActivity : ComponentActivity() {
     }
 
     private fun updateComposerState() {
+        permissionGuide.reconsider()
         val delayOccupied = delayedTasks.snapshot() !is DemoDelayedTaskState.Idle
         if (::historyButton.isInitialized) {
             historyButton.isEnabled = !processingImages && !delayOccupied
@@ -1813,6 +1825,7 @@ class MainActivity : ComponentActivity() {
     }
 
     private fun renderDelayedTaskState(state: DemoDelayedTaskState) {
+        permissionGuide.reconsider()
         if (!::activeConversation.isInitialized) return
         updateComposerState()
         when (state) {
@@ -1840,6 +1853,7 @@ class MainActivity : ComponentActivity() {
     }
 
     private fun showDelayConfirmation(task: DemoDelayedTask) {
+        if (backgroundGuidance.isActive) return
         delayedDialog.showProposal(
             task = task,
             queuedMessages = runCoordinator.snapshot().queuedMessages,
@@ -1848,9 +1862,8 @@ class MainActivity : ComponentActivity() {
                 startNextQueuedOverlayMessage()
             },
             onBackgroundSettings = {
-                startActivity(Intent(Settings.ACTION_APPLICATION_DETAILS_SETTINGS).apply {
-                    data = Uri.parse("package:$packageName")
-                })
+                delayedDialog.dismiss(animate = false)
+                backgroundGuidance.show()
             },
             onConfirm = {
                 if (!delayedTasks.confirm(task.id)) {
@@ -1863,6 +1876,7 @@ class MainActivity : ComponentActivity() {
     }
 
     private fun showDelayWaitingDialog(waiting: DemoDelayedTaskState.Waiting) {
+        if (backgroundGuidance.isActive) return
         delayedDialog.showWaiting(waiting) { stopAgent() }
     }
 
@@ -2192,6 +2206,8 @@ class MainActivity : ComponentActivity() {
     }
 
     override fun onSaveInstanceState(outState: Bundle) {
+        permissionGuide.save(outState)
+        backgroundGuidance.save(outState)
         conversationRuntime.rememberSession(activeConversation.id, session)
         // No whole-conversation save here: every conversation change already
         // persists at its point of change (appendMessages/save/rename/create),
@@ -2583,7 +2599,6 @@ class MainActivity : ComponentActivity() {
         const val REQUEST_TAKE_PHOTO = 4102
         const val REQUEST_PICK_IMAGE = 4103
         const val REQUEST_CAMERA_PERMISSION = 4104
-        const val REQUEST_NOTIFICATION_PERMISSION = 4105
         const val MAX_PENDING_IMPORTED_FILES = 3
     }
 

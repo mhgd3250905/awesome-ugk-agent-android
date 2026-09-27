@@ -100,7 +100,10 @@ data class DemoTableData(
  * 2. 内嵌 HorizontalScrollView，宽表格支持横向滑动，单元格文字不再换行过度堆叠；
  * 3. 完美适配米白/深灰主题美学与精致清晰字体（12sp）。
  */
-class DemoTableView(context: Context) : FrameLayout(context) {
+class DemoTableView(
+    context: Context,
+    private val style: DemoChatStyle = DemoChatStyle.STANDARD
+) : FrameLayout(context) {
 
     private val scrollView = HorizontalScrollView(context).apply {
         isFillViewport = true
@@ -175,7 +178,7 @@ class DemoTableView(context: Context) : FrameLayout(context) {
             val headerText = data.headers[i]
             val gravity = data.alignments.getOrElse(i) { Gravity.START }
             val tv = createCellTextView(isHeader = true, gravity = gravity).apply {
-                text = DemoMarkdownFormatter.toMarkdown(context, headerText)
+                text = DemoMarkdownFormatter.toMarkdown(context, headerText, style)
             }
             headerRow.addView(tv)
         }
@@ -199,7 +202,7 @@ class DemoTableView(context: Context) : FrameLayout(context) {
                 val cellText = rowData.getOrNull(colIndex) ?: ""
                 val gravity = data.alignments.getOrElse(colIndex) { Gravity.START }
                 val tv = createCellTextView(isHeader = false, gravity = gravity).apply {
-                    text = DemoMarkdownFormatter.toMarkdown(context, cellText)
+                    text = DemoMarkdownFormatter.toMarkdown(context, cellText, style)
                 }
                 row.addView(tv)
             }
@@ -226,11 +229,12 @@ class DemoTableView(context: Context) : FrameLayout(context) {
         return TextView(context).apply {
             setTextColor(Ui.TextPrimary)
             this.gravity = gravity or Gravity.CENTER_VERTICAL
+            if (style == DemoChatStyle.COMPACT) setTextSize(TypedValue.COMPLEX_UNIT_SP, 12f)
             setPadding(
-                dp(12),
-                dp(if (isHeader) 8 else 7),
-                dp(12),
-                dp(if (isHeader) 8 else 7)
+                dp(style.size(12, 8)),
+                dp(style.size(if (isHeader) 8 else 7, 5)),
+                dp(style.size(12, 8)),
+                dp(style.size(if (isHeader) 8 else 7, 5))
             )
             includeFontPadding = false
             if (isHeader) {
