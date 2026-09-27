@@ -320,6 +320,16 @@ object DefaultAgentTaskNotificationSink : AgentTaskNotificationSink {
 
         val appContext = context.applicationContext
         val manager = appContext.getSystemService(NotificationManager::class.java)
+        // The runtime-permission check above only covers API 33+. Android 12
+        // and below have no runtime notification permission, yet the user can
+        // still disable the app's notifications system-wide — and on 26+ the
+        // channel can be individually blocked. In all of those states
+        // notify() silently no-ops, so reporting success would mark a
+        // reminder the user never saw as COMPLETED. areNotificationsEnabled()
+        // covers the total switch on every supported API level.
+        if (!manager.areNotificationsEnabled()) {
+            return false
+        }
         if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.O) {
             manager.createNotificationChannel(
                 NotificationChannel(
@@ -328,6 +338,12 @@ object DefaultAgentTaskNotificationSink : AgentTaskNotificationSink {
                     NotificationManager.IMPORTANCE_DEFAULT
                 )
             )
+            if (
+                manager.getNotificationChannel(CHANNEL_ID)?.importance ==
+                NotificationManager.IMPORTANCE_NONE
+            ) {
+                return false
+            }
         }
 
         val builder = if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.O) {
@@ -383,7 +399,11 @@ data class AgentTaskActionExecutionResult(
  * A failed run is terminal in this first slice; retry policy belongs to a
  * future TaskRun/lease layer rather than the AlarmManager adapter.
  */
-internal fun AgentTask.afterExecution(now: Long, success: Boolean): AgentTask {
+internal fun AgentTask.afterExecution(
+    now: Long,
+    success: Boolean,
+    executionEndMillis: Long = now
+): AgentTask {
     if (!success) {
         return copy(
             status = AgentTaskStatus.FAILED,
@@ -393,7 +413,16 @@ internal fun AgentTask.afterExecution(now: Long, success: Boolean): AgentTask {
         )
     }
 
-    val nextRun = schedule.nextRunAtMillis(now + 1L)
+    // The next occurrence is anchored at the LATER of the execution start
+    // and the execution end. Anchoring at the start alone re-arms a trigger
+    // in the past whenever one execution runs longer than the interval, and
+    // the platform then fires the task again immediately — a zero-gap loop
+    // (with an ALWAYS_NOTIFY notification per loop) until endAtMillis. With
+    // the grid in nextRunAtMillis() the short-execution case keeps exact
+    // fixed-rate slots, while a long execution re-arms at completion's next
+    // free grid slot instead of bursting.
+    val anchorMillis = maxOf(now, executionEndMillis)
+    val nextRun = schedule.nextRunAtMillis(anchorMillis + 1L)
     return copy(
         status = when {
             schedule is com.ugk.pi.android.AgentTaskSchedule.OneShot -> AgentTaskStatus.COMPLETED
@@ -416,7 +445,7 @@ internal fun AgentTask.afterExecution(now: Long, success: Boolean): AgentTask {
  * granted. Like [afterExecution], a full retry policy belongs to a future
  * TaskRun/lease layer rather than this adapter.
  */
-internal fun AgentTask.afterDeliveryFailure(now: Long): AgentTask {
+internal fun AgentTask.afterDeliveryFailure(now: Long, deliveryEndMillis: Long = now): AgentTask {
     if (schedule is com.ugk.pi.android.AgentTaskSchedule.OneShot) {
         return copy(
             status = AgentTaskStatus.FAILED,
@@ -426,7 +455,10 @@ internal fun AgentTask.afterDeliveryFailure(now: Long): AgentTask {
         )
     }
 
-    val nextRun = schedule.nextRunAtMillis(now + 1L)
+    // Same zero-gap anchor rule as afterExecution: delivery detection runs
+    // after the occurrence, so the anchor must not stay in the past.
+    val anchorMillis = maxOf(now, deliveryEndMillis)
+    val nextRun = schedule.nextRunAtMillis(anchorMillis + 1L)
     return copy(
         status = when {
             nextRun == null -> AgentTaskStatus.EXPIRED
@@ -632,6 +664,10 @@ class AndroidAgentTaskRuntime(
             // roll back a concurrent update. Re-read the record and fold the
             // execution result into whatever is current instead.
             val current = store.get(taskId)
+            // Sampled AFTER the action ran so the next-occurrence anchor
+            // reflects how long the execution took (a prompt execution can
+            // run minutes).
+            val executionEndMillis = clock.nowMillis()
             val updated: AgentTask? = when {
                 current == null -> {
                     // The task was deleted while executing; writing any record
@@ -646,9 +682,10 @@ class AndroidAgentTaskRuntime(
                     null
                 }
                 // A denied notification is a delivery problem, not a task
-                // failure: repeating tasks survive it and advance to the next run.
-                deliveryFailed -> current.afterDeliveryFailure(now)
-                else -> current.afterExecution(now, result.success)
+                // failure: repeating tasks survive it and advance to the next
+                // run.
+                deliveryFailed -> current.afterDeliveryFailure(now, executionEndMillis)
+                else -> current.afterExecution(now, result.success, executionEndMillis)
             }
             // A millisecond-scale race remains between this re-read and the
             // upsert (the cross-module cancel tool does not take the task handle

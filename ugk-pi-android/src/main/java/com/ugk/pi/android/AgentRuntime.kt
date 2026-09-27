@@ -21,6 +21,7 @@ class AgentRuntime(
     private val transcriptPreparationPolicy: TranscriptPreparationPolicy =
         NoOpTranscriptPreparationPolicy
 ) {
+    @Volatile
     private var lifecyclePlugins: List<AgentCapabilityPlugin> = emptyList()
     private var lifecyclePluginsAttached = false
     private val closed = AtomicBoolean(false)
@@ -200,7 +201,13 @@ class AgentRuntime(
         input: AgentRunInput,
         pendingUserMessages: suspend () -> List<String>
     ): Flow<AgentEvent> = flow {
-        require(maxIterations > 0) { "maxIterations must be greater than 0" }
+        // The run contract ends every failure with a Failed event; throwing
+        // here would hand the collector a raw IllegalArgumentException
+        // instead.
+        if (maxIterations <= 0) {
+            emit(AgentEvent.Failed("maxIterations must be greater than 0, was $maxIterations"))
+            return@flow
+        }
 
         val inputImages = immutableListSnapshot(input.images)
         // A run needs at least one usable input. Persisting a blank text-only
@@ -444,7 +451,19 @@ class AgentRuntime(
             }
             transientModelMessages = nextTransientModelMessages
 
-            pendingUserMessages()
+            // A throwing host callback must still end the run with a Failed
+            // event; the transcript is complete at this point (every tool
+            // result of the batch is already appended), so the failure only
+            // abandons the not-yet-fetched pending messages.
+            val pendingMessages = try {
+                pendingUserMessages()
+            } catch (error: CancellationException) {
+                throw error
+            } catch (error: Throwable) {
+                emit(AgentEvent.Failed(error.message ?: error::class.java.name))
+                return@flow
+            }
+            pendingMessages
                 .map { it.trim() }
                 .filter { it.isNotBlank() }
                 .forEach { message ->

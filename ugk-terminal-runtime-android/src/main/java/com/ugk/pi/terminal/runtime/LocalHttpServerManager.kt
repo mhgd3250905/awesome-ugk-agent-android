@@ -82,7 +82,7 @@ class LocalHttpServerManager(
     private var metadataLoaded = false
 
     override fun start(request: LocalHttpServerRequest): LocalHttpServerStatus {
-        synchronized(this) {
+        synchronized(PROCESS_LOCK) {
             ensureMetadataLoaded()
             validatePort(request.port)
             val directory = resolveWorkspaceDirectory(request.directory)
@@ -108,10 +108,24 @@ class LocalHttpServerManager(
                 )
             }
             if (records.size >= MAX_MANAGED_SERVERS) {
-                throw LocalHttpServerException(
-                    code = ERROR_TOO_MANY_SERVERS,
-                    message = "The Runtime allows at most $MAX_MANAGED_SERVERS managed local HTTP servers."
-                )
+                // After an app restart the records reload from disk and only
+                // status() pruned dead ones — a host that starts a new server
+                // without calling status() first would deterministically hit
+                // this cap on records whose servers are long dead. Drop only
+                // records whose process group is gone (nothing left to
+                // orphan, no signal is sent); a recycled-but-alive group id
+                // stays, matching the safety stance of stop()/stopAll().
+                records.values.toList().forEach { candidate ->
+                    if (!hasProcess(candidate)) {
+                        removeRecord(candidate)
+                    }
+                }
+                if (records.size >= MAX_MANAGED_SERVERS) {
+                    throw LocalHttpServerException(
+                        code = ERROR_TOO_MANY_SERVERS,
+                        message = "The Runtime allows at most $MAX_MANAGED_SERVERS managed local HTTP servers."
+                    )
+                }
             }
 
             val serviceDirectory = runtime.managedServiceDirectory().apply {
@@ -186,12 +200,33 @@ class LocalHttpServerManager(
             records[request.port] = server
             persist(server)
 
-            if (!waitForPort(request.port)) {
+            // A bare port wait cannot distinguish our server from a foreign
+            // bind-race winner: waitForPort only proves that SOMETHING
+            // accepted a connection, and our own server completes the TCP
+            // handshake at bind/listen time slightly before serve_forever
+            // answers requests. Poll for OUR token path within the same
+            // start budget; only then is the token URL we report actually
+            // served by this server.
+            if (!waitForTokenServed(request.port, token)) {
+                // Inspect the port BEFORE tearing our group down: after
+                // stopRecord() a killed listener would look like "server
+                // exited" and muddle the diagnosis.
+                val foreignOrDeafListener = isPortListening(request.port)
                 removeRecord(server)
                 stopRecord(server)
+                val logTail = runCatching { logFile.readText().takeLast(600) }.getOrDefault("")
+                if (foreignOrDeafListener) {
+                    throw LocalHttpServerException(
+                        code = ERROR_PORT_IN_USE,
+                        message = "Port ${request.port} is listening but not serving this server's token path; " +
+                            "another process likely took the port during startup. " +
+                            "Log ${logFile.absolutePath}: $logTail"
+                    )
+                }
                 throw LocalHttpServerException(
                     code = ERROR_START_FAILED,
-                    message = "The managed HTTP server exited or did not listen on 127.0.0.1:${request.port}. See ${logFile.absolutePath}."
+                    message = "The managed HTTP server exited or did not listen on 127.0.0.1:${request.port}. " +
+                        "Log ${logFile.absolutePath}: $logTail"
                 )
             }
             return statusFor(server)
@@ -199,7 +234,7 @@ class LocalHttpServerManager(
     }
 
     override fun status(port: Int?): List<LocalHttpServerStatus> {
-        synchronized(this) {
+        synchronized(PROCESS_LOCK) {
             ensureMetadataLoaded()
             if (port != null) validatePort(port)
             val selected = records.values
@@ -223,7 +258,7 @@ class LocalHttpServerManager(
     }
 
     override fun stop(port: Int): LocalHttpServerStatus {
-        synchronized(this) {
+        synchronized(PROCESS_LOCK) {
             ensureMetadataLoaded()
             validatePort(port)
             val server = records[port] ?: return LocalHttpServerStatus.notFound(port)
@@ -255,7 +290,7 @@ class LocalHttpServerManager(
     }
 
     override fun stopAll(): Int {
-        synchronized(this) {
+        synchronized(PROCESS_LOCK) {
             ensureMetadataLoaded()
             val servers = records.values.toList()
             var stopped = 0
@@ -413,8 +448,26 @@ class LocalHttpServerManager(
             setProperty(KEY_LOG_FILE, server.logFile.absolutePath)
             setProperty(KEY_PROCESS_GROUP_ID, server.processGroupId.toString())
         }
-        FileOutputStream(server.metadataFile).use { output ->
-            properties.store(output, "UGK managed local HTTP server")
+        // Properties.store issues several small writes; an in-place write
+        // leaves a truncated file behind when the process dies mid-store.
+        // ensureMetadataLoaded then deletes the unreadable record while the
+        // Python server keeps running — the port becomes un-stoppable and
+        // un-rebuildable for the rest of the process lifetime. Stage + rename
+        // keeps the metadata file all-or-nothing.
+        val staged = File.createTempFile(".http-${server.port}-", ".tmp", metadataDirectory)
+        try {
+            FileOutputStream(staged).use { output ->
+                properties.store(output, "UGK managed local HTTP server")
+            }
+            if (!staged.renameTo(server.metadataFile)) {
+                // renameTo does not replace an existing target everywhere.
+                server.metadataFile.delete()
+                check(staged.renameTo(server.metadataFile)) {
+                    "Unable to persist local HTTP server metadata for port ${server.port}."
+                }
+            }
+        } finally {
+            if (staged.exists()) staged.delete()
         }
     }
 
@@ -465,13 +518,24 @@ class LocalHttpServerManager(
             ?.takeIf { it > 0 }
     }
 
-    private fun waitForPort(port: Int): Boolean {
-        val deadline = System.currentTimeMillis() + PORT_START_TIMEOUT_MILLIS
+    /**
+     * Polls until OUR token-gated handler actually answers. The previous
+     * port-only wait bounded kernel-level binding, which completes at
+     * listen() — long before CPython reaches serve_forever on a cold start
+     * (seconds on slow emulators / low-end devices). Reporting success at
+     * bind time hands the caller a token URL that is not served yet, and a
+     * foreign bind-race winner is indistinguishable from our own bind, so
+     * the poll targets a token GET instead and carries its own, longer
+     * budget: a start whose server never serves is a failure worth waiting a
+     * few extra seconds to detect correctly.
+     */
+    private fun waitForTokenServed(port: Int, token: String): Boolean {
+        val deadline = System.currentTimeMillis() + SERVE_START_TIMEOUT_MILLIS
         while (System.currentTimeMillis() < deadline) {
-            if (isPortListening(port)) return true
+            if (isTokenServed(port, token)) return true
             Thread.sleep(PORT_POLL_INTERVAL_MILLIS)
         }
-        return isPortListening(port)
+        return isTokenServed(port, token)
     }
 
     private fun isPortListening(port: Int): Boolean {
@@ -560,6 +624,16 @@ class LocalHttpServerManager(
     )
 
     internal companion object {
+        /**
+         * All manager instances in a process share the same on-disk service
+         * directory (one fixed handler script file name) and the same
+         * device-wide loopback port space, so per-instance monitors cannot
+         * keep two instances from interleaving their starts and corrupting
+         * the shared handler script. Every operation synchronizes on this
+         * process-wide lock instead of the instance.
+         */
+        private val PROCESS_LOCK = Any()
+
         const val MIN_PORT = 1_024
         const val MAX_PORT = 65_535
         const val LOOPBACK_HOST = "127.0.0.1"
@@ -586,7 +660,7 @@ class LocalHttpServerManager(
         private const val SIGNAL_KILL = 9
         private const val POLL_INTERVAL_MILLIS = 10L
         private const val PORT_POLL_INTERVAL_MILLIS = 50L
-        private const val PORT_START_TIMEOUT_MILLIS = 3_000L
+        private const val SERVE_START_TIMEOUT_MILLIS = 10_000L
         private const val SESSION_REPORT_WAIT_MILLIS = 500L
         private const val STOP_GRACE_PERIOD_MILLIS = 500L
         private const val STOP_KILL_WAIT_MILLIS = 1_000L
@@ -596,6 +670,38 @@ class LocalHttpServerManager(
         private const val MAX_LOG_BYTES = 64 * 1024
         private const val LOG_BUFFER_BYTES = 8 * 1024
         val RUNNING_STATES = setOf(STATE_RUNNING, STATE_STARTING)
+
+        /**
+         * True only when GET http://127.0.0.1:<port>/<token>/ answers 200 —
+         * i.e. the responder is OUR token-gated handler, not a foreign
+         * process that won a bind race. Legacy tokenless records keep the
+         * bare-connect contract and always attribute.
+         */
+        internal fun isTokenServed(
+            port: Int,
+            token: String?,
+            connectTimeoutMillis: Int = SOCKET_CONNECT_TIMEOUT_MILLIS
+        ): Boolean {
+            if (token.isNullOrBlank()) return true
+            // Raw socket HTTP/1.0 probe: HttpURLConnection routes through the
+            // JVM proxy selector and response pooling, neither of which is
+            // wanted for a loopback liveness check.
+            return runCatching {
+                java.net.Socket().use { socket ->
+                    socket.connect(
+                        java.net.InetSocketAddress(LOOPBACK_HOST, port),
+                        connectTimeoutMillis
+                    )
+                    socket.soTimeout = connectTimeoutMillis
+                    val writer = socket.getOutputStream().bufferedWriter()
+                    writer.write("GET /$token/ HTTP/1.0\r\n")
+                    writer.write("Host: $LOOPBACK_HOST\r\n\r\n")
+                    writer.flush()
+                    val statusLine = socket.getInputStream().bufferedReader().readLine()
+                    statusLine?.contains(" 200 ") == true
+                }
+            }.getOrDefault(false)
+        }
 
         /**
          * Fresh token for one server start: 16 SecureRandom bytes in unpadded

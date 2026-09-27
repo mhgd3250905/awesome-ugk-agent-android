@@ -9,10 +9,11 @@ import java.io.File
  * contributes skill tools, global instructions, and the dynamic
  * [FileBackedSkillProvider]. File skills therefore remain in [skillProviders]
  * while [skills] stays empty to avoid double injection. `skill_save`,
- * `skill_delete`, and `memory_delete` are wrapped with
+ * `skill_delete`, `memory_delete`, and `memory_write` are wrapped with
  * [UserConfirmationRequiredTool] by default because they mutate skill or
- * memory state; set [requireDeleteConfirmation] or
- * [requireSkillMutationConfirmation] to false for the respective raw tools.
+ * memory state; set [requireDeleteConfirmation],
+ * [requireMemoryWriteConfirmation], or [requireSkillMutationConfirmation] to
+ * false for the respective raw tools.
  * [embedRoots] are the named roots that `x-ugk-embed-files` `alias:file.md`
  * entries resolve against; the same map is used by the tool and provider.
  */
@@ -22,7 +23,14 @@ class AgentSkillRuntimePlugin(
     private val requireDeleteConfirmation: Boolean = true,
     private val shouldBypassConfirmation: () -> Boolean = { false },
     private val embedRoots: Map<String, File> = emptyMap(),
-    private val requireSkillMutationConfirmation: Boolean = true
+    private val requireSkillMutationConfirmation: Boolean = true,
+    /**
+     * `memory_write` mutates (and with overwrite=true can destroy) one whole
+     * memory category. Its description always promised user consent; this
+     * flag enforces it with the same hard ticket gate as the other mutation
+     * tools. Default on: the soft instruction alone was bypassable.
+     */
+    private val requireMemoryWriteConfirmation: Boolean = true
 ) : AgentCapabilityPlugin {
     override val id: String = "agent-skill-runtime"
 
@@ -32,6 +40,7 @@ class AgentSkillRuntimePlugin(
         return agentSkillRuntimeTools(repository, memoryRoot, embedRoots).map { tool ->
             val requiresConfirmation = when (tool.name) {
                 "memory_delete" -> requireDeleteConfirmation
+                "memory_write" -> requireMemoryWriteConfirmation
                 "skill_save", "skill_delete" -> requireSkillMutationConfirmation
                 else -> false
             }

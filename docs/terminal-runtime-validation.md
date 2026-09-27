@@ -447,3 +447,28 @@ Core API/JVM 边界：
   - `:demo-app:compileDebugKotlin`、`:demo-app:compileDebugAndroidTestKotlin`：通过（`local_http_server` token URL 的仪器测试断言已同步更新，无 token 请求断言 404）。
   - `:demo-app:connectedDebugAndroidTest`（AVD `codex_api35`，API 35 x86_64，page size 4 KB）：两次通过（P2 加固前与最终代码状态各一次），均 `28/28`、0 failure、0 skipped，含更新后的 `LocalHttpServerManagerInstrumentedTest`（token 路径 200、无 token 404、进程组停止）与全部终端/无障碍集成用例。
 - 边界与未执行：probe A/B 仪器用例未跑（无 local_http 用法，不受 token 影响）；未跑 `-CheckPackages`、Release 矩阵或真实 Provider/API；不关闭任何 Gate。负 exitCode 设备侧验证（第 28 节遗留）状态不变。
+
+## 30. 第五轮 P0 审查修复（分支 fix/p0-review-round5-20260908）
+
+验证日期：2026-09-08；源码基线：`main@b0f1859`（第四轮收束状态，本机复现门禁 `560/3/0`）。本轮不改变 Terminal v1 scope、原生载荷或权限边界；不关闭任何 Gate。
+
+- 修复清单（每项均有先红后绿复现证据；标注"设备实测"者为 connected 测试取证）：
+  - `ugk-pi-android`：OpenAI 流式 `data: {"error":...}` 中途错误事件改为抛出（原先被静默丢弃，截断答案以正常完成收尾并写入会话）；流式 `tool_calls` 省略 `index` 的续传分片并入最近活动 draft（原先制造幻影 draft，真实参数被丢弃、首个工具以伪造 `{}` 执行）；`HttpTransport.postStream` 默认回退实现按行切分（原先整包单发导致两个 Provider 全部事件被丢弃）；两 Provider `parseResponse` 对 200 + 错误 JSON 抛出含 message 的异常（原先解析成空白成功响应）；`maxIterations<=0` 与 `pendingUserMessages` 宿主回调抛错收敛为 `AgentEvent.Failed`（原先裸异常逃逸 flow 破坏失败契约）；`lifecyclePlugins` 加 `@Volatile`；Anthropic 序列化合并相邻 Assistant 消息（Messages API 拒绝连续 assistant 角色，宿主构造的此类会话原先每轮 400 永久损坏）。
+  - `ugk-agent-task-runtime-android`：重复任务下次执行锚点改为 max(执行开始, 执行结束)（原先锚定执行开始，执行超间隔时零间隙连转+通知风暴；短执行保持固定频率网格）；`DefaultAgentTaskNotificationSink` 增加 `areNotificationsEnabled()` 与 channel importance 检查（原先 API<33 总开关关闭/渠道禁用时 `notify()` 静默无效仍报成功）。
+  - `pi-schedule-skill-android`：`schedule`/`action` 非对象入参返回结构化 `INVALID_SCHEDULE`/`INVALID_ACTION`（原先 `jsonObject` 抛 IllegalArgumentException 逃过错误码通道）。
+  - `pi-agent-skill-runtime-android`：`SkillRepository` 新增 `reservedSkillIds`，`skill_save` 撞宿主插件 skill id 返回 `SKILL_NAME_RESERVED`（原先撞名使之后每次 run 技能组装永久失败且 agent 无法自愈）；`memory_write` 默认纳入确认票据硬闸（原工具描述承诺 consent 但无强制，`overwrite=true` 可静默销毁用户记忆；宿主可用 `requireMemoryWriteConfirmation=false` 显式关闭）；frontmatter 解析剥离 UTF-8 BOM（原先 Windows 编辑器产物永久 invalid）。
+  - `ugk-terminal-runtime-android`：`LocalHttpServerManager` 元数据 `persist()` 改 staged+rename 原子写（原先进程半写截断即永久端口砖化）；start 达到上限时清扫进程组已死的记录（原先重启后死记录确定性触发 `TOO_MANY_SERVERS`）；start 成功判定从"端口可连"升级为"本服务 token 路径 HTTP 200"（10s 服务预算；raw socket 探测；堵住 bind 竞态下把外来监听者当自己服务器的误报；原先 `waitForPort` 只证明内核层可连）；`close/stopAll/start/status/stop` 改进程级锁（多实例共享服务目录/脚本文件名/端口空间）；失败消息附日志尾部（诊断）。
+  - `pi-terminal-skill-android`：`timeoutMillis` 非数值/非原始类型返回 `INVALID_TIMEOUT`（原先静默回落默认超时）。
+  - `demo-app`：见 `docs/demo-app-version-ledger.md` 1.0.6 条目（会话 store 互斥、flush 出锁、草稿一致性、`reservedSkillIds` 接线）。
+- 已知取证边界：会话 store `delete`/`append` 竞态属结构性数据竞争（代码级实证），设备端 200 轮交错压测在未修复代码上未能确定性复现复活（窗口微秒级），修复以互斥正确性论证 + 新增交错回归用例守护。
+- 门禁验收（2026-09-08，`JAVA_HOME=E:\Android\Android Studio\jbr`）：
+  - 全模块 JVM（`--rerun-tasks` 强制重跑）：`BUILD SUCCESSFUL`，合计 `585` tests / `3` skipped（既有 Windows symlink 用例）/ 0 failure / 0 error；分模块：Core 169、File 13、Schedule 16、Task Runtime 29、System 42、Agent Skill Runtime 89、Terminal Runtime 19、Terminal Skill 41、Demo 167。基线 `560/3/0`，净增 25 例。
+  - `:demo-app:connectedDebugAndroidTest`（AVD `round5_api35`，API 35 x86_64，page size 4 KB）：`30/30` 通过、0 failure（基线 28 + 新增 2）。
+  - `:demo-app:assembleDebug` 通过；APK 元数据 `versionCode 106 / versionName 1.0.6`（见版本台账 1.0.6 条目）。
+- 独立审查（六维度，只读）结论：有条件 PASS（0 BLOCKING / 0 MAJOR / 3 MINOR / 5 NOTE）。按清单修复后复验：
+  - `agent_task_create` 的 `action` 非对象入参统一返回 `INVALID_ACTION`（原先被 `as? JsonObject` 折叠成 `MISSING_ACTION`，与 update 路径不一致），补先红后绿用例；
+  - 两个 Provider 的流式"非 SSE 容错分支"对完整 error JSON body 直接抛出 API error（原先被 `runCatching` 吞掉后降级为空白 Completed，经 3 次 incomplete 重试以笼统失败收场并重打 3 次 API），补先红后绿用例；
+  - 文档分模块计数修正（即本节数字）；
+  - 同批落实审查建议：BOM 处理改为 `\uFEFF` 可见转义；`isTokenServed` 补 `-`/`_` 开头 token 用例；补 OpenAI 侧 `postStream` 默认回退用例；`toAnthropicMessage` 的 Assistant 分支标注"通常由合并路径先消费"（Kotlin when 穷尽性要求保留）。
+  - 审查确认不修的已知项：无 `index` 交错续传为已声明的固有限制（注释声明）；自家 server 极慢冷启动超 10s 时 `PORT_IN_USE` 措辞可能误导（行为正确）。
+- 边界与未执行：未操作真机、未调用真实 Provider/API、未跑 `-CheckPackages` 与 Release 矩阵；arm64（尤其 16 KB）Gate 状态不变。

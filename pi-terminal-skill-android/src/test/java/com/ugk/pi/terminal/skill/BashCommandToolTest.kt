@@ -974,6 +974,35 @@ class BashCommandToolTest {
         }
     }
 
+    @Test
+    fun nonPrimitiveTimeoutMillisFailsInsteadOfSilentlyUsingTheDefault() = runBlocking {
+        val workspace = createWorkspace()
+        val executor = RecordingExecutor()
+        val tool = BashCommandTool(
+            executor = executor,
+            workspaceRoot = workspace,
+            policy = TerminalToolPolicy(requireUserConfirmation = false, defaultTimeoutMillis = 5_000)
+        )
+
+        // A wrong-typed timeoutMillis used to fall through to the default
+        // timeout silently; it must surface as a structured INVALID_TIMEOUT.
+        val result = tool.execute(
+            ToolCall(
+                id = "object-timeout",
+                name = tool.name,
+                input = buildJsonObject {
+                    put("script", "printf ok")
+                    putJsonObject("timeoutMillis") { put("value", 5_000) }
+                }
+            ),
+            ToolExecutionContext(sessionId = "session")
+        )
+
+        assertTrue(result.isError)
+        assertEquals("INVALID_TIMEOUT", errorCode(result))
+        assertEquals(null, executor.lastRequest)
+    }
+
     private companion object {
         fun errorCode(result: ToolResult): String? =
             result.metadata?.get("code")?.toString()?.trim('"')

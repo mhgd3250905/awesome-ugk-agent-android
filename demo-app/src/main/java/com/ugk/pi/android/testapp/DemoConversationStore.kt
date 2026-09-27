@@ -170,6 +170,12 @@ class DemoConversationStore(context: Context) {
 
     fun getActiveConversation(): DemoConversation = ensureActive()
 
+    // create/delete/rename are read-modify-write sequences like append and
+    // must hold the same store monitor: a background appendMessagesAndFlush
+    // runs concurrently and, without mutual exclusion, a snapshot read before
+    // the other writer's change lands can be written back after it —
+    // resurrecting a deleted conversation or dropping its appended messages.
+    @Synchronized
     fun create(title: String = DEFAULT_TITLE): DemoConversation {
         val now = System.currentTimeMillis()
         val conversation = DemoConversation(
@@ -237,22 +243,20 @@ class DemoConversationStore(context: Context) {
      * process kill cannot discard a scheduled result merely because the write
      * was still queued behind an asynchronous apply().
      */
-    @Synchronized
     fun appendMessagesAndFlush(
         conversationId: String,
         messages: List<DemoStoredMessage>,
         titleUpdate: String? = null,
         activateConversation: Boolean = true
     ): DemoConversation? {
-        val updated = appendMessages(conversationId, messages, titleUpdate, activateConversation) ?: return null
-        try {
-            writeExecutor.submit { drainPendingWrites(syncToDisk = true) }.get()
-        } catch (error: InterruptedException) {
-            Thread.currentThread().interrupt()
-            throw error
-        } catch (error: ExecutionException) {
-            throw error.cause ?: error
-        }
+        // Only the mutation holds the store monitor. Waiting for the disk
+        // commit must NOT: the commit can take tens of milliseconds on slow
+        // storage, and every foreground save/append would block on the store
+        // monitor (i.e. on disk I/O) for that duration.
+        val updated = synchronized(this) {
+            appendMessages(conversationId, messages, titleUpdate, activateConversation)
+        } ?: return null
+        flushSync()
         return updated
     }
 
@@ -263,9 +267,13 @@ class DemoConversationStore(context: Context) {
      * process kill cannot discard the last scheduled result merely because
      * the write was queued behind an asynchronous apply().
      */
-    @Synchronized
     fun saveAndFlush(conversation: DemoConversation) {
-        save(conversation)
+        synchronized(this) { save(conversation) }
+        flushSync()
+    }
+
+    /** Waits for the single writer to commit everything to disk. */
+    private fun flushSync() {
         try {
             writeExecutor.submit { drainPendingWrites(syncToDisk = true) }.get()
         } catch (error: InterruptedException) {
@@ -278,14 +286,25 @@ class DemoConversationStore(context: Context) {
 
     fun update(conversation: DemoConversation) = save(conversation)
 
+    @Synchronized
     fun rename(id: String, title: String): DemoConversation? {
-        val conversation = get(id) ?: return null
-        conversation.title = normalizeStoredTitle(title)
-        conversation.updatedAt = System.currentTimeMillis()
-        save(conversation)
-        return conversation
+        // Read-modify-write in ONE critical section. The previous
+        // get()->save() pair read outside the lock and save() replaces the
+        // conversation wholesale, so any message a background scheduled run
+        // appended between the two calls was silently overwritten with the
+        // stale snapshot.
+        val current = readAll()
+        val conversation = current.firstOrNull { it.id == id } ?: return null
+        val renamed = conversation.copy(
+            title = normalizeStoredTitle(title),
+            updatedAt = System.currentTimeMillis()
+        )
+        val all = current.filterNot { it.id == renamed.id } + renamed
+        writeAll(keepNewestDemoConversations(all, MAX_CONVERSATIONS))
+        return renamed
     }
 
+    @Synchronized
     fun delete(id: String): DemoConversation? {
         val remaining = readAll().filterNot { it.id == id }
         if (remaining.size == readAll().size) return null
