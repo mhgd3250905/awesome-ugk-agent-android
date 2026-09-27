@@ -75,7 +75,8 @@ class AndroidAutomationAgentIntegrationInstrumentedTest {
         assertTrue(tools.any { it.name == "screen_read_ui_tree" && it !is UserConfirmationRequiredTool })
         assertTrue(plugin.skills().any { it.id == "android-accessibility-screen-automation" })
         assertTrue(plugin.skills().any { it.id == "android-clipboard-control" })
-        assertTrue(plugin.agentInstructions().any { it.contains("snapshot-first") })
+        assertTrue(plugin.agentInstructions().any { it.contains("fresh screenshot as primary evidence") })
+        assertTrue(plugin.agentInstructions().none { it.contains("snapshot-first") })
         assertTrue(plugin.agentInstructions().any { it.contains("screen_capture_visual") })
     }
 

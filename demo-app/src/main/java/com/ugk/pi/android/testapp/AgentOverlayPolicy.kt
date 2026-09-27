@@ -15,6 +15,14 @@ data class AgentOverlayStep(
     val resultSummary: String? = null,
 )
 
+/** A bounded recent conversation snapshot; view IDs stay stable during streaming updates. */
+data class AgentOverlayMessage(
+    val id: String,
+    val role: String,
+    val content: String,
+    val imagePaths: List<String> = emptyList()
+)
+
 data class AgentOverlayConfirmationButton(
     val id: String,
     val label: String,
@@ -80,6 +88,10 @@ data class AgentOverlaySnapshot(
     val pendingConfirmation: AgentOverlayConfirmation? = null,
     val isBusy: Boolean = false,
     val queuedMessages: Int = 0,
+    val conversationId: String? = null,
+    val runId: String? = null,
+    val messages: List<AgentOverlayMessage> = emptyList(),
+    val process: DemoChatProcessState? = null,
 )
 
 /**

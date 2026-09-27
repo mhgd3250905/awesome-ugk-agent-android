@@ -8,6 +8,7 @@ Android Agent Runtime SDK — 通用 AI Agent 工具循环框架，附带无障�
 :ugk-pi-android              — Agent Runtime 核心（AgentRuntime, AgentSession, AgentTool, LLMProvider, AndroidSkill）
 :pi-file-skill-android       — 应用私有文件工具 skill
 :pi-schedule-skill-android   — 定时任务 skill
+:pi-attention-skill-android  — 可选的即时通知、重要悬浮提醒及受限交互控件 skill（独立 AAR）
 :ugk-agent-task-runtime-android — Android 定时任务持久化、AlarmManager/JobScheduler 与通知运行时
 :pi-system-skill-android     — 系统设置 / 权限 / Intent skill
 :pi-agent-skill-runtime-android — 文件型 skill 运行时（SKILL.md 发现/解析/按加载策略注入）+ agent-memory 与 android-skill-creator 预制 skills
@@ -41,16 +42,18 @@ API 内容不得复制进源码、文档或提交；Release 默认不嵌入 API 
 # 构建原有无障碍 demo
 .\gradlew.bat :demo-app:assembleDebug --console=plain
 
-# 跑全部单元测试
+# 跑全部单元测试（十个 testDebugUnitTest：SDK、各 skill、terminal runtime、demo-app）
 .\gradlew.bat `
   :ugk-pi-android:testDebugUnitTest `
   :pi-file-skill-android:testDebugUnitTest `
   :pi-schedule-skill-android:testDebugUnitTest `
+  :pi-attention-skill-android:testDebugUnitTest `
   :ugk-agent-task-runtime-android:testDebugUnitTest `
   :pi-system-skill-android:testDebugUnitTest `
   :pi-agent-skill-runtime-android:testDebugUnitTest `
   :ugk-terminal-runtime-android:testDebugUnitTest `
   :pi-terminal-skill-android:testDebugUnitTest `
+  :demo-app:testDebugUnitTest `
   --console=plain
 
 # 终端 Runtime 的双 applicationId 仪器测试（设备在线后执行）
@@ -104,12 +107,17 @@ v1 Terminal Core Profile：Bash、curl、OpenSSL、SQLite、CPython 3.14.6；Nod
 | 文件 | 说明 |
 |------|------|
 | `MainActivity.kt` | 主界面：对话 UI + AgentRuntime 构建 + skill instructions |
+| `DemoDelayedTaskController.kt` | 单对话单次/周期计时任务的确认后计时、独占状态、中断标记和取消 |
+| `DemoDelayedMessageDispatcher.kt` | 到点向当前会话追加消息并启动原 AgentRuntime |
+| `DemoDelayedTaskDialog.kt` | 定时任务确认与等待共用的原生卡片、倒计时和操作入口 |
 | `AgentAccessibilityService.kt` | 无障碍服务，静态 `instance` 给 Tool 使用 |
 | `AgentFloatingWindow.kt` | 可拖动、缩放的跨 App 悬浮窗；按过程到最终回答的时间线展示 Agent 状态 |
+| `UrgentTakeoverView.kt` | 整屏重要提醒及由 Agent 指定的有限按钮、输入控件 |
+| `DemoUrgentInteractionDispatcher.kt` | 悬浮控件事件绑定原会话并按序启动 SDK_EVENT 回合 |
 | `pi-system-skill-android/src/main/.../ScreenAutomationTools.kt` | SDK 统一的 screen read/find/action/gesture/IME/global Tools |
 | `pi-system-skill-android/src/main/.../AccessibilityScreenAutomationBackend.kt` | AccessibilityService 默认 backend、snapshot/target 校验和 fail-closed 恢复 |
 | `pi-system-skill-android/src/main/.../ScreenAutomationSkills.kt` | Android Accessibility 屏幕自动化 Skill 与确认/验证策略 |
 | `ApiSettings.kt` | API 源配置 + SharedPreferences 持久化 |
 | `Ui.kt` | 动态主题色彩 Token 与代码构建 UI 的样式辅助 |
 
-需要权限：无障碍服务 + SYSTEM_ALERT_WINDOW（悬浮窗）
+按功能申请：无障碍服务、SYSTEM_ALERT_WINDOW（悬浮窗）、CAMERA（拍照）、POST_NOTIFICATIONS（Android 13+ 通知），并检查实际通知分类开关。选图/导入走系统选择器，私有文件与终端工作区不申请广泛存储权限。后台耗电、自启动及任务卡片锁定属于可选建议，不将阅读记录当作系统授权。权限引导及完整功能核对见 `docs/demo-app-permission-guide.md`。

@@ -19,20 +19,23 @@ import com.ugk.pi.android.SkillRepository
 import com.ugk.pi.android.UserConfirmationDialogPresenter
 import com.ugk.pi.android.ScheduleTaskAgentPlugin
 import com.ugk.pi.terminal.skill.TerminalAgentPlugin
+import com.ugk.pi.attention.AgentAttentionPlugin
+import com.ugk.pi.attention.AndroidNotificationPublisher
+import com.ugk.pi.attention.UrgentMessagePresenter
 import java.io.File
 
 /**
- * Single composition root for both foreground and scheduled Agent runs.
- *
- * The background JobService never creates an Activity. It asks the host for
- * this same capability graph with a headless confirmation presenter and the
- * current persisted authorization setting.
+ * Composition root for the Demo conversation runtime. A legacy headless
+ * caller remains for compatibility, but the interactive app now registers
+ * its own one-slot delayed-conversation tool.
  */
 internal object DemoAgentRuntimeFactory {
     fun create(
         context: Context,
-        scheduleStore: AgentTaskStore,
-        scheduleScheduler: AgentTaskScheduler,
+        scheduleStore: AgentTaskStore? = null,
+        scheduleScheduler: AgentTaskScheduler? = null,
+        delayedTaskController: DemoDelayedTaskController? = null,
+        urgentMessagePresenter: UrgentMessagePresenter? = null,
         confirmationPresenter: UserConfirmationDialogPresenter,
         shouldBypassConfirmation: () -> Boolean,
         toolDecorator: AgentToolDecorator = AgentToolDecorator.Identity,
@@ -43,10 +46,13 @@ internal object DemoAgentRuntimeFactory {
     ): AgentRuntime {
         val appContext = context.applicationContext
         val config = ApiProviderSettingsStore(appContext).activeConfig()
-        val provider: LLMProvider = config
-            ?.let(ProviderProfile::from)
-            ?.createRuntimeProvider(httpTransport)
-            ?: MissingApiProvider
+        val profile = config?.let(ProviderProfile::from)
+        val baseProvider: LLMProvider = profile?.createRuntimeProvider(httpTransport) ?: MissingApiProvider
+        val provider: LLMProvider = if (profile != null && delayedTaskController != null && !isBackgroundRun) {
+            DemoModelIntentRouter(baseProvider, profile)
+        } else {
+            baseProvider
+        }
 
         // File-backed skills live in the app-private agent-skills directory;
         // packaged skills are seeded once and never overwrite user changes.
@@ -57,11 +63,26 @@ internal object DemoAgentRuntimeFactory {
         val importedFilePlugin = DemoImportedFilePlugin(
             DemoFileImportStore(appContext).workspaceRoot
         )
-        val schedulePlugin = ScheduleTaskAgentPlugin(
-            store = scheduleStore,
-            scheduler = scheduleScheduler,
-            supportsBackgroundPromptExecution = supportsBackgroundPromptExecution
+        val attentionPlugin = AgentAttentionPlugin(
+            notificationPublisher = AndroidNotificationPublisher(
+                appContext,
+                DemoNotificationSettings.config()
+            ),
+            urgentPresenter = urgentMessagePresenter
         )
+        val delayPlugin = delayedTaskController?.let { DemoDelayAgentPlugin(it) }
+        val schedulePlugin = if (delayPlugin == null &&
+            scheduleStore != null && scheduleScheduler != null) {
+            // Compatibility for the retired background executor only. The
+            // interactive Demo exposes the single-conversation delay instead.
+            ScheduleTaskAgentPlugin(
+                store = scheduleStore,
+                scheduler = scheduleScheduler,
+                supportsBackgroundPromptExecution = supportsBackgroundPromptExecution
+            )
+        } else {
+            null
+        }
         val automationPlugin = AndroidAutomationAgentPlugin(
             context = appContext,
             confirmationPresenter = confirmationPresenter,
@@ -84,8 +105,10 @@ internal object DemoAgentRuntimeFactory {
             shouldBypassConfirmation = shouldBypassConfirmation,
             toolDecorator = toolDecorator
         )
-        val reservedSkillIds = listOf(
+        val reservedSkillIds = listOfNotNull(
             importedFilePlugin,
+            attentionPlugin,
+            delayPlugin,
             schedulePlugin,
             automationPlugin,
             terminalPlugin
@@ -113,8 +136,13 @@ internal object DemoAgentRuntimeFactory {
                 )
             )
             .register(importedFilePlugin)
-            .register(schedulePlugin)
-            .register(automationPlugin)
+            .register(attentionPlugin)
+        if (delayPlugin != null) {
+            builder.register(delayPlugin)
+        } else if (schedulePlugin != null) {
+            builder.register(schedulePlugin)
+        }
+        builder.register(automationPlugin)
             .register(terminalPlugin)
             .register(
                 AgentSkillRuntimePlugin(

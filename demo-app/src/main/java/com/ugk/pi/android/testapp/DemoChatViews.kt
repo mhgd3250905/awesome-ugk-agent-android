@@ -24,12 +24,20 @@ import android.widget.Toast
 import kotlin.math.roundToInt
 
 /**
- * Chat-first 展示组件：消息保持轻量，Agent 过程以默认收起的可展开卡片承载。
+ * Chat-first 展示组件：消息保持轻量，Agent 过程以默认收起的单行入口承载。
  *
  * 该文件只负责 View 和展示回调，不持有 Activity、Runtime 或会话状态。
  * 组装方可使用 [DemoChatMessageView.bind]、[DemoChatMessageView.updateText]、
  * [DemoChatProcessCardView.bind] 和 [DemoChatProcessCardView.setExpanded] 更新 UI。
  */
+
+/** Shared views keep the main chat unchanged; overlays opt into compact spacing. */
+enum class DemoChatStyle {
+    STANDARD, COMPACT;
+
+    fun size(standard: Int, compact: Int): Int = if (this == COMPACT) compact else standard
+    fun size(standard: Float, compact: Float): Float = if (this == COMPACT) compact else standard
+}
 
 /** 消息在聊天流中的视觉角色。 */
 enum class DemoChatMessageRole(val accessibilityLabel: String) {
@@ -47,7 +55,8 @@ enum class DemoChatProcessStage(
     WAITING_CONFIRMATION("等待确认", { Ui.Warning }),
     RESULT("收到结果", { Ui.PrimaryPressed }),
     COMPLETED("已完成", { Ui.Success }),
-    ERROR("执行失败", { Ui.Danger });
+    ERROR("执行失败", { Ui.Danger }),
+    STOPPED("已停止", { Ui.TextSecondary });
 
     val accentColor: Int get() = accentColorProvider()
 }
@@ -58,6 +67,7 @@ enum class DemoChatProcessStepStatus {
     ACTIVE,
     WAITING,
     ERROR,
+    STOPPED,
     PENDING
 }
 
@@ -77,7 +87,10 @@ data class DemoChatProcessState(
     val steps: List<DemoChatProcessStep> = emptyList(),
     val footerLeft: CharSequence? = null,
     val footerRight: CharSequence? = null,
-    val expanded: Boolean = false
+    val expanded: Boolean = false,
+    val summary: CharSequence? = null,
+    val isRunning: Boolean = stage == DemoChatProcessStage.THINKING ||
+        stage == DemoChatProcessStage.TOOL_CALL || stage == DemoChatProcessStage.RESULT
 )
 
 /**
@@ -88,22 +101,26 @@ data class DemoChatProcessState(
  */
 class DemoChatMessageView @JvmOverloads constructor(
     context: Context,
-    attrs: AttributeSet? = null
+    attrs: AttributeSet? = null,
+    private val style: DemoChatStyle = DemoChatStyle.STANDARD
 ) : FrameLayout(context, attrs) {
 
+    /** An overlay host may supply a preview window with its own WindowManager type. */
+    var onImageClick: ((String) -> Unit)? = null
+
     private val userBubble = TextView(context).apply {
-        setTextSize(TypedValue.COMPLEX_UNIT_SP, 15f)
+        setTextSize(TypedValue.COMPLEX_UNIT_SP, style.size(15f, 13f))
         setTextColor(DemoChatPalette.onUserBubble)
         typeface = Typeface.create("sans-serif", Typeface.NORMAL)
-        setLineSpacing(0f, 1.18f)
+        setLineSpacing(0f, style.size(1.18f, 1.1f))
         letterSpacing = 0.012f
         includeFontPadding = false
-        minHeight = context.chatDp(40)
+        minHeight = context.chatDp(style.size(40, 32))
         setPadding(
-            context.chatDp(16),
-            context.chatDp(11),
-            context.chatDp(16),
-            context.chatDp(11)
+            context.chatDp(style.size(16, 10)),
+            context.chatDp(style.size(11, 8)),
+            context.chatDp(style.size(16, 10)),
+            context.chatDp(style.size(11, 8))
         )
         background = asymmetricRoundedBackground(
             context = context,
@@ -129,7 +146,7 @@ class DemoChatMessageView @JvmOverloads constructor(
     private val userAvatar = ImageView(context).apply {
         setImageResource(R.drawable.ic_person)
         scaleType = ImageView.ScaleType.CENTER_INSIDE
-        setPadding(context.chatDp(7), context.chatDp(7), context.chatDp(7), context.chatDp(7))
+        setPadding(context.chatDp(style.size(7, 5)), context.chatDp(style.size(7, 5)), context.chatDp(style.size(7, 5)), context.chatDp(style.size(7, 5)))
         imageTintList = android.content.res.ColorStateList.valueOf(DemoChatPalette.onUserAvatar)
         background = roundedBackground(
             context,
@@ -163,12 +180,12 @@ class DemoChatMessageView @JvmOverloads constructor(
 
     private val assistantBubble = LinearLayout(context).apply {
         orientation = LinearLayout.VERTICAL
-        minimumHeight = context.chatDp(40)
+        minimumHeight = context.chatDp(style.size(40, 32))
         setPadding(
-            context.chatDp(16),
-            context.chatDp(12),
-            context.chatDp(16),
-            context.chatDp(12)
+            context.chatDp(style.size(16, 10)),
+            context.chatDp(style.size(12, 8)),
+            context.chatDp(style.size(16, 10)),
+            context.chatDp(style.size(12, 8))
         )
         background = asymmetricRoundedBackground(
             context = context,
@@ -183,10 +200,10 @@ class DemoChatMessageView @JvmOverloads constructor(
     }
 
     private fun createAssistantTextView(): TextView = TextView(context).apply {
-        setTextSize(TypedValue.COMPLEX_UNIT_SP, 15f)
+        setTextSize(TypedValue.COMPLEX_UNIT_SP, style.size(15f, 13f))
         setTextColor(DemoChatPalette.textPrimary)
         typeface = Typeface.create("sans-serif", Typeface.NORMAL)
-        setLineSpacing(0f, 1.16f)
+        setLineSpacing(0f, style.size(1.16f, 1.1f))
         letterSpacing = 0.012f
         includeFontPadding = false
         setTextIsSelectable(true)
@@ -215,8 +232,8 @@ class DemoChatMessageView @JvmOverloads constructor(
         orientation = LinearLayout.HORIZONTAL
         gravity = Gravity.TOP or Gravity.END
         addView(userContentColumn, LinearLayout.LayoutParams(0, LinearLayout.LayoutParams.WRAP_CONTENT, 1f))
-        addView(userAvatar, LinearLayout.LayoutParams(context.chatDp(32), context.chatDp(32)).apply {
-            marginStart = context.chatDp(8)
+        addView(userAvatar, LinearLayout.LayoutParams(context.chatDp(style.size(32, 24)), context.chatDp(style.size(32, 24))).apply {
+            marginStart = context.chatDp(style.size(8, 6))
             topMargin = context.chatDp(2)
         })
     }
@@ -225,9 +242,9 @@ class DemoChatMessageView @JvmOverloads constructor(
     private val assistantContainer = LinearLayout(context).apply {
         orientation = LinearLayout.HORIZONTAL
         gravity = Gravity.TOP
-        val avatarParams = LinearLayout.LayoutParams(context.chatDp(30), context.chatDp(30)).apply {
+        val avatarParams = LinearLayout.LayoutParams(context.chatDp(style.size(30, 24)), context.chatDp(style.size(30, 24))).apply {
             topMargin = context.chatDp(2)
-            marginEnd = context.chatDp(8)
+            marginEnd = context.chatDp(style.size(8, 6))
         }
         addView(assistantAvatar, avatarParams)
 
@@ -239,17 +256,17 @@ class DemoChatMessageView @JvmOverloads constructor(
             ))
             addView(assistantCopyButton, copyButtonLayoutParams(Gravity.START))
         }
-        addView(rightColumn, LinearLayout.LayoutParams(0, LinearLayout.LayoutParams.WRAP_CONTENT, 0.86f))
+        addView(rightColumn, LinearLayout.LayoutParams(0, LinearLayout.LayoutParams.WRAP_CONTENT, style.size(0.86f, 1f)))
     }
 
     init {
         clipChildren = false
         clipToPadding = false
         setPadding(
-            context.chatDp(12),
-            context.chatDp(6),
-            context.chatDp(12),
-            context.chatDp(6)
+            context.chatDp(style.size(12, 8)),
+            context.chatDp(style.size(6, 3)),
+            context.chatDp(style.size(12, 8)),
+            context.chatDp(style.size(6, 3))
         )
         importantForAccessibility = View.IMPORTANT_FOR_ACCESSIBILITY_YES
         addView(
@@ -344,7 +361,7 @@ class DemoChatMessageView @JvmOverloads constructor(
                         context.chatDp(190),
                         context.chatDp(190)
                     ).apply {
-                        bottomMargin = context.chatDp(6)
+                        bottomMargin = context.chatDp(style.size(6, 3))
                     })
                 } else {
                     userImagesContainer.visibility = View.GONE
@@ -367,7 +384,7 @@ class DemoChatMessageView @JvmOverloads constructor(
                             context.chatDp(100),
                             context.chatDp(100)
                         ).apply {
-                            if (i < validPaths.size - 1) marginEnd = context.chatDp(6)
+                            if (i < validPaths.size - 1) marginEnd = context.chatDp(style.size(6, 3))
                         })
                         count++
                     }
@@ -377,7 +394,7 @@ class DemoChatMessageView @JvmOverloads constructor(
                         LinearLayout.LayoutParams.WRAP_CONTENT,
                         LinearLayout.LayoutParams.WRAP_CONTENT
                     ).apply {
-                        bottomMargin = context.chatDp(6)
+                        bottomMargin = context.chatDp(style.size(6, 3))
                     })
                 } else {
                     userImagesContainer.visibility = View.GONE
@@ -406,7 +423,7 @@ class DemoChatMessageView @JvmOverloads constructor(
                             context.chatDp(100),
                             context.chatDp(100)
                         ).apply {
-                            if ((i % itemsPerRow) < itemsPerRow - 1) marginEnd = context.chatDp(6)
+                            if ((i % itemsPerRow) < itemsPerRow - 1) marginEnd = context.chatDp(style.size(6, 3))
                         })
                         count++
                     }
@@ -417,7 +434,7 @@ class DemoChatMessageView @JvmOverloads constructor(
                         LinearLayout.LayoutParams.WRAP_CONTENT,
                         LinearLayout.LayoutParams.WRAP_CONTENT
                     ).apply {
-                        bottomMargin = context.chatDp(6)
+                        bottomMargin = context.chatDp(style.size(6, 3))
                     })
                     addedAny = true
                 }
@@ -426,7 +443,7 @@ class DemoChatMessageView @JvmOverloads constructor(
                         LinearLayout.LayoutParams.WRAP_CONTENT,
                         LinearLayout.LayoutParams.WRAP_CONTENT
                     ).apply {
-                        bottomMargin = context.chatDp(6)
+                        bottomMargin = context.chatDp(style.size(6, 3))
                     })
                     addedAny = true
                 }
@@ -466,7 +483,8 @@ class DemoChatMessageView @JvmOverloads constructor(
             isFocusable = true
             contentDescription = "已发送图片，点击全屏预览"
             setOnClickListener {
-                showFullImageDialog(context, imagePath)
+                val open = onImageClick
+                if (open != null) open(imagePath) else showFullImageDialog(context, imagePath)
             }
         }
     }
@@ -511,7 +529,7 @@ class DemoChatMessageView @JvmOverloads constructor(
                 assistantBubble.removeAllViews()
                 createAssistantTextView().also { assistantBubble.addView(it) }
             }
-            DemoMarkdownFormatter.setMarkdown(tv, textContent, isStreaming = isStreaming)
+            DemoMarkdownFormatter.setMarkdown(tv, textContent, isStreaming = isStreaming, style = style)
             return
         }
 
@@ -531,18 +549,18 @@ class DemoChatMessageView @JvmOverloads constructor(
                         assistantBubble.addView(newTv, childIndex)
                         newTv
                     }
-                    DemoMarkdownFormatter.setMarkdown(tv, block.markdown, isStreaming = isStreaming)
+                    DemoMarkdownFormatter.setMarkdown(tv, block.markdown, isStreaming = isStreaming, style = style)
                     childIndex++
                 }
                 is DemoContentBlock.Code -> {
                     val existing = assistantBubble.getChildAt(childIndex) as? DemoCodeBlockView
-                    val codeView = existing ?: DemoCodeBlockView(context).apply {
+                    val codeView = existing ?: DemoCodeBlockView(context, style = style).apply {
                         val lp = LinearLayout.LayoutParams(
                             LinearLayout.LayoutParams.MATCH_PARENT,
                             LinearLayout.LayoutParams.WRAP_CONTENT
                         ).apply {
-                            topMargin = context.chatDp(6)
-                            bottomMargin = context.chatDp(6)
+                            topMargin = context.chatDp(style.size(6, 3))
+                            bottomMargin = context.chatDp(style.size(6, 3))
                         }
                         layoutParams = lp
                     }
@@ -557,13 +575,13 @@ class DemoChatMessageView @JvmOverloads constructor(
                 }
                 is DemoContentBlock.Table -> {
                     val existing = assistantBubble.getChildAt(childIndex) as? DemoTableView
-                    val tableView = existing ?: DemoTableView(context).apply {
+                    val tableView = existing ?: DemoTableView(context, style = style).apply {
                         val lp = LinearLayout.LayoutParams(
                             LinearLayout.LayoutParams.MATCH_PARENT,
                             LinearLayout.LayoutParams.WRAP_CONTENT
                         ).apply {
-                            topMargin = context.chatDp(6)
-                            bottomMargin = context.chatDp(6)
+                            topMargin = context.chatDp(style.size(6, 3))
+                            bottomMargin = context.chatDp(style.size(6, 3))
                         }
                         layoutParams = lp
                     }
@@ -598,7 +616,7 @@ class DemoChatMessageView @JvmOverloads constructor(
     override fun onMeasure(widthMeasureSpec: Int, heightMeasureSpec: Int) {
         val availableWidth = MeasureSpec.getSize(widthMeasureSpec)
         val maxBubbleWidth = if (availableWidth > 0) {
-            (availableWidth * MAX_BUBBLE_WIDTH_FRACTION).roundToInt()
+            (availableWidth * style.size(MAX_BUBBLE_WIDTH_FRACTION, 0.88f)).roundToInt()
         } else {
             context.chatDp(DEFAULT_BUBBLE_MAX_WIDTH_DP)
         }
@@ -608,7 +626,7 @@ class DemoChatMessageView @JvmOverloads constructor(
 
     private fun createCopyButton(): TextView = TextView(context).apply {
         text = "复制"
-        setTextSize(TypedValue.COMPLEX_UNIT_SP, 12f)
+        setTextSize(TypedValue.COMPLEX_UNIT_SP, style.size(12f, 11f))
         setTextColor(DemoChatPalette.textSecondary)
         gravity = Gravity.CENTER
         minWidth = context.chatDp(52)
@@ -627,7 +645,7 @@ class DemoChatMessageView @JvmOverloads constructor(
             LinearLayout.LayoutParams.WRAP_CONTENT
         ).apply {
             this.gravity = gravity
-            topMargin = context.chatDp(4)
+            topMargin = context.chatDp(style.size(4, 2))
         }
 
     private fun copyVisibleMessageToClipboard() {
@@ -647,22 +665,33 @@ class DemoChatMessageView @JvmOverloads constructor(
 }
 
 /**
- * Agent 过程卡片。
+ * 步骤展开详情专用的内嵌滚动容器。
  *
- * 卡片默认收起，外层卡片和每个过程步骤拥有独立的展开状态。标题行始终展示阶段、
- * 工具名（如有）和外层展开状态；步骤默认只展示状态和一行摘要，详情由步骤自己的
- * 点击目标按需展开。
- */
-/**
- * 步骤展开详情专用的固定高度内嵌滚动容器。
- *
- * 采用固定高度确保大段思考在流式增长时外部页面零抖动；
+ * 主界面采用固定高度稳定流式布局；悬浮窗短内容自适应，到高度上限后在内部滚动。
  * 显式禁用原生系统滚动条，从根本上消除流式刷新时滚动条因滑块重算而引发的上下跳动与闪烁。
  */
 class StepDetailScrollView @JvmOverloads constructor(
     context: Context,
     attrs: AttributeSet? = null
 ) : ScrollView(context, attrs) {
+    /** Optional ceiling for hosts using WRAP_CONTENT; null preserves fixed-height behavior. */
+    var maxHeightPx: Int? = null
+        set(value) {
+            field = value
+            requestLayout()
+        }
+
+    override fun onMeasure(widthMeasureSpec: Int, heightMeasureSpec: Int) {
+        val limit = maxHeightPx
+        val mode = MeasureSpec.getMode(heightMeasureSpec)
+        val boundedHeight = if (limit != null && mode != MeasureSpec.EXACTLY) {
+            val available = if (mode == MeasureSpec.UNSPECIFIED) limit
+                else minOf(limit, MeasureSpec.getSize(heightMeasureSpec))
+            MeasureSpec.makeMeasureSpec(available, MeasureSpec.AT_MOST)
+        } else heightMeasureSpec
+        super.onMeasure(widthMeasureSpec, boundedHeight)
+    }
+
     init {
         isNestedScrollingEnabled = true
         isVerticalScrollBarEnabled = false      // 彻底禁用原生滚动条，消除高频追加文本时的滑块闪烁与跳动
@@ -688,630 +717,6 @@ class StepDetailScrollView @JvmOverloads constructor(
             parent?.requestDisallowInterceptTouchEvent(true)
         }
         return super.onInterceptTouchEvent(ev)
-    }
-}
-
-/**
- * Agent 过程卡片。
- *
- * 卡片默认收起，外层卡片和每个过程步骤拥有独立的展开状态。标题行始终展示阶段、
- * 工具名（如有）和外层展开状态；步骤默认只展示状态和一行摘要，详情由步骤自己的
- * 点击目标按需展开。
- */
-class DemoChatProcessCardView @JvmOverloads constructor(
-    context: Context,
-    attrs: AttributeSet? = null
-) : LinearLayout(context, attrs) {
-
-    private class StepRowHolder(
-        val rowView: View,
-        val indicatorView: TextView,
-        val titleView: TextView,
-        val compactDetailView: TextView?,
-        val detailScrollView: StepDetailScrollView?,
-        val detailTextView: TextView?,
-        val disclosureView: TextView,
-        val isExpanded: Boolean
-    )
-
-    private val stepHolders = mutableMapOf<String, StepRowHolder>()
-
-    private val header = LinearLayout(context)
-    private val headerIcon = ImageView(context)
-    private val headerTitle = TextView(context)
-    private val headerMeta = TextView(context)
-    private val expansionView = TextView(context)
-    private val collapsedSummaryView = TextView(context)
-    private val stepsContainer = LinearLayout(context)
-    private val footer = LinearLayout(context)
-    private val footerLeftView = TextView(context)
-    private val footerRightView = TextView(context)
-    private val collapseFooterView = TextView(context)
-
-    private var currentState = DemoChatProcessState(DemoChatProcessStage.THINKING)
-    private var expanded = false
-    private val expandedStepIds = linkedSetOf<String>()
-    private var expandedChangeListener: ((Boolean) -> Unit)? = null
-    private var stepExpandedChangeListener: ((String, Boolean) -> Unit)? = null
-
-    init {
-        orientation = VERTICAL
-        setPadding(
-            context.chatDp(14),
-            context.chatDp(8),
-            context.chatDp(14),
-            context.chatDp(10)
-        )
-        minimumHeight = context.chatDp(56)
-        isClickable = true
-        isFocusable = true
-        importantForAccessibility = View.IMPORTANT_FOR_ACCESSIBILITY_YES
-        background = processCardBackground(context)
-
-        header.orientation = HORIZONTAL
-        header.gravity = Gravity.CENTER_VERTICAL
-        header.minimumHeight = context.chatDp(44)
-        header.importantForAccessibility = View.IMPORTANT_FOR_ACCESSIBILITY_NO
-
-        configureHeaderIcon()
-        configureHeaderTitle()
-        configureHeaderMeta()
-        configureExpansionView()
-        configureCollapsedSummary()
-        configureStepsContainer()
-        configureFooter()
-        configureCollapseFooter()
-
-        header.addView(
-            headerIcon,
-            LayoutParams(context.chatDp(32), context.chatDp(32)).apply {
-                marginEnd = context.chatDp(8)
-            }
-        )
-        val headerText = LinearLayout(context).apply {
-            orientation = VERTICAL
-            gravity = Gravity.CENTER_VERTICAL
-            addView(headerTitle, LayoutParams(LayoutParams.MATCH_PARENT, LayoutParams.WRAP_CONTENT))
-            addView(headerMeta, LayoutParams(LayoutParams.MATCH_PARENT, LayoutParams.WRAP_CONTENT))
-        }
-        header.addView(headerText, LayoutParams(0, LayoutParams.WRAP_CONTENT, 1f))
-        header.addView(
-            expansionView,
-            LayoutParams(LayoutParams.WRAP_CONTENT, LayoutParams.WRAP_CONTENT).apply {
-                marginStart = context.chatDp(8)
-            }
-        )
-        addView(header, LayoutParams(LayoutParams.MATCH_PARENT, LayoutParams.WRAP_CONTENT))
-        addView(
-            collapsedSummaryView,
-            LayoutParams(LayoutParams.MATCH_PARENT, LayoutParams.WRAP_CONTENT)
-        )
-        addView(
-            stepsContainer,
-            LayoutParams(LayoutParams.MATCH_PARENT, LayoutParams.WRAP_CONTENT)
-        )
-        footer.addView(
-            footerLeftView,
-            LayoutParams(0, LayoutParams.WRAP_CONTENT, 1f)
-        )
-        footer.addView(
-            footerRightView,
-            LayoutParams(LayoutParams.WRAP_CONTENT, LayoutParams.WRAP_CONTENT)
-        )
-        addView(footer, LayoutParams(LayoutParams.MATCH_PARENT, LayoutParams.WRAP_CONTENT))
-        addView(
-            collapseFooterView,
-            LayoutParams(LayoutParams.MATCH_PARENT, context.chatDp(44))
-        )
-
-        setOnClickListener {
-            setExpandedInternal(!expanded, notifyListener = true)
-        }
-        bind(currentState)
-    }
-
-    /** 绑定完整过程状态；不会触发展开回调，适合由外部状态刷新驱动。 */
-    fun bind(state: DemoChatProcessState) {
-        currentState = DemoChatProcessState(
-            stage = state.stage,
-            toolName = state.toolName?.toString()?.takeIf { it.isNotBlank() },
-            resultSummary = state.resultSummary?.toString()?.takeIf { it.isNotBlank() },
-            steps = state.steps,
-            footerLeft = state.footerLeft?.toString()?.takeIf { it.isNotBlank() },
-            footerRight = state.footerRight?.toString()?.takeIf { it.isNotBlank() },
-            expanded = state.expanded
-        )
-        val stepIds = currentState.steps.mapTo(linkedSetOf()) { it.id }
-        expandedStepIds.retainAll(stepIds)
-        headerMeta.text = buildHeaderMeta()
-        collapsedSummaryView.text = buildCollapsedSummary()
-        renderSteps()
-        footerLeftView.text = currentState.footerLeft ?: ""
-        footerRightView.text = currentState.footerRight ?: ""
-        footer.visibility = if (currentState.steps.isEmpty()) View.GONE else View.VISIBLE
-
-        setExpandedInternal(currentState.expanded, notifyListener = false)
-    }
-
-    /** 用分散参数更新过程卡片，便于事件流直接映射到 View。 */
-    fun update(
-        stage: DemoChatProcessStage,
-        toolName: CharSequence? = null,
-        resultSummary: CharSequence? = null,
-        steps: List<DemoChatProcessStep> = emptyList(),
-        footerLeft: CharSequence? = null,
-        footerRight: CharSequence? = null,
-        expanded: Boolean = this.expanded
-    ) {
-        bind(
-            DemoChatProcessState(
-                stage = stage,
-                toolName = toolName,
-                resultSummary = resultSummary,
-                steps = steps,
-                footerLeft = footerLeft,
-                footerRight = footerRight,
-                expanded = expanded
-            )
-        )
-    }
-
-    /** 设置展开状态；状态发生变化时调用展示回调。 */
-    fun setExpanded(expanded: Boolean) {
-        setExpandedInternal(expanded, notifyListener = true)
-    }
-
-    /** 当前是否处于展开状态。 */
-    fun isExpanded(): Boolean = expanded
-
-    /** 注册或清除展开状态变化回调；回调只传递展示状态，不持有宿主引用。 */
-    fun setOnExpandedChangeListener(listener: ((Boolean) -> Unit)?) {
-        expandedChangeListener = listener
-    }
-
-    /** 注册步骤详情展开状态变化回调；回调只传递步骤 id 和展示状态。 */
-    fun setOnStepExpandedChangeListener(listener: ((String, Boolean) -> Unit)?) {
-        stepExpandedChangeListener = listener
-    }
-
-    private fun configureHeaderIcon() {
-        headerIcon.apply {
-            setImageResource(R.drawable.brand_owl_avatar)
-            scaleType = ImageView.ScaleType.CENTER_INSIDE
-            setPadding(context.chatDp(2), context.chatDp(2), context.chatDp(2), context.chatDp(2))
-            clipToOutline = true
-            outlineProvider = object : android.view.ViewOutlineProvider() {
-                override fun getOutline(view: View, outline: android.graphics.Outline) {
-                    outline.setRoundRect(0, 0, view.width, view.height, context.chatDp(8).toFloat())
-                }
-            }
-            background = roundedBackground(
-                context,
-                DemoChatPalette.assistantAvatarSurface,
-                0,
-                14
-            )
-            contentDescription = "绿色猫头鹰助手"
-            importantForAccessibility = View.IMPORTANT_FOR_ACCESSIBILITY_NO
-        }
-    }
-
-    private fun configureHeaderTitle() {
-        headerTitle.apply {
-            text = "Agent 过程"
-            setTextSize(TypedValue.COMPLEX_UNIT_SP, 14f)
-            setTextColor(DemoChatPalette.textPrimary)
-            typeface = Typeface.create("sans-serif-medium", Typeface.NORMAL)
-            letterSpacing = 0.012f
-            importantForAccessibility = View.IMPORTANT_FOR_ACCESSIBILITY_NO
-        }
-    }
-
-    private fun configureHeaderMeta() {
-        headerMeta.apply {
-            setTextSize(TypedValue.COMPLEX_UNIT_SP, 12f)
-            setTextColor(DemoChatPalette.textSecondary)
-            letterSpacing = 0.01f
-            maxLines = 1
-            importantForAccessibility = View.IMPORTANT_FOR_ACCESSIBILITY_NO
-        }
-    }
-
-    private fun configureExpansionView() {
-        expansionView.apply {
-            setTextSize(TypedValue.COMPLEX_UNIT_SP, 11.5f)
-            setTextColor(DemoChatPalette.textSecondary)
-            typeface = Typeface.create("sans-serif-medium", Typeface.NORMAL)
-            letterSpacing = 0.015f
-            maxLines = 1
-            setPadding(context.chatDp(9), context.chatDp(3), context.chatDp(9), context.chatDp(3))
-            background = roundedBackground(
-                context,
-                DemoChatPalette.surfaceSoft,
-                DemoChatPalette.outlineSubtle,
-                10
-            )
-            importantForAccessibility = View.IMPORTANT_FOR_ACCESSIBILITY_NO
-        }
-    }
-
-    private fun configureCollapsedSummary() {
-        collapsedSummaryView.apply {
-            setTextSize(TypedValue.COMPLEX_UNIT_SP, 13.5f)
-            setTextColor(DemoChatPalette.textSecondary)
-            typeface = Typeface.create("sans-serif", Typeface.NORMAL)
-            letterSpacing = 0.01f
-            maxLines = 1
-            setPadding(0, context.chatDp(6), 0, context.chatDp(2))
-            importantForAccessibility = View.IMPORTANT_FOR_ACCESSIBILITY_NO
-        }
-    }
-
-    private fun configureStepsContainer() {
-        stepsContainer.orientation = VERTICAL
-        stepsContainer.setPadding(0, context.chatDp(6), 0, context.chatDp(2))
-        stepsContainer.importantForAccessibility = View.IMPORTANT_FOR_ACCESSIBILITY_NO
-    }
-
-    private fun configureFooter() {
-        footer.apply {
-            gravity = Gravity.CENTER_VERTICAL
-            setPadding(0, context.chatDp(8), 0, 0)
-            importantForAccessibility = View.IMPORTANT_FOR_ACCESSIBILITY_NO
-        }
-        listOf(footerLeftView, footerRightView).forEach { view ->
-            view.apply {
-                setTextSize(TypedValue.COMPLEX_UNIT_SP, 12f)
-                setTextColor(DemoChatPalette.textSecondary)
-                maxLines = 1
-            }
-        }
-    }
-
-    private fun configureCollapseFooter() {
-        collapseFooterView.apply {
-            text = "收起整个过程 ︿"
-            gravity = Gravity.CENTER
-            setTextSize(TypedValue.COMPLEX_UNIT_SP, 12f)
-            setTextColor(DemoChatPalette.textSecondary)
-            typeface = Typeface.create("sans-serif-medium", Typeface.NORMAL)
-            isClickable = true
-            isFocusable = true
-            contentDescription = "收起整个过程"
-            setOnClickListener { setExpanded(false) }
-        }
-    }
-
-    private fun setExpandedInternal(value: Boolean, notifyListener: Boolean) {
-        val changed = expanded != value
-        expanded = value
-        if (!value) {
-            // Re-opening the outer card starts from a compact checklist again.
-            expandedStepIds.clear()
-        }
-        currentState = currentState.copy(expanded = value)
-        expansionView.text = if (value) "收起 ▲" else "展开 ▼"
-        collapsedSummaryView.visibility = if (value) View.GONE else View.VISIBLE
-        if (!value) {
-            // The child views may still contain a previously expanded result.
-            // Rebuild them while hidden so the next outer expansion is compact.
-            renderSteps()
-        }
-        stepsContainer.visibility = if (value && currentState.steps.isNotEmpty()) {
-            View.VISIBLE
-        } else {
-            View.GONE
-        }
-        collapseFooterView.visibility = if (value && currentState.steps.isNotEmpty()) {
-            View.VISIBLE
-        } else {
-            View.GONE
-        }
-        updateAccessibilityState()
-
-        if (notifyListener && changed) {
-            expandedChangeListener?.invoke(value)
-            sendAccessibilityEvent(android.view.accessibility.AccessibilityEvent.TYPE_WINDOW_CONTENT_CHANGED)
-        }
-    }
-
-    private fun updateAccessibilityState() {
-        val stateLabel = if (expanded) "已展开" else "已收起"
-        val actionLabel = if (expanded) "点击收起" else "点击展开"
-        contentDescription = buildString {
-            append("过程卡片，阶段：")
-            append(currentState.stage.label)
-            append("，步骤 ")
-            append(currentState.steps.size)
-            append(" 个。当前")
-            append(stateLabel)
-            append("，")
-            append(actionLabel)
-            append("。")
-        }
-        if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.R) {
-            stateDescription = stateLabel
-        }
-    }
-
-    private fun buildHeaderMeta(): String {
-        val tool = currentState.toolName?.takeIf { it.isNotBlank() }
-        return if (tool == null) {
-            currentState.stage.label
-        } else {
-            "${currentState.stage.label} · $tool"
-        }
-    }
-
-    private fun buildCollapsedSummary(): String {
-        return when {
-            currentState.resultSummary?.isNotBlank() == true -> "展开查看完整结果"
-            currentState.steps.isNotEmpty() -> "${currentState.stage.label} · ${currentState.steps.size} 个步骤"
-            else -> currentState.stage.label
-        }
-    }
-
-    private fun renderSteps() {
-        val currentIds = currentState.steps.map { it.id }
-        val existingIds = stepHolders.keys.toList()
-
-        // 检查能否进行轻量原位复用：步骤 ID 集合一致且各步骤展开状态保持不变
-        val canReuse = currentIds == existingIds && currentState.steps.all { step ->
-            val isExpanded = expandedStepIds.contains(step.id)
-            stepHolders[step.id]?.isExpanded == isExpanded
-        }
-
-        if (canReuse) {
-            currentState.steps.forEach { step ->
-                val holder = stepHolders[step.id] ?: return@forEach
-                holder.titleView.text = step.title
-                holder.indicatorView.text = stepIndicator(step.status)
-                holder.indicatorView.setTextColor(stepIndicatorTextColor(step.status))
-                holder.indicatorView.background = roundedBackground(
-                    context,
-                    stepIndicatorFill(step.status),
-                    stepIndicatorStroke(step.status),
-                    12
-                )
-
-                val detailParts = listOfNotNull(
-                    step.detail?.toString()?.takeIf { it.isNotBlank() },
-                    step.resultSummary?.toString()?.takeIf { it.isNotBlank() }
-                )
-                val hasDetails = detailParts.isNotEmpty()
-                holder.disclosureView.visibility = if (hasDetails) View.VISIBLE else View.GONE
-
-                if (holder.isExpanded) {
-                    val fullDetail = detailParts.joinToString("\n\n")
-                    if (holder.detailTextView?.text?.toString() != fullDetail) {
-                        holder.detailTextView?.text = fullDetail
-                        // 内容流式更新时自动向下方滚动，最新思考保持可见
-                        holder.detailScrollView?.scrollToBottom()
-                    }
-                } else {
-                    val compactDetail = detailParts.firstOrNull() ?: if (hasDetails) {
-                        "点击展开查看完整结果"
-                    } else {
-                        null
-                    }
-                    holder.compactDetailView?.text = compactDetail ?: ""
-                }
-            }
-            return
-        }
-
-        // 结构变动或展开状态变化时重建
-        stepsContainer.removeAllViews()
-        stepHolders.clear()
-        currentState.steps.forEachIndexed { index, step ->
-            if (index > 0) {
-                stepsContainer.addView(View(context).apply {
-                    setBackgroundColor(DemoChatPalette.divider)
-                }, LayoutParams(
-                    context.chatDp(1),
-                    context.chatDp(10)
-                ).apply {
-                    marginStart = context.chatDp(12)
-                })
-            }
-            val holder = buildStepRow(step)
-            stepHolders[step.id] = holder
-            stepsContainer.addView(holder.rowView)
-        }
-    }
-
-    private fun buildStepRow(step: DemoChatProcessStep): StepRowHolder {
-        val detailParts = listOfNotNull(
-            step.detail?.toString()?.takeIf { it.isNotBlank() },
-            step.resultSummary?.toString()?.takeIf { it.isNotBlank() }
-        )
-        val hasDetails = detailParts.isNotEmpty()
-        val isStepExpanded = expandedStepIds.contains(step.id)
-        val row = LinearLayout(context).apply {
-            orientation = HORIZONTAL
-            gravity = Gravity.TOP
-            minimumHeight = context.chatDp(40)
-            isClickable = hasDetails
-            isFocusable = hasDetails
-            importantForAccessibility = if (hasDetails) {
-                View.IMPORTANT_FOR_ACCESSIBILITY_YES
-            } else {
-                View.IMPORTANT_FOR_ACCESSIBILITY_NO
-            }
-        }
-        val indicator = TextView(context).apply {
-            text = stepIndicator(step.status)
-            gravity = Gravity.CENTER
-            setTextSize(TypedValue.COMPLEX_UNIT_SP, 12f)
-            setTypeface(Typeface.DEFAULT, Typeface.BOLD)
-            setTextColor(stepIndicatorTextColor(step.status))
-            background = roundedBackground(
-                context,
-                stepIndicatorFill(step.status),
-                stepIndicatorStroke(step.status),
-                12
-            )
-            importantForAccessibility = View.IMPORTANT_FOR_ACCESSIBILITY_NO
-        }
-        row.addView(indicator, LayoutParams(context.chatDp(24), context.chatDp(24)).apply {
-            marginEnd = context.chatDp(10)
-        })
-
-        val textColumn = LinearLayout(context).apply {
-            orientation = VERTICAL
-            gravity = Gravity.TOP
-        }
-        val title = TextView(context).apply {
-            text = step.title
-            setTextSize(TypedValue.COMPLEX_UNIT_SP, 13.5f)
-            setTextColor(DemoChatPalette.textPrimary)
-            typeface = Typeface.create("sans-serif-medium", Typeface.NORMAL)
-            setLineSpacing(0f, 1.15f)
-            importantForAccessibility = View.IMPORTANT_FOR_ACCESSIBILITY_NO
-        }
-        textColumn.addView(title, LayoutParams(LayoutParams.MATCH_PARENT, LayoutParams.WRAP_CONTENT))
-
-        var compactDetailView: TextView? = null
-        var detailScrollView: StepDetailScrollView? = null
-        var detailTextView: TextView? = null
-
-        if (isStepExpanded) {
-            val fullDetail = detailParts.joinToString("\n\n")
-            val scrollView = StepDetailScrollView(context).apply {
-                background = roundedBackground(
-                    context,
-                    DemoChatPalette.surfaceSubtle,
-                    DemoChatPalette.outlineSubtle,
-                    8
-                )
-            }
-            val detailTv = TextView(context).apply {
-                text = fullDetail
-                setTextSize(TypedValue.COMPLEX_UNIT_SP, 12.5f)
-                setTextColor(DemoChatPalette.textSecondary)
-                typeface = Typeface.create("sans-serif", Typeface.NORMAL)
-                setLineSpacing(0f, 1.22f)
-                letterSpacing = 0.01f
-                setPadding(context.chatDp(12), context.chatDp(9), context.chatDp(12), context.chatDp(9))
-                setTextIsSelectable(true)
-                importantForAccessibility = View.IMPORTANT_FOR_ACCESSIBILITY_NO
-            }
-            scrollView.addView(
-                detailTv,
-                ViewGroup.LayoutParams(ViewGroup.LayoutParams.MATCH_PARENT, ViewGroup.LayoutParams.WRAP_CONTENT)
-            )
-
-            // 固定高度 170dp：锁定详情高度，避免大段思考将卡片撑满，彻底杜绝外部页面重排抖动
-            val fixedHeight = context.chatDp(170)
-            textColumn.addView(scrollView, LayoutParams(LayoutParams.MATCH_PARENT, fixedHeight).apply {
-                topMargin = context.chatDp(6)
-            })
-            scrollView.scrollToBottom()
-            detailScrollView = scrollView
-            detailTextView = detailTv
-        } else {
-            val compactDetail = detailParts.firstOrNull() ?: if (hasDetails) {
-                "点击展开查看完整结果"
-            } else {
-                null
-            }
-            if (compactDetail != null) {
-                val tv = TextView(context).apply {
-                    text = compactDetail
-                    setTextSize(TypedValue.COMPLEX_UNIT_SP, 12f)
-                    setTextColor(DemoChatPalette.textSecondary)
-                    setLineSpacing(0f, 1.15f)
-                    maxLines = 1
-                    ellipsize = android.text.TextUtils.TruncateAt.END
-                    setPadding(0, context.chatDp(2), 0, 0)
-                    importantForAccessibility = View.IMPORTANT_FOR_ACCESSIBILITY_NO
-                }
-                textColumn.addView(tv, LayoutParams(LayoutParams.MATCH_PARENT, LayoutParams.WRAP_CONTENT))
-                compactDetailView = tv
-            }
-        }
-        row.addView(textColumn, LayoutParams(0, LayoutParams.WRAP_CONTENT, 1f))
-
-        val disclosure = TextView(context).apply {
-            text = if (isStepExpanded) "收起" else "展开"
-            setTextSize(TypedValue.COMPLEX_UNIT_SP, 11f)
-            setTextColor(DemoChatPalette.textSecondary)
-            gravity = Gravity.CENTER
-            maxLines = 1
-            visibility = if (hasDetails) View.VISIBLE else View.GONE
-            importantForAccessibility = View.IMPORTANT_FOR_ACCESSIBILITY_NO
-        }
-        row.addView(disclosure, LayoutParams(LayoutParams.WRAP_CONTENT, context.chatDp(32)).apply {
-            marginStart = context.chatDp(8)
-        })
-
-        if (hasDetails) {
-            row.contentDescription = buildString {
-                append(step.title)
-                append("，")
-                append(stepStatusLabel(step.status))
-                append("，当前")
-                append(if (isStepExpanded) "已展开，点击收起" else "已收起，点击展开")
-            }
-            row.setOnClickListener {
-                val next = !expandedStepIds.contains(step.id)
-                if (next) expandedStepIds.add(step.id) else expandedStepIds.remove(step.id)
-                renderSteps()
-                stepExpandedChangeListener?.invoke(step.id, next)
-                sendAccessibilityEvent(android.view.accessibility.AccessibilityEvent.TYPE_WINDOW_CONTENT_CHANGED)
-            }
-        }
-
-        return StepRowHolder(
-            rowView = row,
-            indicatorView = indicator,
-            titleView = title,
-            compactDetailView = compactDetailView,
-            detailScrollView = detailScrollView,
-            detailTextView = detailTextView,
-            disclosureView = disclosure,
-            isExpanded = isStepExpanded
-        )
-    }
-
-    private fun stepStatusLabel(status: DemoChatProcessStepStatus): String = when (status) {
-        DemoChatProcessStepStatus.COMPLETE -> "已完成"
-        DemoChatProcessStepStatus.ACTIVE -> "进行中"
-        DemoChatProcessStepStatus.WAITING -> "等待确认"
-        DemoChatProcessStepStatus.ERROR -> "执行失败"
-        DemoChatProcessStepStatus.PENDING -> "待处理"
-    }
-
-    private fun stepIndicator(status: DemoChatProcessStepStatus): String = when (status) {
-        DemoChatProcessStepStatus.COMPLETE -> "✓"
-        DemoChatProcessStepStatus.ACTIVE -> "•"
-        DemoChatProcessStepStatus.WAITING -> "!"
-        DemoChatProcessStepStatus.ERROR -> "×"
-        DemoChatProcessStepStatus.PENDING -> "○"
-    }
-
-    private fun stepIndicatorTextColor(status: DemoChatProcessStepStatus): Int = when (status) {
-        DemoChatProcessStepStatus.COMPLETE -> DemoChatPalette.primaryOnContainer
-        DemoChatProcessStepStatus.ACTIVE -> DemoChatPalette.primaryOnContainer
-        DemoChatProcessStepStatus.WAITING -> DemoChatPalette.amberOnContainer
-        DemoChatProcessStepStatus.ERROR -> DemoChatPalette.dangerOnContainer
-        DemoChatProcessStepStatus.PENDING -> DemoChatPalette.textMuted
-    }
-
-    private fun stepIndicatorFill(status: DemoChatProcessStepStatus): Int = when (status) {
-        DemoChatProcessStepStatus.COMPLETE -> DemoChatPalette.successSoft
-        DemoChatProcessStepStatus.ACTIVE -> DemoChatPalette.primaryContainer
-        DemoChatProcessStepStatus.WAITING -> DemoChatPalette.amberSoft
-        DemoChatProcessStepStatus.ERROR -> DemoChatPalette.dangerSoft
-        DemoChatProcessStepStatus.PENDING -> DemoChatPalette.surface
-    }
-
-    private fun stepIndicatorStroke(status: DemoChatProcessStepStatus): Int = when (status) {
-        DemoChatProcessStepStatus.COMPLETE -> DemoChatPalette.success
-        DemoChatProcessStepStatus.ACTIVE -> DemoChatPalette.primary
-        DemoChatProcessStepStatus.WAITING -> DemoChatPalette.amber
-        DemoChatProcessStepStatus.ERROR -> DemoChatPalette.danger
-        DemoChatProcessStepStatus.PENDING -> DemoChatPalette.outlineSubtle
     }
 }
 
@@ -1408,29 +813,16 @@ private fun copyButtonBackground(context: Context): Drawable = StateListDrawable
     )
 }
 
-private fun processCardBackground(context: Context): Drawable = StateListDrawable().apply {
-    addState(
-        intArrayOf(android.R.attr.state_pressed),
-        roundedBackground(
-            context = context,
-            fillColor = DemoChatPalette.cardPressed,
-            strokeColor = DemoChatPalette.cardStroke,
-            radiusDp = 14
-        )
-    )
-    addState(
-        intArrayOf(),
-        roundedBackground(
-            context = context,
-            fillColor = DemoChatPalette.cardSurface,
-            strokeColor = DemoChatPalette.cardStroke,
-            radiusDp = 14
-        )
-    )
-}
-
-internal fun showFullImageDialog(context: Context, imagePath: String) {
+internal fun showFullImageDialog(context: Context, imagePath: String, overlay: Boolean = false): android.app.Dialog {
     val dialog = android.app.Dialog(context, android.R.style.Theme_Black_NoTitleBar_Fullscreen)
+    if (overlay) {
+        dialog.window?.setType(if (Build.VERSION.SDK_INT >= 26) {
+            android.view.WindowManager.LayoutParams.TYPE_APPLICATION_OVERLAY
+        } else {
+            @Suppress("DEPRECATION")
+            android.view.WindowManager.LayoutParams.TYPE_PHONE
+        })
+    }
     val container = FrameLayout(context).apply {
         setBackgroundColor(Color.argb(235, 10, 11, 14))
         setOnClickListener { dialog.dismiss() }
@@ -1452,4 +844,5 @@ internal fun showFullImageDialog(context: Context, imagePath: String) {
     )
     dialog.setContentView(container)
     dialog.show()
+    return dialog
 }

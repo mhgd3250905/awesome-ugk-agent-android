@@ -30,15 +30,18 @@ import android.widget.LinearLayout
 import android.widget.ScrollView
 import android.widget.TextView
 import com.ugk.pi.android.UserConfirmationDialogRequest
+import com.ugk.pi.attention.UrgentMessage
+import com.ugk.pi.attention.UrgentPresentationStatus
+import com.ugk.pi.attention.UrgentAction
+import com.ugk.pi.attention.UrgentForm
 import java.util.ArrayDeque
-import java.util.LinkedHashSet
 
 /**
  * Cross-app, user-controlled Agent surface.
  *
  * The overlay is deliberately a renderer and interaction shell. Agent
- * execution remains owned by MainActivity, while this class exposes only
- * snapshots and user intents through callbacks.
+ * execution is process-owned, while this class exposes only snapshots and
+ * user intents through callbacks.
  */
 class AgentFloatingWindow(private val context: Context) : ConfirmationOverlayHost {
 
@@ -53,13 +56,27 @@ class AgentFloatingWindow(private val context: Context) : ConfirmationOverlayHos
 
     private var expandedView: View? = null
     private var collapsedView: View? = null
+    private var takeoverView: View? = null
+    private var activeTakeoverPresentationId: String? = null
+    private var takeoverInteractionConsumed = false
     private var contentContainer: LinearLayout? = null
     private var scrollView: ScrollView? = null
     private var statusText: TextView? = null
     private var titleText: TextView? = null
     private var inputField: EditText? = null
-    private var sendButton: TextView? = null
-    private var stopButton: TextView? = null
+    private var sendButton: SendActionButton? = null
+    private var stopButton: SendActionButton? = null
+    private var transcriptView: AgentOverlayTranscriptView? = null
+    private var confirmationContainer: LinearLayout? = null
+    private var renderedConfirmation: AgentOverlayConfirmation? = null
+    private var queueView: TextView? = null
+    private var emptyView: TextView? = null
+    private var activityToggle: TextView? = null
+    private var activityDetails: TextView? = null
+    private var activityExpanded = false
+    private var assistantPreview: String? = null
+    private var imagePreview: android.app.Dialog? = null
+    private var firstTranscriptRender = true
     private var collapsedIconView: ImageView? = null
     private var collapsedStatusText: TextView? = null
 
@@ -68,10 +85,11 @@ class AgentFloatingWindow(private val context: Context) : ConfirmationOverlayHos
         statusLabel = "就绪"
     )
     private val legacyLogs = ArrayDeque<String>()
-    private val expandedStepKeys = LinkedHashSet<String>()
     private var composerDraft = ""
+    private var sendErrorText: String? = null
     private var pendingConfirmation: AgentOverlayConfirmation? = null
     private var confirmationResult: ((String) -> Unit)? = null
+    private var urgentPreviousSurface: UrgentPreviousSurface = UrgentPreviousSurface.HIDDEN
     private var expandedX = dp(16)
     private var expandedY = dp(160)
     private var collapsedX = dp(16)
@@ -89,6 +107,7 @@ class AgentFloatingWindow(private val context: Context) : ConfirmationOverlayHos
     var onOpenApp: (() -> Unit)? = null
     var onHide: (() -> Unit)? = null
     var onDraftChanged: ((String) -> Unit)? = null
+    internal var onUrgentInteraction: ((DemoUrgentInteraction) -> Boolean)? = null
 
     private val expandedParams = WindowManager.LayoutParams().apply {
         width = expandedWidth()
@@ -116,13 +135,32 @@ class AgentFloatingWindow(private val context: Context) : ConfirmationOverlayHos
         softInputMode = WindowManager.LayoutParams.SOFT_INPUT_STATE_ALWAYS_HIDDEN
     }
 
+    private val takeoverParams = WindowManager.LayoutParams().apply {
+        width = WindowManager.LayoutParams.MATCH_PARENT
+        height = WindowManager.LayoutParams.MATCH_PARENT
+        type = overlayType
+        flags = WindowManager.LayoutParams.FLAG_NOT_FOCUSABLE or
+                WindowManager.LayoutParams.FLAG_LAYOUT_IN_SCREEN
+        format = PixelFormat.TRANSLUCENT
+        gravity = Gravity.TOP or Gravity.START
+        x = 0
+        y = 0
+    }
+
     fun show() {
+        if (takeoverView != null) {
+            // MainActivity may have moved to the background while the takeover is open.
+            if (urgentPreviousSurface == UrgentPreviousSurface.HIDDEN) {
+                urgentPreviousSurface = UrgentPreviousSurface.COLLAPSED
+            }
+            return
+        }
         if (!Settings.canDrawOverlays(context) || isShowing()) return
         showCollapsed()
     }
 
     fun showExpanded() {
-        if (!Settings.canDrawOverlays(context)) return
+        if (!Settings.canDrawOverlays(context) || takeoverView != null) return
         if (expandedView != null) return
 
         collapsedX = collapsedParams.x
@@ -151,17 +189,154 @@ class AgentFloatingWindow(private val context: Context) : ConfirmationOverlayHos
     }
 
     fun hide() {
+        urgentPreviousSurface = UrgentPreviousSurface.HIDDEN
+        hideTakeover()
         hideExpanded()
         hideCollapsed()
     }
 
-    fun isShowing(): Boolean = expandedView != null || collapsedView != null
+    /** Keep an urgent takeover visible when the main Activity returns to the foreground. */
+    fun hideOrdinaryForActivity() {
+        if (takeoverView != null) {
+            urgentPreviousSurface = UrgentPreviousSurface.HIDDEN
+        } else {
+            hide()
+        }
+    }
+
+    fun isShowing(): Boolean = expandedView != null || collapsedView != null || takeoverView != null
+
+    /** Temporarily replaces the ordinary bubble/chat surface with an app-owned screen. */
+    fun showUrgentMessage(message: UrgentMessage, conversationId: String? = null): UrgentPresentationStatus {
+        if (!Settings.canDrawOverlays(context)) return UrgentPresentationStatus.PERMISSION_DENIED
+        if (pendingConfirmation != null || externalAutomationMode || takeoverView != null) {
+            return UrgentPresentationStatus.BUSY
+        }
+        if ((message.actions.isNotEmpty() || message.form != null) &&
+            (message.binding == null || conversationId == null || onUrgentInteraction == null)
+        ) return UrgentPresentationStatus.UNAVAILABLE
+        val previous = when {
+            expandedView != null -> UrgentPreviousSurface.EXPANDED
+            collapsedView != null -> UrgentPreviousSurface.COLLAPSED
+            else -> UrgentPreviousSurface.HIDDEN
+        }
+        val view = UrgentTakeoverView.build(
+            context,
+            message,
+            onClose = { dismissUrgentMessage() },
+            onOpenApp = {
+                dismissUrgentMessage()
+                onOpenApp?.invoke()
+            },
+            onAction = { action: UrgentAction ->
+                deliverUrgentInteraction(message, conversationId, DemoUrgentInteraction.Kind.BUTTON, action.id, action.label)
+            },
+            onFormSubmit = { form: UrgentForm, value: String ->
+                deliverUrgentInteraction(message, conversationId, DemoUrgentInteraction.Kind.FORM, form.id, form.label, value)
+            }
+        )
+        hideExpanded()
+        hideCollapsed()
+        takeoverParams.flags = WindowManager.LayoutParams.FLAG_LAYOUT_IN_SCREEN or
+                if (message.form == null) WindowManager.LayoutParams.FLAG_NOT_FOCUSABLE else 0
+        takeoverParams.softInputMode = if (message.form == null) {
+            WindowManager.LayoutParams.SOFT_INPUT_STATE_ALWAYS_HIDDEN
+        } else {
+            WindowManager.LayoutParams.SOFT_INPUT_STATE_ALWAYS_HIDDEN or
+                    WindowManager.LayoutParams.SOFT_INPUT_ADJUST_RESIZE
+        }
+        if (!addViewSafely(view, takeoverParams)) {
+            restoreSurface(previous)
+            return UrgentPresentationStatus.FAILED
+        }
+        urgentPreviousSurface = previous
+        takeoverView = view
+        activeTakeoverPresentationId = message.binding?.presentationId
+        takeoverInteractionConsumed = false
+        return UrgentPresentationStatus.SHOWN
+    }
+
+    private fun deliverUrgentInteraction(
+        message: UrgentMessage,
+        conversationId: String?,
+        kind: DemoUrgentInteraction.Kind,
+        controlId: String,
+        controlLabel: String,
+        value: String? = null
+    ): Boolean {
+        val binding = message.binding ?: return false
+        val target = conversationId ?: return false
+        if (takeoverView == null || takeoverInteractionConsumed ||
+            activeTakeoverPresentationId != binding.presentationId
+        ) return false
+        val controlBelongsToScreen = when (kind) {
+            DemoUrgentInteraction.Kind.BUTTON -> message.actions.any {
+                it.id == controlId && it.label == controlLabel
+            }
+            DemoUrgentInteraction.Kind.FORM -> message.form?.let {
+                it.id == controlId && it.label == controlLabel
+            } == true
+        }
+        if (!controlBelongsToScreen) return false
+        val callback = onUrgentInteraction ?: return false
+        takeoverInteractionConsumed = true
+        val accepted = runCatching {
+            callback(DemoUrgentInteraction(
+                binding = binding,
+                conversationId = target,
+                title = message.title,
+                kind = kind,
+                controlId = controlId,
+                controlLabel = controlLabel,
+                value = value
+            ))
+        }.getOrDefault(false)
+        if (!accepted) {
+            takeoverInteractionConsumed = false
+            return false
+        }
+        if (takeoverView != null) dismissUrgentMessage()
+        return true
+    }
+
+    private fun dismissUrgentMessage() {
+        val previous = urgentPreviousSurface
+        hideTakeover()
+        urgentPreviousSurface = UrgentPreviousSurface.HIDDEN
+        restoreSurface(previous)
+    }
+
+    private fun hideTakeover() {
+        takeoverView?.let { view ->
+            val imm = context.getSystemService(Context.INPUT_METHOD_SERVICE) as InputMethodManager
+            imm.hideSoftInputFromWindow(view.windowToken, 0)
+            removeViewSafely(view)
+        }
+        takeoverView = null
+        activeTakeoverPresentationId = null
+        takeoverInteractionConsumed = false
+    }
+
+    private fun restoreSurface(previous: UrgentPreviousSurface) {
+        when (previous) {
+            UrgentPreviousSurface.HIDDEN -> Unit
+            UrgentPreviousSurface.COLLAPSED -> showCollapsed()
+            UrgentPreviousSurface.EXPANDED -> {
+                collapsedX = expandedX
+                collapsedY = expandedY
+                showExpanded()
+            }
+        }
+    }
+
+    private enum class UrgentPreviousSurface { HIDDEN, COLLAPSED, EXPANDED }
 
     override fun showConfirmation(
         request: UserConfirmationDialogRequest,
         onResult: (String) -> Unit
     ): Boolean {
         if (!Settings.canDrawOverlays(context)) return false
+        if (takeoverView != null) dismissUrgentMessage()
         confirmationResult = onResult
         pendingConfirmation = request.toOverlayConfirmation()
         snapshot = snapshot.copy(pendingConfirmation = pendingConfirmation)
@@ -184,13 +359,27 @@ class AgentFloatingWindow(private val context: Context) : ConfirmationOverlayHos
 
     /** Render a stable, complete snapshot with bounded confirmation summaries. */
     fun bindSnapshot(value: AgentOverlaySnapshot) {
+        if (snapshot.conversationId != value.conversationId ||
+            (snapshot.runId != null && snapshot.runId != value.runId)) {
+            assistantPreview = null
+            activityExpanded = false
+        }
+        if (!value.isBusy) assistantPreview = null
         val confirmation = pendingConfirmation ?: value.pendingConfirmation
         pendingConfirmation = confirmation
         snapshot = value.copy(
             steps = value.steps.toList(),
+            messages = value.messages.map { it.copy(imagePaths = it.imagePaths.toList()) },
+            process = value.process?.copy(steps = value.process.steps.toList()),
             pendingConfirmation = confirmation
         )
-        expandedStepKeys.retainAll(snapshot.steps.map { it.id }.toSet())
+        renderSnapshot()
+    }
+
+    /** Matches the main chat's throttled assistant stream without persisting a second message. */
+    fun setAssistantPreview(text: String?) {
+        if (assistantPreview == text) return
+        assistantPreview = text
         renderSnapshot()
     }
 
@@ -210,18 +399,25 @@ class AgentFloatingWindow(private val context: Context) : ConfirmationOverlayHos
     }
 
     fun clear() {
+        if (takeoverView != null) dismissUrgentMessage()
         legacyLogs.clear()
-        expandedStepKeys.clear()
+        activityExpanded = false
+        assistantPreview = null
+        sendErrorText = null
         composerDraft = ""
         inputField?.setText("")
         onDraftChanged?.invoke("")
         pendingConfirmation = null
         confirmationResult = null
+        urgentPreviousSurface = UrgentPreviousSurface.HIDDEN
         snapshot = snapshot.copy(
             statusLabel = "Agent 就绪",
             statusDetail = null,
             latestMessage = null,
             latestMessageRole = null,
+            messages = emptyList(),
+            process = null,
+            runId = null,
             steps = emptyList(),
             isBusy = false,
             queuedMessages = 0,
@@ -246,6 +442,7 @@ class AgentFloatingWindow(private val context: Context) : ConfirmationOverlayHos
      * confirmation button.
      */
     fun setExternalAutomationMode(active: Boolean) {
+        if (active && takeoverView != null) dismissUrgentMessage()
         externalAutomationMode = active
         if (active && expandedView != null && pendingConfirmation == null) {
             collapseToBubble()
@@ -284,6 +481,8 @@ class AgentFloatingWindow(private val context: Context) : ConfirmationOverlayHos
     }
 
     private fun hideExpanded() {
+        imagePreview?.dismiss()
+        imagePreview = null
         inputField?.let { field ->
             composerDraft = field.text?.toString().orEmpty()
             onDraftChanged?.invoke(composerDraft)
@@ -312,6 +511,14 @@ class AgentFloatingWindow(private val context: Context) : ConfirmationOverlayHos
         inputField = null
         sendButton = null
         stopButton = null
+        transcriptView = null
+        confirmationContainer = null
+        renderedConfirmation = null
+        queueView = null
+        emptyView = null
+        activityToggle = null
+        activityDetails = null
+        firstTranscriptRender = true
     }
 
     private fun collapseToBubble() {
@@ -405,170 +612,219 @@ class AgentFloatingWindow(private val context: Context) : ConfirmationOverlayHos
     @SuppressLint("ClickableViewAccessibility")
     private fun buildExpandedView(): View {
         val root = FrameLayout(context).apply {
-            background = Ui.rounded(context, Ui.SurfaceElevated, 16, Ui.OutlineSubtle)
+            background = Ui.rounded(context, Ui.ConversationCanvas, 20, Ui.OutlineSubtle)
             clipChildren = true
+            clipToOutline = true
         }
         val contentRoot = LinearLayout(context).apply {
             orientation = LinearLayout.VERTICAL
-            // The resize affordance is a transparent overlay on the corner,
-            // so it does not reserve a visible block in the content layout.
             setPadding(dp(8), dp(8), dp(8), dp(8))
         }
-
-        // Keep the resize layer underneath the content. Child controls such
-        // as the composer/send button must win hit testing in the overlap;
-        // the handle receives touches only from the exposed rounded corner.
         val resizeHandle = ResizeCornerHandle(context).apply {
             contentDescription = "从右下角拖动调整 Agent 悬浮窗大小"
             isClickable = true
             isFocusable = true
         }
-        root.addView(resizeHandle, FrameLayout.LayoutParams(
-            dp(32),
-            dp(32),
-            Gravity.END or Gravity.BOTTOM
-        ).apply {
-            marginEnd = 0
-            bottomMargin = 0
-        })
+        root.addView(resizeHandle, FrameLayout.LayoutParams(dp(32), dp(32), Gravity.END or Gravity.BOTTOM))
         setupResize(resizeHandle, root)
-
-        root.addView(contentRoot, FrameLayout.LayoutParams(
-            FrameLayout.LayoutParams.MATCH_PARENT,
-            FrameLayout.LayoutParams.MATCH_PARENT
-        ))
+        root.addView(contentRoot, FrameLayout.LayoutParams(-1, -1))
 
         val header = LinearLayout(context).apply {
             orientation = LinearLayout.HORIZONTAL
             gravity = Gravity.CENTER_VERTICAL
-            setPadding(dp(4), dp(2), dp(2), dp(6))
+            minimumHeight = dp(56)
+            setPadding(dp(8), 0, 0, dp(4))
         }
         val headerText = LinearLayout(context).apply {
+            tag = "overlay-header-drag"
             orientation = LinearLayout.VERTICAL
-            setPadding(dp(2), 0, dp(6), 0)
+            gravity = Gravity.CENTER_VERTICAL
+            minimumHeight = dp(48)
+            setPadding(0, 0, dp(4), 0)
+            contentDescription = "拖动标题移动悬浮窗"
         }
         titleText = TextView(context).apply {
-            text = snapshot.title
-            textSize = 15f
-            setTypeface(null, Typeface.BOLD)
+            tag = "overlay-title"
+            textSize = 14f
+            typeface = Typeface.create("sans-serif-medium", Typeface.NORMAL)
             setTextColor(Ui.TextPrimary)
+            maxLines = 1
+            ellipsize = android.text.TextUtils.TruncateAt.END
         }
         statusText = TextView(context).apply {
-            text = snapshot.statusLabel
             textSize = 11f
-            setTextColor(statusColor(snapshot.statusLabel))
+            setTextColor(Ui.TextSecondary)
+            maxLines = 1
+            ellipsize = android.text.TextUtils.TruncateAt.END
             setPadding(0, dp(2), 0, 0)
         }
-        headerText.addView(titleText)
-        headerText.addView(statusText)
-        header.addView(headerText, LinearLayout.LayoutParams(0, LinearLayout.LayoutParams.WRAP_CONTENT, 1f))
-        header.addView(actionButton("主界面", "打开完整 Agent 主界面") {
+        headerText.addView(titleText, LinearLayout.LayoutParams(-1, -2))
+        headerText.addView(statusText, LinearLayout.LayoutParams(-1, -2))
+        header.addView(headerText, LinearLayout.LayoutParams(0, -2, 1f))
+        header.addView(headerIcon(R.drawable.ic_overlay_open_in_new, "打开完整 Agent 主界面", "overlay-open-app") {
             onOpenApp?.invoke()
-        }.also { it.background = Ui.clickableRounded(context, Color.TRANSPARENT, Ui.SurfaceSoft, 10) })
-        header.addView(actionButton("隐藏", "隐藏 Agent 悬浮窗") {
+        }, LinearLayout.LayoutParams(dp(48), dp(48)))
+        header.addView(headerIcon(R.drawable.ic_note_close, "隐藏 Agent 悬浮窗", "overlay-hide") {
             onHide?.invoke()
-        }.also { it.background = Ui.clickableRounded(context, Color.TRANSPARENT, Ui.SurfaceSoft, 10) })
-        header.addView(actionButton("收起", "收起 Agent 悬浮窗") {
+        }, LinearLayout.LayoutParams(dp(48), dp(48)))
+        header.addView(headerIcon(R.drawable.ic_process_expand_more, "收起 Agent 悬浮窗", "overlay-collapse") {
             collapseToBubble()
-        }.also { it.background = Ui.clickableRounded(context, Color.TRANSPARENT, Ui.SurfaceSoft, 10) })
-        contentRoot.addView(header, LinearLayout.LayoutParams(
-            LinearLayout.LayoutParams.MATCH_PARENT,
-            LinearLayout.LayoutParams.WRAP_CONTENT
-        ))
-        // Only the title/status area moves the window. The three action
-        // buttons keep their own click targets and never become drag handles.
+        }, LinearLayout.LayoutParams(dp(48), dp(48)))
+        contentRoot.addView(header, LinearLayout.LayoutParams(-1, -2))
         setupDrag(headerText, root, expandedParams) { }
 
         scrollView = ScrollView(context).apply {
             isFillViewport = true
+            isVerticalScrollBarEnabled = false
             setBackgroundColor(Ui.ConversationCanvas)
         }
-        contentContainer = LinearLayout(context).apply {
+        val container = LinearLayout(context).apply {
             orientation = LinearLayout.VERTICAL
-            setPadding(dp(6), dp(8), dp(6), dp(8))
+            setPadding(dp(2), dp(3), dp(2), dp(3))
         }
-        scrollView?.addView(contentContainer, ViewGroup.LayoutParams(
-            ViewGroup.LayoutParams.MATCH_PARENT,
-            ViewGroup.LayoutParams.WRAP_CONTENT
-        ))
-        contentRoot.addView(scrollView, LinearLayout.LayoutParams(
-            LinearLayout.LayoutParams.MATCH_PARENT,
-            0,
-            1f
-        ))
+        contentContainer = container
+        confirmationContainer = LinearLayout(context).apply {
+            orientation = LinearLayout.VERTICAL
+            tag = "overlay-confirmation"
+        }
+        container.addView(confirmationContainer, LinearLayout.LayoutParams(-1, -2))
+        transcriptView = AgentOverlayTranscriptView(context).apply {
+            onImageOpen = { path ->
+                imagePreview?.dismiss()
+                imagePreview = showFullImageDialog(context, path, overlay = true)
+            }
+        }
+        container.addView(transcriptView, LinearLayout.LayoutParams(-1, -2))
+        emptyView = TextView(context).apply {
+            text = "在这里继续对话"
+            textSize = 13f
+            setTextColor(Ui.TextSecondary)
+            setPadding(dp(12), dp(16), dp(12), dp(16))
+        }
+        container.addView(emptyView, LinearLayout.LayoutParams(-1, -2))
+        queueView = TextView(context).apply {
+            tag = "overlay-queue"
+            textSize = 11f
+            setTextColor(Ui.TextSecondary)
+            setPadding(dp(12), dp(6), dp(12), dp(6))
+            accessibilityLiveRegion = View.ACCESSIBILITY_LIVE_REGION_POLITE
+        }
+        container.addView(queueView, LinearLayout.LayoutParams(-1, -2))
+        activityToggle = TextView(context).apply {
+            tag = "overlay-activity-toggle"
+            textSize = 11f
+            setTextColor(Ui.TextSecondary)
+            gravity = Gravity.CENTER_VERTICAL
+            minHeight = dp(48)
+            setPadding(dp(12), 0, dp(12), 0)
+            background = Ui.clickableRounded(context, Color.TRANSPARENT, Ui.SurfaceSoft, 8)
+            isFocusable = true
+            setOnClickListener { activityExpanded = !activityExpanded; renderSnapshot() }
+        }
+        container.addView(activityToggle, LinearLayout.LayoutParams(-1, -2))
+        activityDetails = TextView(context).apply {
+            tag = "overlay-activity-details"
+            textSize = 11f
+            setTextColor(Ui.TextSecondary)
+            setTextIsSelectable(true)
+            setLineSpacing(0f, 1.1f)
+            setPadding(dp(12), 0, dp(12), dp(12))
+        }
+        container.addView(activityDetails, LinearLayout.LayoutParams(-1, -2))
+        scrollView?.addView(container, ViewGroup.LayoutParams(-1, -2))
+        contentRoot.addView(scrollView, LinearLayout.LayoutParams(-1, 0, 1f))
 
         val composer = LinearLayout(context).apply {
             orientation = LinearLayout.HORIZONTAL
+            isBaselineAligned = false
             gravity = Gravity.BOTTOM
-            background = Ui.rounded(context, Ui.Surface, 14, Ui.OutlineSubtle)
-            setPadding(dp(6), dp(3), dp(6), dp(3))
+            background = Ui.rounded(context, Ui.SurfaceElevated, 24)
+            setPadding(dp(6), dp(4), dp(4), dp(4))
         }
         inputField = EditText(context).apply {
+            tag = "overlay-input"
             hint = "发消息"
             setHintTextColor(Ui.TextMuted)
             setTextColor(Ui.TextPrimary)
             textSize = 13f
             minLines = 1
-            maxLines = 5
+            maxLines = 4
+            minHeight = dp(48)
+            gravity = Gravity.CENTER_VERTICAL
             isSingleLine = false
             inputType = InputType.TYPE_CLASS_TEXT or InputType.TYPE_TEXT_FLAG_MULTI_LINE
             background = null
-            setPadding(dp(5), dp(3), dp(5), dp(3))
+            setPadding(dp(10), dp(8), dp(6), dp(8))
             contentDescription = "给 Agent 输入消息"
             setText(composerDraft)
             setSelection(length())
         }
         inputField?.addTextChangedListener(object : android.text.TextWatcher {
             override fun beforeTextChanged(text: CharSequence?, start: Int, count: Int, after: Int) = Unit
-
             override fun onTextChanged(text: CharSequence?, start: Int, before: Int, count: Int) {
                 composerDraft = text?.toString().orEmpty()
+                sendErrorText = null
                 onDraftChanged?.invoke(composerDraft)
                 renderSnapshot()
             }
-
             override fun afterTextChanged(editable: android.text.Editable?) = Unit
         })
-        sendButton = actionButton(
-            label = "发送",
-            description = "发送悬浮窗消息",
-            foregroundColor = Ui.OnPrimary,
-            pressedForegroundColor = Ui.OnPrimary,
-            backgroundColor = Ui.Primary,
-            pressedBackgroundColor = Ui.PrimaryPressed,
-            strokeColor = Color.TRANSPARENT,
-            disabledForegroundColor = Ui.DisabledContent,
-            disabledBackgroundColor = Ui.DisabledContainer,
-            disabledStrokeColor = Color.TRANSPARENT,
-            minHeightDp = 48
-        ) { sendInput() }.apply {
-            isEnabled = false
+        sendButton = SendActionButton(context).apply {
+            tag = "overlay-send"
+            contentDescription = "发送悬浮窗消息"
+            installTapAction(this) { sendInput() }
         }
-        stopButton = actionButton(
-            label = "停止",
-            description = "停止 Agent 当前任务",
-            foregroundColor = Ui.DangerOnContainer,
-            pressedForegroundColor = Ui.OnDanger,
-            backgroundColor = Ui.DangerSoft,
-            pressedBackgroundColor = Ui.Danger,
-            strokeColor = Ui.Danger,
-            minHeightDp = 48
-        ) { onStopAgent?.invoke() }
-        composer.addView(inputField, LinearLayout.LayoutParams(0, LinearLayout.LayoutParams.WRAP_CONTENT, 1f))
-        composer.addView(sendButton, LinearLayout.LayoutParams(
-            LinearLayout.LayoutParams.WRAP_CONTENT,
-            dp(48)
-        ).apply { marginStart = dp(4) })
-        composer.addView(stopButton, LinearLayout.LayoutParams(
-            LinearLayout.LayoutParams.WRAP_CONTENT,
-            dp(48)
-        ).apply { marginStart = dp(4) })
-        contentRoot.addView(composer, LinearLayout.LayoutParams(
-            LinearLayout.LayoutParams.MATCH_PARENT,
-            LinearLayout.LayoutParams.WRAP_CONTENT
-        ).apply { topMargin = dp(6) })
-
+        stopButton = SendActionButton(context).apply {
+            tag = "overlay-stop"
+            buttonState = SendActionButton.State.BUSY
+            contentDescription = "停止 Agent 当前任务"
+            installTapAction(this) { onStopAgent?.invoke() }
+        }
+        composer.addView(inputField, LinearLayout.LayoutParams(0, -2, 1f))
+        composer.addView(sendButton, LinearLayout.LayoutParams(dp(48), dp(48)))
+        composer.addView(stopButton, LinearLayout.LayoutParams(dp(48), dp(48)))
+        contentRoot.addView(composer, LinearLayout.LayoutParams(-1, -2).apply { topMargin = dp(6) })
         return root
+    }
+
+    private fun headerIcon(resource: Int, description: String, viewTag: String, action: () -> Unit) =
+        ImageView(context).apply {
+            tag = viewTag
+            setImageResource(resource)
+            imageTintList = android.content.res.ColorStateList.valueOf(Ui.TextSecondary)
+            scaleType = ImageView.ScaleType.CENTER_INSIDE
+            setPadding(dp(13), dp(13), dp(13), dp(13))
+            contentDescription = description
+            if (Build.VERSION.SDK_INT >= 26) tooltipText = description
+            background = Ui.clickableRounded(context, Color.TRANSPARENT, Ui.SurfaceSoft, 12)
+            installTapAction(this, action)
+        }
+
+    @SuppressLint("ClickableViewAccessibility")
+    private fun installTapAction(target: View, action: () -> Unit) {
+        target.isClickable = true
+        target.isFocusable = true
+        target.setOnClickListener { if (target.isEnabled) action() }
+        target.setOnTouchListener(object : View.OnTouchListener {
+            private var downX = 0f
+            private var downY = 0f
+            private var moved = false
+            override fun onTouch(view: View, event: MotionEvent): Boolean {
+                if (!view.isEnabled) return false
+                when (event.actionMasked) {
+                    MotionEvent.ACTION_DOWN -> {
+                        downX = event.rawX; downY = event.rawY; moved = false; view.isPressed = true
+                    }
+                    MotionEvent.ACTION_MOVE -> if (kotlin.math.abs(event.rawX - downX) > touchSlop() ||
+                        kotlin.math.abs(event.rawY - downY) > touchSlop()) {
+                        moved = true; view.isPressed = false
+                    }
+                    MotionEvent.ACTION_UP -> { view.isPressed = false; if (!moved) view.performClick() }
+                    MotionEvent.ACTION_CANCEL -> { moved = true; view.isPressed = false }
+                }
+                return true
+            }
+        })
     }
 
     @SuppressLint("ClickableViewAccessibility")
@@ -714,8 +970,11 @@ class AgentFloatingWindow(private val context: Context) : ConfirmationOverlayHos
         val field = inputField ?: return
         val text = field.text?.toString()?.trim().orEmpty()
         if (text.isBlank()) return
+        val previousLog = legacyLogs.lastOrNull()
         val accepted = onSendMessage?.invoke(text) == true
         if (!accepted) {
+            sendErrorText = legacyLogs.lastOrNull()?.takeIf { it != previousLog }
+                ?: "消息未发送，请稍后重试"
             renderSnapshot()
             return
         }
@@ -962,163 +1221,70 @@ class AgentFloatingWindow(private val context: Context) : ConfirmationOverlayHos
         val collapsedState = resolveCollapsedState()
         collapsedIconView?.apply {
             contentDescription = "绿色猫头鹰助手，${collapsedState.label}"
-            background = Ui.rounded(
-                context,
-                Ui.AssistantAvatarSurface,
-                10
-            )
+            background = Ui.rounded(context, Ui.AssistantAvatarSurface, 10)
         }
         collapsedStatusText?.apply {
             text = collapsedState.label
             setTextColor(collapsedState.colorProvider())
         }
         collapsedView?.contentDescription = "Agent 悬浮窗 (${collapsedState.label})，点击展开"
-
-        titleText?.text = snapshot.title
+        titleText?.apply { text = snapshot.title; contentDescription = snapshot.title }
         statusText?.apply {
             text = snapshot.statusLabel
-            setTextColor(statusColor(snapshot.statusLabel))
+            setTextColor(if (snapshot.statusLabel.contains("失败")) Ui.Danger else Ui.TextSecondary)
         }
         stopButton?.visibility = if (snapshot.isBusy) View.VISIBLE else View.GONE
         sendButton?.let { button ->
             val canSend = !inputField?.text?.toString()?.trim().isNullOrEmpty() && onSendMessage != null
             button.isEnabled = canSend
-            button.alpha = 1f
+            button.buttonState = if (canSend) SendActionButton.State.ACTIVE else SendActionButton.State.DISABLED
+            button.contentDescription = if (snapshot.isBusy) "发送并排队" else "发送悬浮窗消息"
         }
+        inputField?.hint = if (snapshot.isBusy) "发消息（排队）" else "发消息"
         if (expandedView == null) return
-
-        val container = contentContainer ?: return
-        container.removeAllViews()
-        snapshot.statusDetail?.takeIf { it.isNotBlank() }?.let { detail ->
-            addText(container, detail, 12f, Ui.TextSecondary, Ui.SurfaceSoft, dp(10))
+        val scroll = scrollView ?: return
+        val wasAtBottom = !scroll.canScrollVertically(1)
+        val confirmationChanged = renderedConfirmation != snapshot.pendingConfirmation
+        if (confirmationChanged) {
+            confirmationContainer?.removeAllViews()
+            snapshot.pendingConfirmation?.let { value -> confirmationContainer?.let { addConfirmation(it, value) } }
+            renderedConfirmation = snapshot.pendingConfirmation
         }
-
-        snapshot.pendingConfirmation?.let { confirmation ->
-            addConfirmation(container, confirmation)
+        confirmationContainer?.visibility = if (snapshot.pendingConfirmation != null) View.VISIBLE else View.GONE
+        val messagesChanged = transcriptView?.render(snapshot, assistantPreview) == true
+        emptyView?.visibility = if (transcriptView?.childCount == 0 && snapshot.pendingConfirmation == null) View.VISIBLE else View.GONE
+        queueView?.apply {
+            val textValue = sendErrorText ?: if (snapshot.queuedMessages > 0) {
+                "已排队 ${snapshot.queuedMessages} 条，当前任务结束后继续"
+            } else ""
+            if (text.toString() != textValue) text = textValue
+            setTextColor(if (sendErrorText != null) Ui.Warning else Ui.TextSecondary)
+            visibility = if (textValue.isNotEmpty()) View.VISIBLE else View.GONE
         }
-
-        // Keep the user's prompt before the run, but place the assistant's
-        // final answer after the process and activity history. This mirrors
-        // the main conversation timeline instead of putting the answer above
-        // the evidence that explains how it was produced.
-        val latestMessage = snapshot.latestMessage?.takeIf { it.isNotBlank() }
-        val showLatestBeforeProcess = latestMessage != null && snapshot.latestMessageRole != "assistant"
-        if (showLatestBeforeProcess) {
-            addLatestMessage(container, latestMessage!!, snapshot.latestMessageRole)
+        activityToggle?.apply {
+            visibility = if (legacyLogs.isNotEmpty()) View.VISIBLE else View.GONE
+            text = if (activityExpanded) "收起活动记录" else "活动记录 · ${legacyLogs.size}"
+            val arrow = context.getDrawable(R.drawable.ic_process_expand_more)?.mutate()
+            arrow?.setTint(Ui.TextSecondary)
+            arrow?.setBounds(0, 0, dp(16), dp(16))
+            setCompoundDrawables(null, null, arrow, null)
+            contentDescription = if (activityExpanded) "活动记录已展开，点击收起" else "活动记录已收起，点击展开"
         }
-
-        if (snapshot.steps.isNotEmpty()) {
-            addSectionLabel(container, "Agent 过程")
-            snapshot.steps.forEach { step -> addStep(container, step) }
-        }
-
-        if (legacyLogs.isNotEmpty()) {
-            addSectionLabel(container, "活动记录")
-            legacyLogs.forEach { line -> addText(container, line, 11f, Ui.TextSecondary, null, dp(2)) }
-        }
-
-        if (snapshot.queuedMessages > 0) {
-            addText(
-                container,
-                "已排队 ${snapshot.queuedMessages} 条消息，当前任务完成后继续",
-                11f,
-                Ui.PrimaryPressed,
-                Ui.SurfaceSoft,
-                dp(8)
-            )
-        }
-        if (!showLatestBeforeProcess) {
-            latestMessage?.let { message ->
-                addLatestMessage(container, message, snapshot.latestMessageRole)
+        activityDetails?.apply {
+            visibility = if (activityExpanded && legacyLogs.isNotEmpty()) View.VISIBLE else View.GONE
+            if (activityExpanded) {
+                val logText = legacyLogs.joinToString("\n")
+                if (text.toString() != logText) text = logText
             }
         }
-        if (container.childCount == 0) {
-            addText(
-                container,
-                if (snapshot.isBusy) {
-                    "等待 Agent 状态更新"
-                } else {
-                    "当前没有运行中的任务\n可以直接在这里发送消息"
-                },
-                12f,
-                Ui.TextSecondary,
-                null,
-                dp(8)
-            )
-        }
-        scrollView?.post {
-            if (snapshot.pendingConfirmation != null) {
-                scrollView?.scrollTo(0, 0)
-            } else {
-                scrollView?.fullScroll(View.FOCUS_DOWN)
+        val scrollToConfirmation = confirmationChanged && snapshot.pendingConfirmation != null
+        if (scrollToConfirmation || firstTranscriptRender || (messagesChanged && wasAtBottom)) {
+            scroll.post {
+                if (scrollToConfirmation) scroll.scrollTo(0, 0)
+                else scroll.scrollTo(0, ((contentContainer?.height ?: 0) - scroll.height).coerceAtLeast(0))
             }
         }
-    }
-
-    private fun addLatestMessage(
-        container: LinearLayout,
-        message: String,
-        role: String?
-    ) {
-        val isAssistant = role == "assistant"
-        val row = LinearLayout(context).apply {
-            orientation = LinearLayout.HORIZONTAL
-            gravity = Gravity.TOP or (if (isAssistant) Gravity.START else Gravity.END)
-            contentDescription = "${if (isAssistant) "助手" else "你"}：$message"
-        }
-        val bubble = TextView(context).apply {
-            text = message
-            textSize = 13f
-            setTextColor(if (isAssistant) Ui.OnAssistantBubble else Ui.OnUserBubble)
-            setLineSpacing(0f, 1.15f)
-            setTextIsSelectable(true)
-            setPadding(dp(10), dp(8), dp(10), dp(8))
-            background = if (isAssistant) {
-                Ui.asymmetricRounded(context, Ui.AssistantBubble, 4, 16, 16, 16)
-            } else {
-                Ui.asymmetricRounded(context, Ui.UserBubble, 16, 4, 4, 16)
-            }
-        }
-        val bubbleParams = LinearLayout.LayoutParams(0, LinearLayout.LayoutParams.WRAP_CONTENT, 0.84f)
-        if (isAssistant) {
-            DemoMarkdownFormatter.setMarkdown(bubble, message)
-        }
-        val avatar: View = if (isAssistant) {
-            ImageView(context).apply {
-                setImageResource(R.drawable.brand_owl_avatar)
-                scaleType = ImageView.ScaleType.CENTER_INSIDE
-                setPadding(dp(2), dp(2), dp(2), dp(2))
-                clipToOutline = true
-                background = Ui.rounded(context, Ui.AssistantAvatarSurface, 8)
-                contentDescription = "助手头像"
-            }
-        } else {
-            ImageView(context).apply {
-                setImageResource(R.drawable.ic_person)
-                scaleType = ImageView.ScaleType.CENTER_INSIDE
-                setPadding(dp(7), dp(7), dp(7), dp(7))
-                imageTintList = android.content.res.ColorStateList.valueOf(Ui.OnUserAvatar)
-                background = Ui.rounded(context, Ui.UserAvatarSurface, 8)
-                contentDescription = "用户头像"
-            }
-        }
-        if (isAssistant) {
-            row.addView(avatar, LinearLayout.LayoutParams(dp(32), dp(32)).apply {
-                marginEnd = dp(6)
-                topMargin = dp(2)
-            })
-            row.addView(bubble, bubbleParams)
-        } else {
-            row.addView(bubble, bubbleParams)
-            row.addView(avatar, LinearLayout.LayoutParams(dp(32), dp(32)).apply {
-                marginStart = dp(6)
-                topMargin = dp(2)
-            })
-        }
-        container.addView(row, LinearLayout.LayoutParams(
-            LinearLayout.LayoutParams.MATCH_PARENT,
-            LinearLayout.LayoutParams.WRAP_CONTENT
-        ).apply { bottomMargin = dp(6) })
+        firstTranscriptRender = false
     }
 
     private fun addConfirmation(
@@ -1246,114 +1412,6 @@ class AgentFloatingWindow(private val context: Context) : ConfirmationOverlayHos
         if (externalAutomationMode) {
             collapseToBubble()
         }
-    }
-
-    private fun addSectionLabel(container: LinearLayout, text: String) {
-        container.addView(TextView(context).apply {
-            this.text = text
-            textSize = 11f
-            setTypeface(null, Typeface.BOLD)
-            setTextColor(Ui.TextSecondary)
-            setPadding(dp(2), dp(8), dp(2), dp(4))
-        })
-    }
-
-    private fun addText(
-        container: LinearLayout,
-        text: String,
-        size: Float,
-        color: Int,
-        backgroundColor: Int?,
-        padding: Int,
-        selectable: Boolean = false
-    ) {
-        container.addView(TextView(context).apply {
-            this.text = text
-            textSize = size
-            setTextColor(color)
-            setPadding(padding, padding, padding, padding)
-            if (selectable) setTextIsSelectable(true)
-            backgroundColor?.let { background = Ui.rounded(context, it, 10) }
-        }, LinearLayout.LayoutParams(
-            LinearLayout.LayoutParams.MATCH_PARENT,
-            LinearLayout.LayoutParams.WRAP_CONTENT
-        ).apply { bottomMargin = dp(4) })
-    }
-
-    private fun addStep(container: LinearLayout, step: AgentOverlayStep) {
-        val key = step.id
-        val expanded = expandedStepKeys.contains(key)
-        val row = LinearLayout(context).apply {
-            orientation = LinearLayout.VERTICAL
-            background = Ui.rounded(context, if (expanded) Ui.SurfaceSoft else Ui.SurfaceElevated, 10, Ui.OutlineSubtle)
-            setPadding(dp(9), dp(7), dp(9), dp(7))
-            contentDescription = "${step.title}，${step.statusLabel}，${if (expanded) "收起" else "展开"}详情"
-            setOnClickListener {
-                if (expanded) expandedStepKeys.remove(key) else expandedStepKeys.add(key)
-                renderSnapshot()
-            }
-        }
-        val header = LinearLayout(context).apply {
-            orientation = LinearLayout.HORIZONTAL
-            gravity = Gravity.CENTER_VERTICAL
-        }
-        val marker = TextView(context).apply {
-            text = if (step.statusLabel.contains("失败")) "!" else if (step.statusLabel.contains("完成")) "✓" else "•"
-            textSize = 13f
-            setTypeface(null, Typeface.BOLD)
-            setTextColor(statusColor(step.statusLabel))
-            gravity = Gravity.CENTER
-        }
-        val title = TextView(context).apply {
-            text = step.title
-            textSize = 12f
-            setTypeface(null, Typeface.BOLD)
-            setTextColor(Ui.TextPrimary)
-            setPadding(dp(6), 0, dp(6), 0)
-        }
-        val disclosure = TextView(context).apply {
-            text = if (expanded) "收起" else "详情"
-            textSize = 10f
-            setTextColor(Ui.PrimaryPressed)
-            gravity = Gravity.CENTER
-        }
-        header.addView(marker, LinearLayout.LayoutParams(dp(20), dp(24)))
-        header.addView(title, LinearLayout.LayoutParams(0, LinearLayout.LayoutParams.WRAP_CONTENT, 1f))
-        if (step.detail != null || step.resultSummary != null) {
-            header.addView(disclosure, LinearLayout.LayoutParams(
-                LinearLayout.LayoutParams.WRAP_CONTENT,
-                LinearLayout.LayoutParams.WRAP_CONTENT
-            ))
-        }
-        row.addView(header)
-        step.detail?.takeIf { it.isNotBlank() }?.let {
-            addInlineText(row, it, 11f, Ui.TextSecondary)
-        }
-        if (expanded) {
-            step.resultSummary?.takeIf { it.isNotBlank() }?.let {
-                addInlineText(row, it, 11f, Ui.TextPrimary, selectable = true)
-            }
-        }
-        container.addView(row, LinearLayout.LayoutParams(
-            LinearLayout.LayoutParams.MATCH_PARENT,
-            LinearLayout.LayoutParams.WRAP_CONTENT
-        ).apply { bottomMargin = dp(6) })
-    }
-
-    private fun addInlineText(
-        container: LinearLayout,
-        text: String,
-        size: Float,
-        color: Int,
-        selectable: Boolean = false
-    ) {
-        container.addView(TextView(context).apply {
-            this.text = text
-            textSize = size
-            setTextColor(color)
-            setPadding(dp(26), dp(3), dp(2), 0)
-            if (selectable) setTextIsSelectable(true)
-        })
     }
 
     /**

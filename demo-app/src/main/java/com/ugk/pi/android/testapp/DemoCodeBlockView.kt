@@ -202,7 +202,8 @@ private fun Context.codeDp(value: Int): Int =
  */
 class DemoCodeBlockView @JvmOverloads constructor(
     context: Context,
-    attrs: AttributeSet? = null
+    attrs: AttributeSet? = null,
+    private val style: DemoChatStyle = DemoChatStyle.STANDARD
 ) : LinearLayout(context, attrs) {
 
     private val header = LinearLayout(context).apply {
@@ -219,6 +220,8 @@ class DemoCodeBlockView @JvmOverloads constructor(
 
     private val langLabel = TextView(context).apply {
         setTextSize(TypedValue.COMPLEX_UNIT_SP, 11f)
+        maxLines = 1
+        ellipsize = android.text.TextUtils.TruncateAt.END
         typeface = Typeface.create("sans-serif-medium", Typeface.NORMAL)
         letterSpacing = 0.025f
         setTextColor(Ui.TextSecondary)
@@ -242,17 +245,17 @@ class DemoCodeBlockView @JvmOverloads constructor(
 
     private val codeTextView = TextView(context).apply {
         typeface = Typeface.MONOSPACE
-        setTextSize(TypedValue.COMPLEX_UNIT_SP, 12.5f)
+        setTextSize(TypedValue.COMPLEX_UNIT_SP, style.size(12.5f, 12f))
         setTextColor(Ui.CodeText)
-        setLineSpacing(0f, 1.24f)
+        setLineSpacing(0f, style.size(1.24f, 1.1f))
         setHorizontallyScrolling(true) // 核心：强制不自动折行
         includeFontPadding = false
         setTextIsSelectable(true)
         setPadding(
-            context.codeDp(14),
-            context.codeDp(10),
-            context.codeDp(14),
-            context.codeDp(12)
+            context.codeDp(style.size(14, 8)),
+            context.codeDp(style.size(10, 8)),
+            context.codeDp(style.size(14, 8)),
+            context.codeDp(style.size(12, 8))
         )
     }
 
@@ -303,6 +306,7 @@ class DemoCodeBlockView @JvmOverloads constructor(
         applyThemeColors()
         currentCode = code
         langLabel.text = if (language.isNotBlank()) language.uppercase() else "CODE"
+        langLabel.contentDescription = langLabel.text
         codeTextView.text = code
     }
 }

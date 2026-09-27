@@ -14,9 +14,10 @@ class ScreenAutomationSkillTest {
 
         assertEquals("android-accessibility-screen-automation", skill.id)
         assertTrue(skill.triggers.contains("读取界面"))
+        assertTrue(skill.instructions.contains("Structure-tree workflow"))
         assertTrue(skill.instructions.contains("snapshotId"))
         assertTrue(skill.instructions.contains("STALE_SNAPSHOT"))
-        assertTrue(skill.instructions.contains("screenWidth/screenHeight"))
+        assertTrue(skill.instructions.contains("current reported dimensions"))
         assertTrue(skill.instructions.contains("show_user_confirmation_dialog"))
         assertEquals(
             setOf(
@@ -45,15 +46,19 @@ class ScreenAutomationSkillTest {
     }
 
     @Test
-    fun visualFallbackAddsScreenshotAndBoundedGestureWorkflow() {
+    fun visualBackendUsesScreenshotFirstAndKeepsBoundedGestureWorkflow() {
         val skill = ScreenAutomationSkills.accessibilityScreenControl(
             requireUserConfirmation = true,
             includeVisualFallback = true
         )
 
-        assertTrue(skill.instructions.contains("screen_capture_visual"))
+        assertTrue(skill.instructions.contains("Visual-first workflow"))
+        assertTrue(skill.instructions.contains("At the start of each screen observation cycle"))
+        assertTrue(skill.instructions.contains("Use the View structure tree as supporting evidence"))
         assertTrue(skill.instructions.contains("observationId"))
         assertTrue(skill.instructions.contains("normalized 0..1"))
+        assertTrue(skill.instructions.indexOf("At the start of each screen observation cycle") <
+            skill.instructions.indexOf("Use screen_find_ui_element"))
         assertEquals(
             setOf(
                 "get_android_accessibility_status",

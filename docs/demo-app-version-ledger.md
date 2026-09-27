@@ -1,11 +1,37 @@
 # demo-app 版本与变更台账
 
-更新时间：2026-09-03
-当前保存版本：`1.0.5`（`versionCode 105`）
+更新时间：2026-09-27
+当前本地测试版本：`1.10.0`（`versionCode 123`）
 版本范围：仅 `:demo-app`；SDK/AAR 模块版本继续独立维护。
-当前阶段：在 `1.0.4`（Play 应用内更新提示，功能 commit `11d9945`、版本 commit `4e4bbe4`）之上交付悬浮窗 IME 贴顶钳位高度压缩（`1.0.5 / 105`，功能 commit `c703f91`、版本 commit `11d764a`）；`1.0.3`、`1.0.4` 已发布到 Play 内部测试轨道，自 `1.0.5` 起运行 `1.0.4` 的测试人员可见 Play 应用内更新弹窗；`1.0.5` 的 Play 轨道发布状态在本次补记时点无外部观察证据，以 Play Console 实测为准。版本边界标签为 `demo-app-v1.0.5@11d764a`；远端状态以 Git 实测为准。
+当前阶段：2026-09-27 的悬浮窗紧凑排版、权限引导与关闭后恢复、可选后台运行建议已获用户验收，本次对齐文档并形成本地收束提交。APK 元数据保持 `1.10.0 / 123`；原 `demo-app-v1.10.0` 标签是本阶段基线，未移动标签或创建新版本标签。
 
-> 文首元数据、版本规则和 `1.0.5` 记录描述当前保存点；其后的版本条目是不可改写的历史记录。
+发布边界：`1.0.3`、`1.0.4` 已发布到 Play 内部测试轨道；`1.0.5` 的 Play 轨道发布状态无外部观察证据，`1.1.0` 及之后的本地测试版本尚未提交 Play。本地提交或标签不代表 Play 发布，已存在的 `demo-app-v1.0.5@11d764a` 版本边界保持不变。
+
+## 2026-09-27 · 1.10.0 补充阶段收束
+
+基线：`demo-app-v1.10.0` / `c10773ecf4341ff3bce1904694012e0372054913`。它保存此前已验收的悬浮对话统一阶段；本次在其后保存补充改动，不改写原标签条目、APK 校验值或 `1.8.0 / 1.9.0` 的历史交付记录。
+
+| 范围 | 当前结果 | 事实源 |
+| --- | --- | --- |
+| 悬浮对话紧凑排版 | 小窗独立字号、气泡和列表间距、Markdown 与详情高度；主聊天保持默认样式。12:19 安装后用户反馈“好多了 验证通过” | [UI 规范](demo-app-ui-redesign.md)、[设计验收](../design-qa.md) |
+| 进入 App 的权限引导 | 每次真实前台进入检查无障碍、悬浮窗、相机和通知，均可跳过；补齐实际提醒分类开关，选图/导入使用系统选择器 | [权限与后台引导规范](demo-app-permission-guide.md) |
+| 已授权后关闭的恢复 | 共用请求/授权历史与实时查询；系统不再询问时打开对应设置，旧历史缺失时保留一次设置兜底 | [权限与后台引导规范](demo-app-permission-guide.md) |
+| 可选后台运行建议 | 后台耗电、自启动独立入口和任务卡片锁定提示；确认只记录阅读版本，设置页与计时确认可再次打开 | [权限与后台引导规范](demo-app-permission-guide.md)、[计时边界](demo-delayed-conversation.md) |
+
+最新完整包于 2026-09-27 13:55（Asia/Shanghai）保留数据覆盖安装到小米 `QSG6Q8IFDMDELVGQ` / `2602BRT18C`，版本 `1.10.0 / 123`，启动 `Status: ok`、进程存在。Debug APK SHA-256：`C704690C4AB18403B4AE4FC18053A7E81152F8A2DBE3D74090B9C4F233F6F7D9`。用户随后明确反馈“可以了 测试通过”，作为最新完整包的用户验收；具体点击路径未另行记录。
+
+最终源码验证于同日最后一轮实现调整后、13:55 安装前完成：
+
+```powershell
+.\gradlew.bat :demo-app:assembleDebug :demo-app:assembleDebugAndroidTest :demo-app:testDebugUnitTest --console=plain
+adb -s emulator-5580 shell am instrument -w -r -e class com.ugk.pi.android.testapp.PermissionGuideInstrumentedTest,com.ugk.pi.android.testapp.DemoDelayedTaskDialogInstrumentedTest com.ugk.pi.agent.test/androidx.test.runner.AndroidJUnitRunner
+```
+
+构建通过，179 项 JVM 测试为 0 失败/错误，API 35 定向仪器测试 12/12 通过。证据对应基线加本次提交中 21 个 Kotlin 源码/测试文件的工作树状态；最终调整包括精简建议文案、“我已了解，不再提醒”按钮和设置入口即时换色，均已纳入最终测试。验证后未再修改实现或测试，本次收束只对齐文档；历史各轮测试数量和 APK 不冒充最终包证据。实际设置往返、进程重建和视觉检查范围见权限规范；本地证据目录为 `.verify-shots/background-guidance-20260927/`。
+
+用户验收不扩写为 Agent 已操作全部 OEM 开关、跨品牌验证或长期后台常驻。真实模型计时、重启/进程死亡后的续跑也不在本轮验收范围；既有进程内计时边界保持不变。本次只保存本地提交，无远端推送、标签或发布动作；本地验证材料、浏览器记录、根目录截图及 Play 材料保留，不纳入源码提交。
+
+> 文首元数据、补充阶段收束和版本规则描述当前本地测试实现；其后的版本条目是不可改写的历史记录。
 > 历史条目中的“当前”仅指该条目记录时点，不是今天的版本或验证状态。
 
 ## 版本规则
@@ -13,9 +39,257 @@
 - `versionCode` 只递增，不因重新打包或覆盖安装回退。
 - `versionName` 使用面向测试交付的 SemVer 风格；聊天、会话和悬浮窗等一组可感知能力完成后提升 minor 版本。
 - 稳定性修复、生命周期恢复和验收证据整理使用 patch 版本递增，不与新的用户可感知 UI 能力混用。
-- 本阶段版本边界标签名为 `demo-app-v1.0.5@11d764a`；`demo-app-v1.0.4@4e4bbe4`、`demo-app-v1.0.3@032589c`、`demo-app-v1.0.2@6f88115`、`demo-app-v0.9.4`、`demo-app-v0.9.3`（指向 `1170268`）、`demo-app-v0.9.2`、`demo-app-v0.9.1`、`demo-app-v0.9.0`、`demo-app-v0.8.0`、`demo-app-v0.7.1`、`demo-app-v0.7.0`、`demo-app-v0.6.0`、`demo-app-v0.5.0`、`demo-app-v0.4.0` 和 `demo-app-v0.3.0` 保留为历史 Demo 交付标签，不代表 Terminal Runtime 已达到最终发布状态。
+- 当前本地版本保存标签为 `demo-app-v1.10.0`；上一个保存标签为 `demo-app-v1.7.3`。`1.8.0 / 121` 与 `1.9.0 / 122` 曾分别构建和安装，但未形成独立 Git 保存标签。此前 `1.1.0 / 106` 至 `1.7.2 / 119` 的本地测试版本也未创建标签。`demo-app-v1.0.5@11d764a`、`demo-app-v1.0.4@4e4bbe4`、`demo-app-v1.0.3@032589c`、`demo-app-v1.0.2@6f88115`、`demo-app-v0.9.4`、`demo-app-v0.9.3`（指向 `1170268`）、`demo-app-v0.9.2`、`demo-app-v0.9.1`、`demo-app-v0.9.0`、`demo-app-v0.8.0`、`demo-app-v0.7.1`、`demo-app-v0.7.0`、`demo-app-v0.6.0`、`demo-app-v0.5.0`、`demo-app-v0.4.0` 和 `demo-app-v0.3.0` 保留为历史 Demo 交付标签，不代表 Terminal Runtime 已达到最终发布状态。
 - Debug APK 允许本机从被 Git 忽略的配置读取 API 默认值，不能作为对外分发包；API Key 不进入源码、文档或提交。
-- 真机迭代使用固定 Debug 签名和 `adb install -r -d`，不以卸载、清数据作为常规版本升级步骤；本阶段不操作真机。
+- 真机迭代使用固定 Debug 签名和 `adb install -r -d`，不以卸载、清数据作为常规版本升级步骤；用户反馈已在真机测试 1.0.5/105 Debug 包，设备和日志信息未记录，Agent 未独立操作设备或复核该结果。
+
+## 1.10.0 · 2026-09-25 · 悬浮对话与主界面统一
+
+### 变更范围
+
+- 悬浮面板改用紧凑单行标题、次级状态和三个图标入口。最近 12 条消息复用主聊天消息组件，支持相同的 Markdown、代码、表格、图片预览和复制；流式回复同步展示并在持久化回复出现时去重。
+- 过程复用主界面一行动态摘要与轻量两级记录，活动日志默认收起。按 ID 复用消息和步骤，状态、日志与输入草稿刷新保持展开选择；读者离开底部后不强制追随新消息。
+- 输入区复用发送/停止组件，保留忙时发送排队、拒绝发送保留草稿及收起后恢复草稿。拒绝原因只采用本次新日志，避免误显示历史成功信息。长标题和代码语言在窄窗口保持单行省略；图片预览使用正确悬浮窗口类型。
+- 标题拖动、右下角缩放、确认回调、IME 避让和外部自动化焦点契约沿用既有行为。没有新增依赖、权限或修改 SDK/AAR 接口。
+- 此保存点还纳入独立的长会话修复：存储仍保留最新有界消息；如果截断后的首条是助手消息，重建模型会话从第一个完整用户回合开始，避免向模型发送不完整的首回合。对应 `DemoAgentSessionFactoryTest` 覆盖截断和仅有助手提示两种情况；该修复与视觉变更分别说明。
+
+### 验收证据与边界
+
+- `:demo-app:assembleDebug`、`:demo-app:assembleDebugAndroidTest`、`:demo-app:testDebugUnitTest` 通过，169 项单元测试无失败；最终 API 35 仪器测试 9/9 通过，包含主聊天两级展开回归、悬浮过程展开保持、流式去重、发送与草稿、折叠日志、浅深色 280dp 窄窗和 1.5 倍字体、真实拖动防误触、图片预览及停靠键盘避让/复位。
+- 7 张最终真实原生截图及原版对比见 `.verify-shots/overlay-ui-final/`、`overlay-reference-comparison.png`、`overlay-states-overview.png`，根目录 `design-qa.md` 最终验收 `passed`。测试数据由 fixture 提供；首次键盘检查误用了 Gboard 透明手写区域的窗口边界，切换为停靠键盘后通过，未为此修改生产避让算法。临时 `stylus_handwriting_enabled` 设置已恢复为原先未设置状态。手写/浮动键盘仍在既有估算兜底边界内。
+- 小米 `QSG6Q8IFDMDELVGQ`（`2602BRT18C`，Android 16 / API 36）安装前确认无活动计时任务；`adb install -r` 成功并启动，设备版本 `123 / 1.10.0`，进程存在，原会话、API 和主题偏好文件仍在。用户随后回复“很好 测试通过”，具体测试路径未另行记录；真实模型端到端和人工 TalkBack 未由 Agent 独立验收。
+- 阶段收束重新执行 Demo 构建、AndroidTest APK 构建及根目录列出的八个 SDK 单元测试模块，Gradle `BUILD SUCCESSFUL`；九模块 XML 合计 `575` 项，0 failure、0 error、3 skipped（Windows symlink 条件受限）；Demo 为 `169/169`。本阶段已执行的定向仪器测试仍以先前记录的 `9/9`、`6/6 + 1/1` 和 `4/4 + 1/1` 为证据；Terminal 双宿主仪器、Runtime 打包 Gate 与真实 Provider 端到端不属于本次 Demo UI 范围。本机日志 `.verify-shots/stage-closeout-build.log` 和各阶段记录供本地追溯。
+- Debug APK：`demo-app/build/outputs/apk/debug/demo-app-debug.apk`，SHA-256：`E4EBBB0A8425B492C355B3F386DBEA3334CED04BD2D6F2D0040FE98DCD3C9FBD`。本地提交与标签仅保存源码和文档，不代表 Play 发布；截图/日志为本机证据，未放入 Git。
+
+### 本地检查点与接手范围
+
+- 阶段基线是 `demo-app-v1.7.3` / `dcf48e2`；本地 `demo-app-v1.10.0` 保存随后完成的便签式确认、主聊天轻量过程和悬浮对话统一，以及上文单列的长会话修复。中间 `1.8.0`、`1.9.0` 的测试包与真机记录仍作为历史证据，不追补为精确 Git 标签。
+- 检查点只纳入 `demo-app` 的对应源码、Debug 合成会话测试宿主、自动化测试、原生资源和许可，以及根 `README.md`、`docs/demo-app-ui-redesign.md`、`docs/demo-app-version-ledger.md`、`docs/demo-delayed-conversation.md`、`docs/README.md`、`design-qa.md`。`.verify-shots/`、`.playwright-mcp/`、根目录 a11y/Play 截图及 `playstore/` 是本机或其他阶段内容，继续留在工作树，不属于该标签。被忽略的本地 API 配置也未纳入。
+- 下一次接手先读根 `AGENTS.md`、本台账、`docs/demo-app-ui-redesign.md` 和 `design-qa.md`，再查看 `MainActivity.kt`、`AgentFloatingWindow.kt`、`DemoChatProcessCardView.kt`、`TaskNoteUi.kt`。后续真实模型体验或用户反馈按新任务处理；Terminal Runtime、Play 发布与远程仓库操作不属于本次检查点。
+
+## 1.9.0 · 2026-09-25 · 一行过程摘要与轻量展开记录
+
+### 变更范围
+
+- 用户提供简洁过程参考及当前展开截图，要求等待阶段减少占用、使用有趣的小动效，并降低展开内容与最终回答的视觉竞争。主聊天收起态改为 48dp 一行：动态三点、短摘要、小箭头；去除头像、外框、白色大卡和重复状态/步数。
+- 展开后使用次文字、13sp 常规标题、小图标和细连接线；每个步骤仍可独立展开完整思考、输入参数及结果。170dp 局部滚动保留完整内容，新增步骤复用同 ID View，读者滚离底部时不会被流更新拉走。关闭外层重置各步骤展开状态。
+- 收起摘要只从运行阶段与工具名称得到；原始参数、模型思考和工具输出留在单项详情。工具失败但 Runtime 仍忙碌时继续三点动效；完成、终态失败、停止、等待确认及隐藏/离窗停止动画，遵从系统关闭动画。手动停止在主摘要和子步骤均显示为中性状态。
+- `DemoChatProcessCardView` 从聊天组件文件提取，新增 `DemoProcessPresentation`；图标使用官方 Material Icons outlined 原资源并沿用已打包的 Apache 2.0 许可。模型请求、工具执行、会话持久化与 SDK/AAR 接口保持原语义。
+
+### 验收证据与边界
+
+- `:demo-app:assembleDebug`、`:demo-app:assembleDebugAndroidTest`、`:demo-app:testDebugUnitTest` 通过，169 项单元测试无失败。API 35 模拟器上原展开回归和新过程测试共 6/6 通过；实际关闭系统动画后的补充检查 1/1 通过，已恢复原设置。
+- 8 张真实原生截图覆盖浅深色、收起、展开、完整详情、错误和 1.5 倍字体。参考图/旧版与实现已并排对比，最终设计验收 `passed`，见根目录 `design-qa.md` 的 `1.9.0` 记录；本地证据位于 `.verify-shots/process-*`。不通过真实模型生成截图内容。
+- 小米 `QSG6Q8IFDMDELVGQ`（`2602BRT18C`，Android 16 / API 36）安装前无活动延时任务；`adb install -r` 成功并启动。设备确认 `versionCode 122 / versionName 1.9.0`，原会话、API、主题等偏好文件仍在，进程存在。用户真机观感与真实模型端到端尚待反馈，人工 TalkBack 未在本轮执行。
+- 本地 Debug APK：`demo-app/build/outputs/apk/debug/demo-app-debug.apk`，SHA-256：`81BCAFB2222637190F40A09D48CD0301BE6A18ABD53E08FEFFAF669786DBC138`。本轮没有创建提交、标签或 Play 发布。
+
+## 1.8.0 · 2026-09-25 · 便签式确认、计时与整屏提醒
+
+### 变更范围
+
+- 用户选定暖纸色、墨绿色大字、琥珀色便签和猫头鹰插画的第二套设计，并要求将同一风格延伸至顶部倒计时与接管悬浮层后的整屏提醒。新增 `TaskNoteUi` 统一浅深色 Token、按钮、标签、虚线、生成插画与下划线；交互内容仍由 Android 原生 View 渲染。
+- 底部确认层突出完整任务、自然时长、单次/周期属性以及“取消 / 确认并开始”；保留待清队列提醒与后台设置入口。顶部等待层突出倒计时、预计时间及任务摘要，停止操作固定可见。短窗口或大字体下，正文滚动区域为操作区预留实际高度。
+- 整屏提醒沿用便签风格，保留有序内容、原因、真实按钮与输入表单。40 字按钮可完整换行；关闭、打开对话、按钮点击和表单提交继续采用各自既有语义。计时状态机、显式入退场动画与 SDK/AAR 接口未因视觉调整改变。
+- 猫头鹰与装饰下划线为生成图像资源；时钟和关闭图标使用 Google Material Icons 原始资源，Apache 2.0 许可随 Demo 打包。资源来源及提示词记录见 `docs/demo-app-ui-redesign.md`。
+
+### 验收证据与边界
+
+- `:demo-app:assembleDebug`、`:demo-app:assembleDebugAndroidTest` 和 `:demo-app:testDebugUnitTest` 通过；169 项单元测试无失败。API 35 模拟器上的入退场与便签 UI 定向仪器测试最终 4/4 通过；1080×960 短窗口、1.5 倍字体的追加检查 1/1 通过，检查后已恢复窗口尺寸。
+- 已实查确认/等待/整屏提醒的浅深色截图，长任务滚动、固定操作区、表单校验及操作回调。选稿与实现同宽裁切对比、实际截图和修正记录见根目录 `design-qa.md`，最终设计验收为 `passed`。截图与构建日志存放于本地 `.verify-shots/`。
+- 小米 `QSG6Q8IFDMDELVGQ`（`2602BRT18C`，Android 16 / API 36）安装前无活动延时任务；以 `adb install -r` 保留数据覆盖安装并启动。`dumpsys package` 确认 `versionCode 121 / versionName 1.8.0`，原会话、API 与主题等偏好文件仍在，应用进程存在。
+- 本轮未通过真实模型触发完整提醒链路，未进行实际输入法弹出的悬浮表单端到端检查；这些仍需结合真机体验。本地 Debug APK：`demo-app/build/outputs/apk/debug/demo-app-debug.apk`，SHA-256：`E9B99D14B8EB262578325376FDDAA0ECE5A8FF45CBC78396C889140396425D24`。本轮没有创建提交、标签或 Play 发布。
+- 用户随后明确回复“我已经测试通过了”，本轮真机体验验收通过；具体测试路径未另行记录。该反馈与上述 Agent 独立验证范围分别保留。
+
+## 1.7.3 · 2026-09-25 · 修正顶部确认层窗口边界与重复留白
+
+### 变更范围
+
+- 用户在 `1.7.2 / 119` 真机截图确认：状态栏仍是灰色，确认卡片顶部增加了一整段空白。根因是浮动 Dialog 仍从系统状态栏下方开始，而补偿用的状态栏高度又叠加在卡片内部。
+- 顶部确认层改为非浮动、全屏透明 Dialog，由贴顶卡片覆盖状态栏背后；卡片内容只避让一次状态栏高度，并将自身顶部留白由 22dp 缩到 16dp。向下入场动画作用于卡片本身。底部等待层维持原窗口和布局。版本由 `1.7.2 / 119` 升至 `1.7.3 / 120`。
+
+### 验收证据与边界
+
+- `:demo-app:assembleDebug` 和 `git diff --check` 通过；`aapt dump badging` 确认 APK 为 `com.ugk.pi.agent / 1.7.3 / 120`。授权小米 `QSG6Q8IFDMDELVGQ`（实测型号 `2602BRT18C`，Android 16 / API 36）安装前任务标记为空，以 `adb install -r` 保留数据覆盖安装并启动；`dumpsys package` 确认设备版本为 `120 / 1.7.3`，原 API、会话与主题等偏好文件仍在，应用进程存在。用户随后针对顶部灰条和大块空白的复测明确回复“测试通过”。
+- 本地版本保存：实现提交 `0d4ce13`，台账对齐后以 `demo-app-v1.7.3` 标记保存点。对应本机 Debug APK 位于 `demo-app/build/outputs/apk/debug/demo-app-debug.apk`（被 Git 忽略），SHA-256 为 `9304DED7BB697E1143A0F09F6E50AC3FC76162FF1BA48CECD966266B2273DB87`；不代表对外分发或 Play 发布。
+
+## 1.7.2 · 2026-09-25 · 顶部确认层状态栏修补尝试
+
+### 变更范围
+
+- 用户真机截图指出顶部确认层已贴顶，但系统状态栏仍显示灰色压暗背景，与白色弹窗形成断层。本版尝试让浮动 Dialog 覆盖状态栏区域，并给确认内容增加状态栏高度的顶部留白、设置状态栏图标明暗；该尝试未改变 Dialog 的浮动窗口边界。
+- 仅调整顶部确认层的窗口布局和文档；底部等待层、计时语义、Agent 会话与 SDK/AAR 未改。本地测试版本由 `1.7.1 / 118` 升至 `1.7.2 / 119`。
+
+### 验收证据与边界
+
+- `:demo-app:assembleDebug` 和 `git diff --check` 通过；`aapt dump badging` 确认 APK 为 `com.ugk.pi.agent / 1.7.2 / 119`。授权小米 `QSG6Q8IFDMDELVGQ`（实测型号 `2602BRT18C`，Android 16 / API 36）安装前计时任务标记为空，以 `adb install -r` 保留数据覆盖安装并启动；`dumpsys package` 确认设备版本为 `119 / 1.7.2`，原 API、会话与主题等偏好文件仍在，任务标记仍为空，应用进程存在。用户随后真机截图显示灰色状态栏仍在，卡片顶部多出一段空白；本版视觉目标未达成。
+
+## 1.7.1 · 2026-09-25 · 计时弹窗半屏覆盖与内容收束
+
+### 变更范围
+
+- 用户在 `1.7.0 / 117` 真机界面指出：顶部确认层仍像悬空卡片；底部等待层的任务内容被滚动区与固定停止按钮挤住，需要滚动才能看完，并提供截图。前者改为贴顶全宽、仅下缘圆角的上半屏覆盖层，保留向下入场；后者保留贴底全宽与向上入场。
+- 等待层将“距离任务执行”并入计时面板，缩小留白与计时字号，任务由大卡片改为紧凑摘要；不再在等待层重复展示上轮结果，其完整内容仍在主对话。等待层移除滚动容器，让倒计时、进度、预计时间、任务摘要和停止按钮直接可见；极长任务摘要最多两行并显示省略号，原文仍可在对话中查看。确认层继续允许滚动查看完整任务，开始/取消按钮固定可见。
+- 仅改 Demo 原生界面与文档，不改计时或 Agent 运行语义；本地测试版本由 `1.7.0 / 117` 升至 `1.7.1 / 118`。
+
+### 验收证据与边界
+
+- `:demo-app:assembleDebug` 和 `git diff --check` 通过；`aapt dump badging` 确认 APK 为 `com.ugk.pi.agent / 1.7.1 / 118`。授权小米 `QSG6Q8IFDMDELVGQ`（实测型号 `2602BRT18C`）安装前计时任务标记为空，随后以 `adb install -r` 保留数据覆盖安装并启动；`dumpsys package` 确认 `versionCode 118 / versionName 1.7.1`，原 API、会话等偏好文件仍在，任务标记仍为空，应用进程存在。实际上下覆盖位置与无滚动布局仍需用户真机体验。
+
+## 1.7.0 · 2026-09-25 · 计时确认与等待弹窗视觉分层
+
+### 变更范围
+
+- 用户真机确认 `1.6.1 / 116` 周期计时修正生效，同时指出确认和等待弹窗同为居中大卡片，文案重复、层级松散且状态难以区分；提供了两张当前界面截图作为改造依据。
+- 计时提案改为从顶部向下进入、位于上半区的蓝色决策卡，突出间隔、任务内容及并排的取消/开始按钮。等待态改为从底部向上进入、占据下半区的绿色计时面板，突出剩余时间、进度、预计执行时间与停止入口。说明文案压缩，长内容在独立内容区滚动，按钮固定可见；保留 Light/Dark 主题色、后台设置入口和任务本身的确认/取消/停止语义。
+- 本版仅改 `:demo-app` 的原生界面和动画资源，不改模型意图路由、计时起点、Agent 会话或 SDK/AAR。测试交付版本由 `1.6.1 / 116` 升至 `1.7.0 / 117`。
+
+### 验收证据与边界
+
+- `:demo-app:assembleDebug` 和 `git diff --check` 通过；`aapt dump badging` 确认 APK 为 `com.ugk.pi.agent / 1.7.0 / 117`。初次检查授权小米 `QSG6Q8IFDMDELVGQ`（实测型号 `2602BRT18C`）时，上一轮“每轮提醒喝水”的周期任务仍在等待，因此暂缓安装。用户随后明确要求安装；再次检查任务标记为空后，使用 `adb install -r` 保留数据覆盖安装并启动。`dumpsys package` 确认 `versionCode 117 / versionName 1.7.0`，应用进程存在，原 API、会话等偏好文件仍在，任务标记仍为空。弹窗的实际动效、长任务滚动与浅/深色观感需用户真机体验。
+
+## 1.6.1 · 2026-09-25 · 周期任务按上轮完成时间重新计时
+
+### 变更范围
+
+- 用户在真机运行每 30 秒提醒任务后发现，Agent 本轮处理耗时十余秒，下一轮倒计时一出现就只剩十余秒。原因是 `1.6.0` 以首次截止时间为节拍，Agent 运行时间也消耗了下一轮间隔。
+- 首轮仍从用户确认后等待完整间隔。此后在本轮 Agent 结束、结果写回原对话并释放运行槽位后，再开始下一轮完整间隔；不并发、不补跑。前台/后台等待、单次任务、手动停止和进程死亡后中断策略保持原有边界。Activity 的结果保存兜底也等到运行结束才重新计时。
+- 同步调整模型路由、Agent 工具说明、确认/倒计时卡片和当前计时文档，明确“每轮完成后重新等待”。本地测试版本由 `1.6.0 / 115` 升至 `1.6.1 / 116`。
+
+### 验收证据与边界
+
+- `:demo-app:assembleDebug` 和 `git diff --check` 通过；`aapt dump badging` 确认 APK 为 `com.ugk.pi.agent / 1.6.1 / 116`。安装前核对授权小米 `QSG6Q8IFDMDELVGQ`（实测型号 `2602BRT18C`）的计时任务标记为空；随后用 `adb install -r` 保留数据覆盖安装并启动。安装后 `dumpsys package` 确认版本和应用进程，原 API、会话等偏好文件仍在，任务标记仍为空。未运行自动化测试或真实模型多轮计时；新倒计时起点与后台行为待用户真机复测。
+
+## 1.6.0 · 2026-09-25 · 单对话固定间隔周期任务
+
+### 变更范围
+
+- 用户真机测试指出“从现在开始，每 5 分钟做一件事”无法创建任务。此前 `DemoModelIntentRouter` 明确把重复任务判为普通对话，`demo_delay_propose` 和 `DemoDelayedTaskController` 也只支持单次到点。本版让模型将明确的无限期固定间隔请求路由为周期提案；宿主只验证结构化间隔和任务内容，不对用户文字做关键词、正则或格式匹配。
+- 沿用唯一计时槽位、用户确认和原会话续跑。确认后第一个间隔到点执行；之后以第一次截止时间为节拍，上一轮结束后只安排下一个未来时点，跳过错过的时点，不并发、不补跑。每轮仍使用 `SCHEDULED_TASK` 和原 `AgentSession`，结果写入当前对话；同一会话的整屏提醒按钮/表单事件可在周期等待期间串行进入 `SDK_EVENT`，普通聊天仍被阻塞。周期任务只由用户手动停止；Cron、有限次数和自动结束条件尚未提供。
+- 确认与等待卡片区分单次/周期，展示执行间隔、下一次倒计时、已完成轮次和上轮结果节选；完整结果仍保存在主对话。进程结束后不自动续跑周期；下次启动写入中断说明。无新增 Android 权限、后台组件或独立 Agent 会话。
+- 本地测试版本由 `1.5.0 / 114` 升至 `1.6.0 / 115`。
+
+### 验收证据与边界
+
+- `:demo-app:assembleDebug` 和 `git diff --check` 通过；`aapt dump badging` 确认 APK 为 `com.ugk.pi.agent / 1.6.0 / 115`。授权小米 `QSG6Q8IFDMDELVGQ`（实测型号 `2602BRT18C`）已用 `adb install -r` 保留数据覆盖安装并启动，`dumpsys package` 确认版本、应用进程存在，原 API、会话等偏好文件仍在；安装前后计时任务标记均为空。真实模型意图、跨多轮计时与后台存活仍需用户真机体验。
+
+## 1.5.0 · 2026-09-25 · 可交互的整屏提醒
+
+### 变更范围
+
+- `agent_show_urgent_message` 在宿主实现 `InteractiveUrgentMessagePresenter` 时开放最多 3 个真实按钮和一个单行表单；Agent 负责提供控件 ID、标签与提示，App 负责安全边界和实际 View。旧宿主仍可只实现 `UrgentMessagePresenter`，不会得到无法回传的控件参数。`pi-attention-skill-android` 本地 publication 升至 `0.3.0`。
+- SDK 为每次展示生成 `presentationId` 并绑定原 `sessionId`，不接受模型自填绑定。Demo 只接受当前会话的控件事件，单次展示只提交一次；忙时进入有界进程队列，原回合结束后通过 `SDK_EVENT` 在同一会话启动新回合，停止当前任务会清除尚未运行的控件事件。用户操作与 Agent 后续回答进入主对话；右上角关闭和“打开对话”不伪装为点击控件。
+- 表单只接收非空、最多 500 字的单行文本；带表单的悬浮窗才获得输入焦点。没有新增 Android 权限或后台执行组件；进程结束后尚未运行的内存队列不会续跑。
+- 本地测试版本由 `1.4.0 / 113` 升至 `1.5.0 / 114`。
+
+### 验收证据与边界
+
+- `:demo-app:assembleDebug` 与 `:pi-attention-skill-android:publishReleasePublicationToMavenLocal` 通过，`0.3.0` AAR 已落到本机 Maven 仓库；`aapt dump badging` 确认 APK 是 `com.ugk.pi.agent / 1.5.0 / 114`，`git diff --check` 通过。授权小米 `QSG6Q8IFDMDELVGQ`（实测型号 `2602BRT18C`）已通过 `adb install -r` 保留数据覆盖安装并启动，`dumpsys package` 确认 `1.5.0 / 114`、应用进程存在，原 API、会话与其他偏好文件仍在；安装前后延时任务标记均为空。真实模型选择控件、按钮回传以及不同输入法布局仍需用户真机体验反馈。
+
+## 1.4.0 · 2026-09-25 · 醒目通知与整屏重要提醒
+
+### 变更范围
+
+- 用户真机反馈此前通知只有隐蔽的低优先级条目，重要提醒只显示在悬浮对话框内部，无法形成真正的屏幕提醒。Demo 为后续 Agent 通知使用新的 `ugk_agent_alerts_high_v1` 渠道，首次创建时请求 `HIGH` 重要度；旧 `ugk_agent_messages` 渠道保留。SDK 的 `AgentNotificationConfig` 支持宿主选择重要度，Android 8 以下映射通知优先级。
+- `AgentFloatingWindow` 在展示重要提醒时暂时撤下普通悬浮球/对话框，切换为占满可用屏幕的 `UrgentTakeoverView`。右上角始终有 48dp 关闭入口，底部可打开主对话；关闭后恢复原悬浮状态。主界面恢复前台时不撤下尚未关闭的重要提醒；开始屏幕自动化或需要用户确认时，撤下提醒以便操作，通知仍可回看。
+- Agent 可为 `agent_show_urgent_message` 选固定配色和最多 8 个有序纯文本元素：标题、段落、强调块、列表项。App 负责安全边界、滚动和关闭入口，不让模型提交任意 View、HTML 或屏幕坐标。通知正文仍是简要摘要和无元素时的悬浮兜底。SDK 外部宿主可按自身 UI 渲染或忽略这些可选元素；`pi-attention-skill-android` 的本地 publication 版本升至 `0.2.0`。
+- 本地测试版本由 `1.3.3 / 112` 升至 `1.4.0 / 113`；没有新增权限或后台组件。
+
+### 验收证据与边界
+
+- `:demo-app:assembleDebug` 与 `git diff --check` 通过；`1.4.0 / 113` Debug APK 已在授权小米 `QSG6Q8IFDMDELVGQ` 上以 `adb install -r` 保留数据覆盖安装，安装后 `dumpsys package` 确认版本，原 API、会话和其他偏好文件仍存在。安装前后延时任务标记均为空。
+- 新通知渠道在首次实际发通知时创建；本轮没有触发真实 Agent 通知或整屏提醒。横幅是否弹出还取决于用户渠道设置、勿扰模式与系统策略，`posted` 只说明 Android 接受投递。整屏悬浮窗不能覆盖系统关键界面。真机视觉、关闭恢复和 Agent 生成结构化元素的效果仍需用户体验。
+
+## 1.3.3 · 2026-09-25 · Agent 提醒能力可发现性
+
+### 变更范围
+
+- 用户真机反馈 `1.3.2 / 111` 的通知功能“好像没有什么问题”。本版保留既有通知和悬浮展示实现，将 `agent_send_notification`、`agent_show_urgent_message` 的用途、选择边界与返回状态写入每次模型请求可见的插件说明；详细 `AndroidSkill` 继续提供操作语义，触发词不负责决定是否执行通知。
+- 明确普通前台聊天无需重复通知，重要悬浮工具已附带通知，不为同一事件双重调用；延时提醒先由定时任务能力处理，期限到达后再按任务目的提醒。
+- 本地测试版本由 `1.3.2 / 111` 提升至 `1.3.3 / 112`；无新 Android 权限、渠道或后台组件。
+
+### 验收证据与边界
+
+- `:demo-app:assembleDebug` 通过；`1.3.3 / 112` Debug APK 已在授权小米 `QSG6Q8IFDMDELVGQ` 上保留数据覆盖安装，安装后 `dumpsys package` 确认版本且原偏好文件仍在。安装前延时任务标记为空。
+- 用户对旧版通知的体验反馈不等于新版 Agent 选工具验收；新版能力说明如何影响实际模型选工具，尚需真机对话观察。
+
+## 1.3.2 · 2026-09-25 · 模型驱动的延时意图路由
+
+### 变更范围
+
+- 根据用户明确要求，移除 `DemoRelativeDelayParser` 和输入/助手文本匹配兜底。延时意图与任务内容由当前配置的大模型对每条直接用户消息作结构化 JSON 判断；模型判为延时后才调用现有提案工具，App 只校验时长、内容和槽位并请求用户确认。
+- Z.AI 官方端点的路由请求使用 `response_format: json_object`；其他端以提示词要求 JSON。无效结果最多重试一次，仍无效就明确失败，不依据文本猜测。到点续跑沿用原 Agent 循环，不重新进入路由。
+- 本地测试版本由 `1.3.1 / 110` 提升至 `1.3.2 / 111`。每条用户消息增加一次模型请求，正常任务的首字延迟与模型费用会相应增加。
+
+### 验收证据与边界
+
+- `:demo-app:compileDebugKotlin` 与 `:demo-app:assembleDebug` 已通过；`1.3.2 / 111` Debug APK 在授权小米 `QSG6Q8IFDMDELVGQ` 上通过 `adb install -r` 保留数据覆盖安装，安装后 `dumpsys package` 确认版本，原有 API 与会话偏好文件仍在。安装前延时任务标记为空。
+- 模型路由的实际对话、确认卡和不同 API 兼容端的 JSON 输出仍需用户真机体验；构建和安装通过不等于模型分类永远正确。
+
+## 1.3.1 · 2026-09-25 · 延时任务确认弹窗兜底
+
+### 变更范围
+
+- 真机 `1.2.1 / 108` 上，用户发送“一分钟以后跟我发一句你好”后仅看到 Agent 文本“请确认”，没有确认卡。应用私有诊断记录显示该回合模型 `toolCallCount=0`，`DemoDelayedTaskState` 未进入 `Proposed`；“全授权”不是原因。
+- 明确的相对延时指令由 Demo 输入层保守解析，直接提交到现有单任务控制器并显示确认卡。复杂表达继续走 Agent；模型只输出与用户时长一致的提案文本时，宿主补建提案。若模型声称“请确认”但任务仍未创建，显示明确失败说明。
+- 本地测试版本由 `1.3.0 / 109` 提升至 `1.3.1 / 110`。仍需用户点击确认才开始计时，后台进程与到点续跑语义不变。
+
+### 验收证据与边界
+
+- `:demo-app:compileDebugKotlin`、`:demo-app:assembleDebug` 通过；`1.3.1 / 110` Debug APK 已在连接的测试机 `QSG6Q8IFDMDELVGQ` 上通过 `adb install -r` 保留数据覆盖安装，安装后 `dumpsys package` 确认 `versionCode=110`、`versionName=1.3.1`。实际界面、确认/拒绝及一分钟到点续跑仍需真机复验。
+
+## 1.3.0 · 2026-09-24 · Agent 即时通知与重要悬浮提醒
+
+### 变更范围
+
+- 新增可独立发布的 `pi-attention-skill-android` AAR。Agent 可调用 `agent_send_notification` 发宿主通知；宿主提供展示适配器时可调用 `agent_show_urgent_message`，先发通知再尝试屏幕展示，分别返回实际状态。
+- Demo 在现有 `AgentFloatingWindow` 顶部增加重要提醒卡，避免第二个悬浮窗。用户可关闭提醒或打开主界面；屏幕自动化和待确认界面占用悬浮窗时不抢占。
+- 本地测试版本由 `1.2.1 / 108` 提升至 `1.3.0 / 109`。权限声明维持原有 `POST_NOTIFICATIONS` 与 `SYSTEM_ALERT_WINDOW`；没有新增后台服务或持久化调度。
+
+### 验收证据与边界
+
+- `:pi-attention-skill-android:assembleRelease`、`:demo-app:assembleDebug` 通过；Release publication 的 POM/Module Metadata 已生成，POM 仅含 Core SDK 与 Kotlin 标准库直接依赖。
+- 本轮尚未覆盖安装到真机，未实测通知渠道设置、权限拒绝或重要卡片交互；构建成功不等同于各 Android 厂商上的实际展示保证。外部接入、Tool 返回状态和平台限制见 [`android-agent-attention.md`](android-agent-attention.md)。
+
+## 1.2.1 · 2026-09-24 · 延时任务弹窗视觉收口
+
+### 变更范围
+
+- 将系统默认确认弹窗和无限旋转等待框改为主题化原生卡片。确认态突出等待时长、完整任务与“开始等待”；等待态突出大号倒计时、确定进度、预计开始时间与“停止任务”。
+- 卡片沿用 `Ui` 的暖白/深灰、绿色主操作和圆角层级；长任务及字体放大时支持内部滚动。计时、独占、后台和进程死亡语义保持 `1.2.0` 的设计。
+- 本地测试包版本由 `1.2.0 / 107` 升至 `1.2.1 / 108`；未提交 Play，未创建发布标签。
+
+### 验收证据与边界
+
+- `:demo-app:compileDebugKotlin` 与 `:demo-app:assembleDebug` 通过；确认与等待卡片已在本地 Android 模拟器的浅色、深色模式分别渲染并检查。临时预览 Activity 已从正式构建移除。
+- `1.2.1 / 108` 已在连接的小米测试机上以 `adb install -r -d` 保留数据覆盖安装；用户已反馈 `1.2.0 / 107` 延时功能可用，但原弹窗与倒计时简陋。新版真实对话流程与主观视觉体验仍待用户确认。
+
+## 1.2.0 · 2026-09-24 · 单对话延时任务首版
+
+### 变更范围
+
+- `demo_delay_propose` 将相对延时意图交给宿主确认；确认从用户点击“开启”开始计时，不受“全授权”设置影响。主对话展示阻塞倒计时和停止入口，其他 Agent 消息与会话切换在等待期间不可用。
+- 到点后进程级分发器向同一会话追加用户消息，再经现有 `DemoAgentRunCoordinator` 与 `AgentRuntime` 执行。退后台和锁屏不主动取消；进程死亡不自动补跑，下次启动提示中断。
+- Demo 退役旧版后台 `JobScheduler`/`AlarmManager` 组件入口，升级时取消旧活动任务并在关联对话说明。SDK 通用调度模块仍保留。协议与边界见 [`demo-delayed-conversation.md`](demo-delayed-conversation.md)。
+- Demo 测试交付元数据由 `1.1.0 / 106` 升至 `1.2.0 / 107`；未提交 Play，未创建发布标签。
+
+### 验收证据与边界
+
+- `:demo-app:compileDebugKotlin` 和 `:demo-app:assembleDebug` 已通过；合并 Manifest 不含旧定时 JobService、Receiver 和开机广播权限。
+- 本轮未运行单元测试或真机定时流程；用户确认、后台到点、旧任务升级迁移和不同设备电池策略仍需真机验收，不能据构建成功宣称按时执行可靠。
+
+## 1.1.0 · 2026-09-24 · 视觉优先屏幕自动化
+
+### 变更范围
+
+- 对支持截图的无障碍后端，屏幕自动化以当前截图作为主要观察，操作后重新截图验证；结构树用于语义证据、精确文本、节点能力和目标消歧。截图不支持时使用结构树；截图失败最多重试一次，之后回退结构树。实现与限制见 [`android-accessibility-screen-automation.md`](android-accessibility-screen-automation.md)，源码提交 `2d01a70`。
+- `DemoApplication` 启动时删除已退役 Jev 试验留下的偏好和两个数据文件（源码提交 `e4c422d`）。
+- Demo 测试交付元数据由 `1.0.5 / versionCode 105` 升至 `1.1.0 / versionCode 106`。此版本未提交 Play，也未创建发布标签。
+
+### 验收证据与边界
+
+- `:demo-app:assembleDebug`、8 个 SDK 模块及 `:demo-app:testDebugUnitTest`、`:demo-app:compileDebugAndroidTestKotlin` 在源码 HEAD `e4c422da81d675f623558a0b29dcb5efd640a12e` 对应的提交内容上通过；9 个模块共 `573` 项（0 failure、0 error、3 skipped）。该测试结果在版本元数据递增前执行；本次收口另行验证 `1.1.0 / 106` Debug APK 构建。
+- 用户反馈此前安装的 `1.0.5 / 105` Debug APK 真机测试效果不错。该反馈对应视觉优先实现的同一源码；设备型号、系统版本和独立日志未记录，不作为 Agent 独立复核结果。`1.1.0 / 106` 是新的本地测试元数据，尚无此版本真机验证。
+- Play 发布状态：本次未上传；`1.1.0` 不是 Play 发布。旧版 `1.0.5` 的 Play 轨道状态仍以 Play Console 实测为准。
 
 ## 1.0.6 · 2026-09-08 · 第五轮 P0 审查修复（SDK 协议/并发/技能边界/demo 数据完整性）
 

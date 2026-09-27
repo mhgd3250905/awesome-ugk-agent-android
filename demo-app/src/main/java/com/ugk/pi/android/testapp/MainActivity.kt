@@ -39,6 +39,7 @@ import com.google.android.material.bottomsheet.BottomSheetDialog
 import com.ugk.pi.android.AgentEvent
 import com.ugk.pi.android.AgentRuntime
 import com.ugk.pi.android.AgentSession
+import com.ugk.pi.android.AgentRunSource
 import com.ugk.pi.android.AgentToolInterlockErrorCodes
 import android.Manifest
 import android.content.pm.PackageManager
@@ -50,10 +51,7 @@ import android.view.ViewOutlineProvider
 import android.widget.ImageView
 import android.widget.ImageButton
 import androidx.core.app.ActivityCompat
-import androidx.core.content.ContextCompat
 import com.ugk.pi.android.AgentImageContent
-import com.ugk.pi.task.runtime.AlarmManagerAgentTaskScheduler
-import com.ugk.pi.task.runtime.AndroidAgentTaskStore
 import java.io.File
 import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.Dispatchers
@@ -77,8 +75,8 @@ class MainActivity : ComponentActivity() {
         get() = conversationRuntime.conversationStore
     private val traceStore by lazy { DemoAgentTraceStore(applicationContext) }
     private val fileImportStore by lazy { DemoFileImportStore(applicationContext) }
-    private val scheduledTaskStore by lazy { AndroidAgentTaskStore(applicationContext) }
-    private val scheduledTaskScheduler by lazy { AlarmManagerAgentTaskScheduler(applicationContext) }
+    private val delayedTasks: DemoDelayedTaskController
+        get() = processScope.delayedTasks
     private lateinit var activeConversation: DemoConversation
     private val session: AgentSession
         get() = checkNotNull(conversationRuntime.session) {
@@ -89,7 +87,6 @@ class MainActivity : ComponentActivity() {
     private val capabilityInterlock: DemoCapabilityInterlock
         get() = conversationRuntime.capabilityInterlock
     private val activityToken = Any()
-    private var overlayPermissionDialog: AlertDialog? = null
     private val confirmationPresenter by lazy {
         processScope.confirmationPresenter.also { presenter ->
             presenter.attach(
@@ -142,6 +139,7 @@ class MainActivity : ComponentActivity() {
     private var hasPendingStreamingRender = false
     private val streamingRenderHandler = android.os.Handler(android.os.Looper.getMainLooper())
     private val streamingRenderRunnable = Runnable { flushStreamingAssistantText() }
+    private val delayedDialog by lazy { DemoDelayedTaskDialog(this) { delayedTasks.snapshot() } }
     private var lastImeInsetBottom = 0
     private val themeListener: (Boolean) -> Unit = { runOnUiThread { applyTheme() } }
     private val floatingWindow: AgentFloatingWindow
@@ -156,10 +154,44 @@ class MainActivity : ComponentActivity() {
         // user cancel or failure only needs to drop the download listener.
         if (result.resultCode != RESULT_OK) inAppUpdateController.onUpdateFlowAbandoned()
     }
-    private val inAppUpdateController: InAppUpdateController by lazy { InAppUpdateController(this, inAppUpdateLauncher) }
+    private val inAppUpdateController: InAppUpdateController by lazy {
+        InAppUpdateController(this, inAppUpdateLauncher,
+            canPresent = { permissionGuide.canShowUpdate() },
+            onExternalFlow = { permissionGuide.markExternalFlow() })
+    }
+
+    private val permissionGuide: DemoPermissionGuideController = DemoPermissionGuideController(this,
+        busy = { runState.isBusy || runCoordinator.isRunning() ||
+            delayedTasks.snapshot() !is DemoDelayedTaskState.Idle ||
+            processScope.urgentInteractionDispatcher.hasPending() || importingFile || processingImages || backgroundGuidance.isActive },
+        onFinished = { inAppUpdateController.checkOnResume() })
+    private val runtimePermissionHistory by lazy { DemoRuntimePermissionHistory(this) }
+    private val backgroundGuidance: DemoBackgroundGuidanceHost = DemoBackgroundGuidanceHost(this,
+        beforeExternal = {
+            suppressOverlayForInAppNavigation = true
+            permissionGuide.markExternalFlow()
+        },
+        onClosed = {
+            renderDelayedTaskState(delayedTasks.snapshot())
+            permissionGuide.reconsider()
+        })
+
+    override fun startActivity(intent: Intent, options: Bundle?) {
+        suppressOverlayForInAppNavigation = true
+        permissionGuide.markExternalFlow()
+        super.startActivity(intent, options)
+    }
+
+    override fun startActivityForResult(intent: Intent, requestCode: Int, options: Bundle?) {
+        suppressOverlayForInAppNavigation = true
+        permissionGuide.markExternalFlow()
+        super.startActivityForResult(intent, requestCode, options)
+    }
 
     override fun onCreate(savedInstanceState: Bundle?) {
         super.onCreate(savedInstanceState)
+        permissionGuide.restore(savedInstanceState)
+        backgroundGuidance.restore(savedInstanceState)
         ThemeManager.init(this)
         ThemeManager.addListener(themeListener)
         if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.R) {
@@ -211,7 +243,9 @@ class MainActivity : ComponentActivity() {
         restoreDraft(savedInstanceState)
         refreshRuntime()
         attachRunCoordinator()
-        requestNotificationPermissionIfNeeded()
+        delayedTasks.attach(activityToken) { state ->
+            runOnUiThread { renderDelayedTaskState(state) }
+        }
     }
 
     override fun onNewIntent(intent: Intent) {
@@ -223,6 +257,9 @@ class MainActivity : ComponentActivity() {
     @Deprecated("Use the file picker callback when the Activity Result API is adopted.")
     override fun onActivityResult(requestCode: Int, resultCode: Int, data: Intent?) {
         super.onActivityResult(requestCode, resultCode, data)
+        if (requestCode == REQUEST_PICK_IMAGE || requestCode == REQUEST_TAKE_PHOTO || requestCode == REQUEST_IMPORT_FILE) {
+            permissionGuide.onExternalResult()
+        }
         if (resultCode != RESULT_OK) return
         when (requestCode) {
             REQUEST_PICK_IMAGE -> {
@@ -276,8 +313,15 @@ class MainActivity : ComponentActivity() {
         grantResults: IntArray
     ) {
         super.onRequestPermissionsResult(requestCode, permissions, grantResults)
-        if (requestCode == REQUEST_CAMERA_PERMISSION && grantResults.firstOrNull() == PackageManager.PERMISSION_GRANTED) {
-            openCamera()
+        if (requestCode == REQUEST_CAMERA_PERMISSION) {
+            permissionGuide.onExternalResult()
+            val granted = grantResults.firstOrNull() == PackageManager.PERMISSION_GRANTED
+            runtimePermissionHistory.recordResult(Manifest.permission.CAMERA, granted)
+            when {
+                granted -> openCamera()
+                !ActivityCompat.shouldShowRequestPermissionRationale(this, Manifest.permission.CAMERA) -> showCameraPermissionSettings()
+                else -> showInlineNotice("尚未获得相机权限，你仍可以从相册选择图片")
+            }
         }
     }
 
@@ -316,9 +360,16 @@ class MainActivity : ComponentActivity() {
             showInlineNotice("最多支持添加 $MAX_PENDING_IMAGES 张图片")
             return
         }
-        if (ContextCompat.checkSelfPermission(this, Manifest.permission.CAMERA) != PackageManager.PERMISSION_GRANTED) {
-            ActivityCompat.requestPermissions(this, arrayOf(Manifest.permission.CAMERA), REQUEST_CAMERA_PERMISSION)
-            return
+        when (runtimePermissionHistory.action(this, Manifest.permission.CAMERA)) {
+            RuntimePermissionAction.SETTINGS -> { showCameraPermissionSettings(); return }
+            RuntimePermissionAction.REQUEST -> {
+                suppressOverlayForInAppNavigation = true
+                permissionGuide.markExternalFlow()
+                runtimePermissionHistory.markRequested(Manifest.permission.CAMERA)
+                ActivityCompat.requestPermissions(this, arrayOf(Manifest.permission.CAMERA), REQUEST_CAMERA_PERMISSION)
+                return
+            }
+            RuntimePermissionAction.GRANTED -> Unit
         }
         val photoFile = DemoImageUtils.createCameraPhotoFile(this)
         cameraPhotoFile = photoFile
@@ -328,6 +379,20 @@ class MainActivity : ComponentActivity() {
             addFlags(Intent.FLAG_GRANT_WRITE_URI_PERMISSION or Intent.FLAG_GRANT_READ_URI_PERMISSION)
         }
         startActivityForResult(intent, REQUEST_TAKE_PHOTO)
+    }
+
+    private fun showCameraPermissionSettings() {
+        AlertDialog.Builder(this, Ui.dialogTheme())
+            .setTitle("开启相机权限")
+            .setMessage("当前未获得权限，请在系统设置中开启。你也可以从相册选择图片。")
+            .setNegativeButton("暂时不用", null)
+            .setPositiveButton("去系统设置") { _, _ ->
+                try {
+                    startActivity(runtimePermissionHistory.settingsIntent(Manifest.permission.CAMERA))
+                } catch (_: Exception) {
+                    showInlineNotice("暂时无法打开系统设置，请稍后再试")
+                }
+            }.show()
     }
 
     private fun handleSelectedImageUris(uris: List<Uri>) {
@@ -430,32 +495,47 @@ class MainActivity : ComponentActivity() {
         refreshRuntime()
         confirmationPresenter.onActivityResumed()
         refreshActiveConversationFromStore()
+        if (runCoordinator.snapshot().source == AgentRunSource.SCHEDULED_TASK ||
+            runCoordinator.snapshot().source == AgentRunSource.SDK_EVENT
+        ) {
+            reloadProcessOwnedConversation()
+        }
         updateCapabilityBanner()
         if (::inputField.isInitialized && inputField.text.toString() != conversationRuntime.draft) {
             inputField.setText(conversationRuntime.draft)
             inputField.setSelection(inputField.length())
         }
         renderRunState()
-        // The main chat is the primary surface. The overlay is only a
-        // background-run summary, so keep it hidden while this Activity is
-        // visible to avoid competing with the conversation.
-        floatingWindow.hide()
-        inAppUpdateController.checkOnResume()
+        renderDelayedTaskState(delayedTasks.snapshot())
+        // Hide the ordinary background-run surface while chat is visible.
+        // An urgent takeover remains visible until the user closes it.
+        floatingWindow.hideOrdinaryForActivity()
+        processScope.urgentInteractionDispatcher.resumePending()
+        permissionGuide.onResume()
+        backgroundGuidance.onResume()
     }
 
     override fun onPause() {
         activityResumed = false
+        permissionGuide.onPause()
+        backgroundGuidance.onPause()
         super.onPause()
+        delayedDialog.dismiss(animate = false)
         showFloatingWindowIfNeeded()
         suppressOverlayForInAppNavigation = false
         confirmationPresenter.onActivityPaused()
     }
 
     override fun onDestroy() {
+        permissionGuide.release()
+        backgroundGuidance.release()
         cancelPendingStreamingRender()
+        delayedDialog.dismiss(animate = false)
+        delayedTasks.detach(activityToken)
         inAppUpdateController.release()
         val finishing = isFinishing && !isChangingConfigurations
-        if (finishing) {
+        val keepRuntimeForDelay = delayedTasks.snapshot() !is DemoDelayedTaskState.Idle
+        if (finishing && !keepRuntimeForDelay) {
             runCoordinator.stop()
             runCoordinator.clearQueue()
             runCoordinator.detach(activityToken)
@@ -474,7 +554,7 @@ class MainActivity : ComponentActivity() {
         invalidateImageSelection()
         fileImportScope.cancel()
         super.onDestroy()
-        if (finishing) hideFloatingWindow()
+        if (finishing && !keepRuntimeForDelay) hideFloatingWindow()
         processScope.overlayController.unbindCommands(activityToken)
     }
 
@@ -488,21 +568,14 @@ class MainActivity : ComponentActivity() {
         if (AgentOverlayPolicy.shouldShowOnPause(
                 overlayPermissionGranted = Settings.canDrawOverlays(this),
                 activityResumed = false,
-                inAppNavigating = suppressOverlayForInAppNavigation
+                inAppNavigating = suppressOverlayForInAppNavigation || permissionGuide.isAwaitingPermission
             )
         ) {
             floatingWindow.show()
         }
     }
 
-    private fun isAccessibilityEnabled(): Boolean {
-        if (AgentAccessibilityService.running) return true
-        val enabledServices = Settings.Secure.getString(
-            contentResolver,
-            Settings.Secure.ENABLED_ACCESSIBILITY_SERVICES
-        ) ?: return false
-        return enabledServices.contains("$packageName/${packageName}.AgentAccessibilityService")
-    }
+    private fun isAccessibilityEnabled(): Boolean = DemoPermissionGuideController.accessibilityEnabled(this)
 
     private fun updateCapabilityBanner() {
         if (!::statusBanner.isInitialized) return
@@ -1022,6 +1095,10 @@ class MainActivity : ComponentActivity() {
     )
 
     private fun openSettings() {
+        if (delayedTasks.snapshot() !is DemoDelayedTaskState.Idle) {
+            showInlineNotice("请先停止当前定时任务")
+            return
+        }
         hideFloatingWindow()
         suppressOverlayForInAppNavigation = true
         startActivity(Intent(this, SettingsActivity::class.java))
@@ -1048,18 +1125,17 @@ class MainActivity : ComponentActivity() {
     private fun rebuildRuntime(config: ApiProviderConfig?) {
         stopAgent(clearQueuedMessages = true)
         conversationRuntime.agentRuntime?.close()
+        val processAuthorizationStore = AgentAuthorizationSettingsStore(applicationContext)
         conversationRuntime.agentRuntime = DemoAgentRuntimeFactory.create(
             context = applicationContext,
-            scheduleStore = scheduledTaskStore,
-            scheduleScheduler = scheduledTaskScheduler,
+            delayedTaskController = delayedTasks,
+            urgentMessagePresenter = processScope.urgentMessagePresenter,
             confirmationPresenter = confirmationPresenter,
             shouldBypassConfirmation = {
-                authorizationStore.isFullAuthorizationEnabled()
+                processAuthorizationStore.isFullAuthorizationEnabled()
             },
             toolDecorator = capabilityInterlock.toolDecorator(),
-            // The Demo now owns a real Application-level executor used by
-            // JobScheduler when RUN_AGENT_PROMPT reaches its trigger time.
-            supportsBackgroundPromptExecution = true
+            supportsBackgroundPromptExecution = false
         )
         conversationRuntime.appliedRuntimeConfig = DemoRuntimeConfig.from(config)
         refreshRuntimeState(config)
@@ -1074,23 +1150,11 @@ class MainActivity : ComponentActivity() {
         renderConversation()
     }
 
-    private fun requestNotificationPermissionIfNeeded() {
-        if (
-            Build.VERSION.SDK_INT >= Build.VERSION_CODES.TIRAMISU &&
-            ContextCompat.checkSelfPermission(
-                this,
-                Manifest.permission.POST_NOTIFICATIONS
-            ) != PackageManager.PERMISSION_GRANTED
-        ) {
-            ActivityCompat.requestPermissions(
-                this,
-                arrayOf(Manifest.permission.POST_NOTIFICATIONS),
-                REQUEST_NOTIFICATION_PERMISSION
-            )
-        }
-    }
-
     private fun sendMessage() {
+        if (delayedTasks.snapshot() !is DemoDelayedTaskState.Idle) {
+            stopAgent()
+            return
+        }
         if (runState.isBusy) {
             stopAgent()
             return
@@ -1121,12 +1185,6 @@ class MainActivity : ComponentActivity() {
                 showInlineNotice("消息队列已满，请稍后再试")
             }
             return
-        }
-        // A missing API configuration is handled by the placeholder runtime;
-        // it must not unexpectedly trigger a second, unrelated permission
-        // prompt before the user has configured a runnable provider.
-        if (apiStore.activeConfig() != null) {
-            maybeOfferOverlayPermission()
         }
         if (runAgent(text, attachments, images)) {
             conversationRuntime.draft = ""
@@ -1213,6 +1271,10 @@ class MainActivity : ComponentActivity() {
     }
 
     private fun enqueueOverlayMessage(text: String): Boolean {
+        if (delayedTasks.snapshot() !is DemoDelayedTaskState.Idle) {
+            floatingWindow.addLog("请先停止当前定时任务")
+            return false
+        }
         val message = text.trim()
         if (message.isBlank()) return false
 
@@ -1230,38 +1292,12 @@ class MainActivity : ComponentActivity() {
     }
 
     private fun startNextQueuedOverlayMessage() {
+        if (delayedTasks.snapshot() !is DemoDelayedTaskState.Idle) return
+        if (processScope.urgentInteractionDispatcher.hasPending()) return
         if (runState.isBusy || runCoordinator.isRunning()) return
         val next = runCoordinator.removeNextQueued() ?: return
         floatingWindow.addLog("开始处理排队消息")
         runAgent(next)
-    }
-
-    private fun maybeOfferOverlayPermission() {
-        if (!AgentOverlayPolicy.shouldOfferPermission(
-                permissionGranted = Settings.canDrawOverlays(this),
-                hasActiveRun = true
-            ) || conversationRuntime.overlayPromptShown || isFinishing
-        ) {
-            return
-        }
-        conversationRuntime.overlayPromptShown = true
-        overlayPermissionDialog = AlertDialog.Builder(this, Ui.dialogTheme())
-            .setTitle("开启跨 App 悬浮窗")
-            .setMessage("离开 Agent Test 后，悬浮小窗可以继续显示任务进度，并发送后续消息，不会打断当前 Agent 操作。")
-            .setNegativeButton("暂不") { dialog, _ -> dialog.dismiss() }
-            .setPositiveButton("去开启") { _, _ ->
-                startActivity(
-                    Intent(
-                        Settings.ACTION_MANAGE_OVERLAY_PERMISSION,
-                        android.net.Uri.parse("package:$packageName")
-                    )
-                )
-            }
-            .create()
-            .also { dialog ->
-                dialog.setOnDismissListener { overlayPermissionDialog = null }
-                dialog.show()
-            }
     }
 
     private fun buildAgentMessage(
@@ -1291,7 +1327,9 @@ class MainActivity : ComponentActivity() {
         attachments: List<DemoImportedFile> = emptyList(),
         images: List<ProcessedImage> = emptyList()
     ): Boolean {
-        if (runState.isBusy || runCoordinator.isRunning()) return false
+        if (delayedTasks.snapshot() !is DemoDelayedTaskState.Idle ||
+            runState.isBusy || runCoordinator.isRunning()
+        ) return false
         val currentRuntime = conversationRuntime.agentRuntime ?: return false
         val effectiveText = if (text.isBlank() && images.isNotEmpty()) {
             resolveDefaultImagePromptText(images.size)
@@ -1322,7 +1360,7 @@ class MainActivity : ComponentActivity() {
             imagePaths = imagePaths
         )
         // Append atomically instead of saving this Activity's snapshot: a
-        // background scheduled run may have appended messages this screen has
+        // process-owned timed run may have appended messages this screen has
         // not observed, and a whole-conversation save would erase them.
         val stored = conversationStore.appendMessages(
             conversationId = activeConversation.id,
@@ -1349,10 +1387,10 @@ class MainActivity : ComponentActivity() {
             messageContainer.removeAllViews()
         }
         addChatMessage(DemoChatMessageRole.USER, message, imagePaths)
-        addProcessCard()
         conversationRuntime.activeConversationId = activeConversation.id
-
         floatingWindow.clear()
+
+        addProcessCard()
         floatingWindow.setSending(true)
         floatingWindow.setStatus("思考中")
         floatingWindow.addLog("开始任务")
@@ -1391,21 +1429,38 @@ class MainActivity : ComponentActivity() {
         )
         runState = snapshot.state
         setScreenAutomationActive(capabilityInterlock.isCapabilityOwned())
-        runCoordinator
-            .consumePendingOutcome(activeConversation.id)
-            ?.event
-            ?.let { event ->
-                when (event) {
+        runCoordinator.consumePendingOutcome(activeConversation.id)?.let { outcome ->
+            if (outcome.source == AgentRunSource.SCHEDULED_TASK) {
+                reloadProcessOwnedConversation()
+                if (!outcome.handledByProcessOwner) {
+                    when (val event = outcome.event) {
+                        is AgentEvent.Completed -> persistAssistantMessage(event.content)
+                        is AgentEvent.Failed -> persistAssistantMessage("任务未完成：${event.message}")
+                        else -> Unit
+                    }
+                }
+            } else if (outcome.source == AgentRunSource.SDK_EVENT) {
+                reloadProcessOwnedConversation()
+                if (!outcome.handledByProcessOwner) {
+                    when (val event = outcome.event) {
+                        is AgentEvent.Completed -> persistAssistantMessage(event.content)
+                        is AgentEvent.Failed -> persistAssistantMessage("悬浮提醒操作未完成：${event.message}")
+                        else -> Unit
+                    }
+                }
+            } else {
+                when (val event = outcome.event) {
                     is AgentEvent.Completed -> persistAssistantMessage(event.content)
                     is AgentEvent.Failed -> persistAssistantMessage("任务未完成：${event.message}")
                     else -> Unit
                 }
             }
+        }
         // refreshRuntime() renders once before the coordinator is attached.
         // Render again from the restored snapshot so terminal runs also place
         // their process card between the latest user message and its answer.
         renderConversation()
-        if (!snapshot.isRunning) {
+        if (!snapshot.isRunning && delayedTasks.snapshot() is DemoDelayedTaskState.Idle) {
             floatingWindow.setSending(false)
             startNextQueuedOverlayMessage()
         }
@@ -1418,7 +1473,8 @@ class MainActivity : ComponentActivity() {
         floatingWindow.setSending(false)
         floatingWindow.setStatus(runState.statusLabel)
         setScreenAutomationActive(false)
-        startNextQueuedOverlayMessage()
+        renderDelayedTaskState(delayedTasks.snapshot())
+        if (delayedTasks.snapshot() is DemoDelayedTaskState.Idle) startNextQueuedOverlayMessage()
     }
 
     private fun cancelPendingStreamingRender() {
@@ -1443,6 +1499,7 @@ class MainActivity : ComponentActivity() {
         hasPendingStreamingRender = false
         lastStreamingRenderTime = android.os.SystemClock.uptimeMillis()
         val text = streamingAssistantText?.toString() ?: return
+        floatingWindow.setAssistantPreview(text)
         if (assistantMessageView == null) {
             assistantMessageView = addChatMessage(DemoChatMessageRole.ASSISTANT, text)
         } else {
@@ -1455,6 +1512,18 @@ class MainActivity : ComponentActivity() {
         traceStore.append(event)
         runState = runCoordinator.snapshot().state
         when (event) {
+            is AgentEvent.Started -> {
+                if (runCoordinator.snapshot().source == AgentRunSource.SCHEDULED_TASK ||
+                    runCoordinator.snapshot().source == AgentRunSource.SDK_EVENT
+                ) {
+                    reloadProcessOwnedConversation()
+                }
+                if (runCoordinator.snapshot().source == AgentRunSource.SDK_EVENT &&
+                    delayedTasks.snapshot() is DemoDelayedTaskState.Waiting
+                ) {
+                    delayedDialog.dismiss()
+                }
+            }
             is AgentEvent.ToolStarted -> {
                 if (DemoScreenAutomationPolicy.isScreenWorkflowTool(event.call.name)) {
                     setScreenAutomationActive(true)
@@ -1512,6 +1581,7 @@ class MainActivity : ComponentActivity() {
                 cancelPendingStreamingRender()
                 val content = event.content
                 if (content.isNotBlank()) {
+                    floatingWindow.setAssistantPreview(content)
                     streamingAssistantText = null
                     if (assistantMessageView == null) {
                         assistantMessageView = addChatMessage(DemoChatMessageRole.ASSISTANT, content)
@@ -1525,7 +1595,19 @@ class MainActivity : ComponentActivity() {
                 cancelPendingStreamingRender()
                 setScreenAutomationActive(false)
                 streamingAssistantText = null
-                persistAssistantMessage(event.content)
+                if (runCoordinator.snapshot().source == AgentRunSource.SCHEDULED_TASK) {
+                    reloadProcessOwnedConversation()
+                    if (runCoordinator.snapshot().pendingOutcome?.handledByProcessOwner != true) {
+                        persistAssistantMessage(event.content)
+                    }
+                } else if (runCoordinator.snapshot().source == AgentRunSource.SDK_EVENT) {
+                    reloadProcessOwnedConversation()
+                    if (runCoordinator.snapshot().pendingOutcome?.handledByProcessOwner != true) {
+                        persistAssistantMessage(event.content)
+                    }
+                } else {
+                    persistAssistantMessage(event.content)
+                }
                 runCoordinator.acknowledgeOutcome()
                 floatingWindow.setStatus("已完成")
                 floatingWindow.addLog("回答已完成")
@@ -1534,7 +1616,19 @@ class MainActivity : ComponentActivity() {
                 cancelPendingStreamingRender()
                 setScreenAutomationActive(false)
                 streamingAssistantText = null
-                if (event.message.isNotBlank()) {
+                if (runCoordinator.snapshot().source == AgentRunSource.SCHEDULED_TASK) {
+                    reloadProcessOwnedConversation()
+                    if (runCoordinator.snapshot().pendingOutcome?.handledByProcessOwner != true) {
+                        persistAssistantMessage("任务未完成：${event.message}")
+                    }
+                } else if (runCoordinator.snapshot().source == AgentRunSource.SDK_EVENT) {
+                    reloadProcessOwnedConversation()
+                    if (runCoordinator.snapshot().pendingOutcome?.handledByProcessOwner != true &&
+                        event.message.isNotBlank()
+                    ) {
+                        persistAssistantMessage("悬浮提醒操作未完成：${event.message}")
+                    }
+                } else if (event.message.isNotBlank()) {
                     persistAssistantMessage("任务未完成：${event.message}")
                 }
                 runCoordinator.acknowledgeOutcome()
@@ -1632,6 +1726,7 @@ class MainActivity : ComponentActivity() {
     }
 
     private fun renderRunState() {
+        permissionGuide.reconsider()
         val state = runState
         runStatusLabel.text = state.statusLabel
         val (textColor, bgColor, strokeColor) = when (state.status) {
@@ -1661,92 +1756,46 @@ class MainActivity : ComponentActivity() {
         } else {
             null
         }
-        val latestStep = state.steps.lastOrNull()
-        val stage = when (state.status) {
-            DemoRunStatus.THINKING -> DemoChatProcessStage.THINKING
-            DemoRunStatus.TOOL_RUNNING -> DemoChatProcessStage.TOOL_CALL
-            DemoRunStatus.WAITING_CONFIRMATION -> DemoChatProcessStage.WAITING_CONFIRMATION
-            DemoRunStatus.TOOL_SUCCESS -> DemoChatProcessStage.RESULT
-            DemoRunStatus.COMPLETED -> DemoChatProcessStage.COMPLETED
-            DemoRunStatus.TOOL_FAILURE, DemoRunStatus.FAILED, DemoRunStatus.CANCELLED -> DemoChatProcessStage.ERROR
-            DemoRunStatus.IDLE -> DemoChatProcessStage.THINKING
-        }
-        if (processCard != null) {
-            val processSteps = state.steps.map { step ->
-                DemoChatProcessStep(
-                    id = step.id,
-                    title = step.title,
-                    status = when (step.status) {
-                        DemoRunStatus.COMPLETED, DemoRunStatus.TOOL_SUCCESS ->
-                            DemoChatProcessStepStatus.COMPLETE
-                        DemoRunStatus.THINKING, DemoRunStatus.TOOL_RUNNING ->
-                            DemoChatProcessStepStatus.ACTIVE
-                        DemoRunStatus.WAITING_CONFIRMATION ->
-                            DemoChatProcessStepStatus.WAITING
-                        DemoRunStatus.TOOL_FAILURE, DemoRunStatus.FAILED, DemoRunStatus.CANCELLED ->
-                            DemoChatProcessStepStatus.ERROR
-                        DemoRunStatus.IDLE -> DemoChatProcessStepStatus.PENDING
-                    },
-                    detail = step.detailLabel,
-                    resultSummary = step.resultSummary
-                )
-            }
-            floatingWindow.bindSnapshot(
-                AgentOverlaySnapshot(
-                    title = activeConversation.title,
-                    statusLabel = state.statusLabel,
-                    statusDetail = state.detailLabel,
-                    latestMessage = activeConversation.messages.lastOrNull()?.content,
-                    latestMessageRole = activeConversation.messages.lastOrNull()?.role,
-                    steps = state.steps.map { step ->
-                        AgentOverlayStep(
-                            id = step.id,
-                            title = step.title,
-                            statusLabel = step.status.label,
-                            detail = step.detailLabel,
-                            resultSummary = step.resultSummary
-                        )
-                    },
-                    isBusy = state.isBusy,
-                    queuedMessages = runCoordinator.snapshot().queuedMessages
-                )
+        val processState = state.toChatProcessState()
+        processCard?.bind(processState)
+        val recent = activeConversation.messages.takeLast(12)
+        val firstIndex = activeConversation.messages.size - recent.size
+        floatingWindow.bindSnapshot(
+            AgentOverlaySnapshot(
+                title = activeConversation.title,
+                statusLabel = state.statusLabel,
+                conversationId = activeConversation.id,
+                runId = state.taskId,
+                messages = recent.mapIndexed { index, message ->
+                    AgentOverlayMessage(
+                        id = "${activeConversation.id}:${firstIndex + index}:${message.createdAt}",
+                        role = message.role,
+                        content = message.content,
+                        imagePaths = message.imagePaths
+                    )
+                },
+                process = processState.takeIf { state.isBusy || state.steps.isNotEmpty() },
+                isBusy = state.isBusy,
+                queuedMessages = runCoordinator.snapshot().queuedMessages
             )
-            processCard?.bind(
-                DemoChatProcessState(
-                    stage = stage,
-                    toolName = latestStep?.takeIf { it.kind == DemoRunStepKind.TOOL }?.title,
-                    resultSummary = state.resultSummary ?: state.detailLabel,
-                    steps = processSteps,
-                    footerLeft = if (processSteps.isEmpty()) null else "${processSteps.size} 个步骤",
-                    footerRight = state.statusLabel,
-                    expanded = state.detailsExpanded
-                )
-            )
-        } else {
-            floatingWindow.bindSnapshot(
-                AgentOverlaySnapshot(
-                    title = activeConversation.title,
-                    statusLabel = state.statusLabel,
-                    statusDetail = state.detailLabel,
-                    latestMessage = activeConversation.messages.lastOrNull()?.content,
-                    latestMessageRole = activeConversation.messages.lastOrNull()?.role,
-                    isBusy = state.isBusy,
-                    queuedMessages = runCoordinator.snapshot().queuedMessages
-                )
-            )
-        }
+        )
         updateComposerState()
-        floatingWindow.setStatus(state.statusLabel)
         if (state.isBusy) scrollToEnd()
     }
 
     private fun updateComposerState() {
+        permissionGuide.reconsider()
+        val delayOccupied = delayedTasks.snapshot() !is DemoDelayedTaskState.Idle
         if (::historyButton.isInitialized) {
-            historyButton.isEnabled = !processingImages
-            historyButton.alpha = if (processingImages) 0.45f else 1f
+            historyButton.isEnabled = !processingImages && !delayOccupied
+            historyButton.alpha = if (processingImages || delayOccupied) 0.45f else 1f
+        }
+        if (::settingsButton.isInitialized) {
+            settingsButton.isEnabled = !delayOccupied
+            settingsButton.alpha = if (delayOccupied) 0.45f else 1f
         }
         if (!::sendButton.isInitialized) return
-        val busy = runState.isBusy
+        val busy = runState.isBusy || delayOccupied
         inputField.isEnabled = !busy && !processingImages
         val hasText = !inputField.text.isNullOrBlank()
         val hasAttachments = pendingImportedFiles.isNotEmpty()
@@ -1773,6 +1822,62 @@ class MainActivity : ComponentActivity() {
             else -> SendActionButton.State.DISABLED
         }
         sendButton.isEnabled = actionable
+    }
+
+    private fun renderDelayedTaskState(state: DemoDelayedTaskState) {
+        permissionGuide.reconsider()
+        if (!::activeConversation.isInitialized) return
+        updateComposerState()
+        when (state) {
+            DemoDelayedTaskState.Idle -> {
+                delayedDialog.dismiss()
+                reloadProcessOwnedConversation()
+            }
+            is DemoDelayedTaskState.Proposed -> {
+                floatingWindow.setStatus(if (state.task.repeating) "等待周期任务确认" else "等待定时任务确认")
+                if (activityResumed && !runCoordinator.isRunning()) showDelayConfirmation(state.task)
+            }
+            is DemoDelayedTaskState.Waiting -> {
+                floatingWindow.setStatus(if (state.task.repeating) "周期任务等待中" else "定时任务等待中")
+                val handlingControlEvent = runCoordinator.isRunning() &&
+                    runCoordinator.snapshot().source == AgentRunSource.SDK_EVENT
+                if (activityResumed && !handlingControlEvent) showDelayWaitingDialog(state)
+                else if (handlingControlEvent) delayedDialog.dismiss()
+            }
+            is DemoDelayedTaskState.Executing -> {
+                delayedDialog.dismiss()
+                floatingWindow.setStatus(if (state.task.repeating) "周期任务执行中" else "定时任务执行中")
+                reloadProcessOwnedConversation()
+            }
+        }
+    }
+
+    private fun showDelayConfirmation(task: DemoDelayedTask) {
+        if (backgroundGuidance.isActive) return
+        delayedDialog.showProposal(
+            task = task,
+            queuedMessages = runCoordinator.snapshot().queuedMessages,
+            onReject = {
+                delayedTasks.reject(task.id)
+                startNextQueuedOverlayMessage()
+            },
+            onBackgroundSettings = {
+                delayedDialog.dismiss(animate = false)
+                backgroundGuidance.show()
+            },
+            onConfirm = {
+                if (!delayedTasks.confirm(task.id)) {
+                    delayedTasks.reject(task.id)
+                    showInlineNotice("无法保存定时任务，请重试")
+                    startNextQueuedOverlayMessage()
+                }
+            }
+        )
+    }
+
+    private fun showDelayWaitingDialog(waiting: DemoDelayedTaskState.Waiting) {
+        if (backgroundGuidance.isActive) return
+        delayedDialog.showWaiting(waiting) { stopAgent() }
     }
 
     private fun removePendingFile(file: DemoImportedFile) {
@@ -1910,6 +2015,20 @@ class MainActivity : ComponentActivity() {
     }
 
     private fun stopAgent(clearQueuedMessages: Boolean = true) {
+        if (clearQueuedMessages) processScope.urgentInteractionDispatcher.cancelPending()
+        if (clearQueuedMessages && delayedTasks.snapshot() !is DemoDelayedTaskState.Idle) {
+            runCoordinator.clearQueue()
+        }
+        if (delayedTasks.stop()) {
+            confirmationPresenter.cancelPending()
+            conversationRuntime.agentRuntime?.cancelAllPlugins()
+            if (runCoordinator.isRunning()) runCoordinator.stop()
+            runState = runCoordinator.snapshot().state
+            renderRunState()
+            floatingWindow.setSending(false)
+            floatingWindow.setStatus("已停止")
+            return
+        }
         confirmationPresenter.cancelPending()
         if (!runCoordinator.isRunning() && !runState.isBusy) {
             setScreenAutomationActive(false)
@@ -2087,6 +2206,8 @@ class MainActivity : ComponentActivity() {
     }
 
     override fun onSaveInstanceState(outState: Bundle) {
+        permissionGuide.save(outState)
+        backgroundGuidance.save(outState)
         conversationRuntime.rememberSession(activeConversation.id, session)
         // No whole-conversation save here: every conversation change already
         // persists at its point of change (appendMessages/save/rename/create),
@@ -2116,13 +2237,13 @@ class MainActivity : ComponentActivity() {
         }
     }
 
-    /**
-     * A JobService may append a scheduled turn while this Activity is alive.
-     * Reload the durable conversation when returning to the foreground so the
-     * result is visible without requiring a process restart.
-     */
+    /** Reload turns appended by the process-owned delayed or urgent dispatcher. */
     private fun refreshActiveConversationFromStore() {
         if (!::activeConversation.isInitialized) return
+        if (delayedTasks.snapshot() !is DemoDelayedTaskState.Idle) {
+            reloadProcessOwnedConversation()
+            return
+        }
         if (runState.isBusy || runCoordinator.isRunning()) return
         val latest = conversationStore.get(activeConversation.id) ?: return
         if (latest.updatedAt == activeConversation.updatedAt &&
@@ -2137,11 +2258,27 @@ class MainActivity : ComponentActivity() {
         renderConversation()
     }
 
+    /** Process-owned turns write through storage even while this Activity is detached. */
+    private fun reloadProcessOwnedConversation() {
+        if (!::activeConversation.isInitialized) return
+        val latest = conversationStore.get(activeConversation.id) ?: return
+        if (latest.updatedAt == activeConversation.updatedAt &&
+            latest.messages == activeConversation.messages
+        ) return
+        activeConversation = latest
+        syncTranscript()
+        renderConversation()
+    }
+
     private fun updateAppBar() {
         if (::appBarTitle.isInitialized) appBarTitle.text = activeConversation.title
     }
 
     private fun selectConversation(id: String) {
+        if (delayedTasks.snapshot() !is DemoDelayedTaskState.Idle) {
+            showInlineNotice("请先停止当前定时任务")
+            return
+        }
         if (processingImages) {
             showInlineNotice("正在处理图片，请稍候...")
             return
@@ -2174,6 +2311,10 @@ class MainActivity : ComponentActivity() {
     }
 
     private fun createNewConversation() {
+        if (delayedTasks.snapshot() !is DemoDelayedTaskState.Idle) {
+            showInlineNotice("请先停止当前定时任务")
+            return
+        }
         if (processingImages) {
             showInlineNotice("正在处理图片，请稍候...")
             return
@@ -2196,6 +2337,10 @@ class MainActivity : ComponentActivity() {
     }
 
     private fun showConversationHistory() {
+        if (delayedTasks.snapshot() !is DemoDelayedTaskState.Idle) {
+            showInlineNotice("请先停止当前定时任务")
+            return
+        }
         if (processingImages) {
             showInlineNotice("正在处理图片，请稍候...")
             return
@@ -2399,6 +2544,10 @@ class MainActivity : ComponentActivity() {
         conversation: DemoConversation,
         onChanged: () -> Unit
     ) {
+        if (delayedTasks.snapshot() !is DemoDelayedTaskState.Idle) {
+            showInlineNotice("请先停止当前定时任务")
+            return
+        }
         AlertDialog.Builder(this, Ui.dialogTheme())
             .setItems(arrayOf("重命名", "删除")) { _, which ->
                 if (which == 0) renameConversation(conversation, onChanged)
@@ -2460,7 +2609,6 @@ class MainActivity : ComponentActivity() {
         const val REQUEST_TAKE_PHOTO = 4102
         const val REQUEST_PICK_IMAGE = 4103
         const val REQUEST_CAMERA_PERMISSION = 4104
-        const val REQUEST_NOTIFICATION_PERMISSION = 4105
         const val MAX_PENDING_IMPORTED_FILES = 3
     }
 
@@ -2475,82 +2623,6 @@ internal fun shouldShowFloatingWindowOnPause(
     activityResumed = false,
     inAppNavigating = inAppNavigating,
 )
-
-private class SendActionButton(context: android.content.Context) : View(context) {
-    enum class State {
-        DISABLED,
-        ACTIVE,
-        BUSY
-    }
-
-    var buttonState: State = State.DISABLED
-        set(value) {
-            field = value
-            invalidate()
-        }
-
-    private val bgPaint = Paint(Paint.ANTI_ALIAS_FLAG).apply {
-        style = Paint.Style.FILL
-    }
-    private val iconPaint = Paint(Paint.ANTI_ALIAS_FLAG).apply {
-        style = Paint.Style.STROKE
-        strokeCap = Paint.Cap.ROUND
-        strokeJoin = Paint.Join.ROUND
-    }
-    private val squarePaint = Paint(Paint.ANTI_ALIAS_FLAG).apply {
-        style = Paint.Style.FILL
-    }
-
-    override fun onDraw(canvas: Canvas) {
-        super.onDraw(canvas)
-        val w = width.toFloat()
-        val h = height.toFloat()
-        val cx = w / 2f
-        val cy = h / 2f
-        val radius = (minOf(cx, cy) - context.dp(6).toFloat()).coerceAtLeast(0f)
-
-        // 背景圆（完全受控件自身尺寸约束，100% 圆形绝不发生边缘裁剪）
-        bgPaint.color = when (buttonState) {
-            State.DISABLED -> Ui.SurfaceSoft
-            State.ACTIVE -> Ui.Primary
-            State.BUSY -> Ui.Danger
-        }
-        canvas.drawCircle(cx, cy, radius, bgPaint)
-
-        when (buttonState) {
-            State.DISABLED, State.ACTIVE -> {
-                iconPaint.color = if (buttonState == State.ACTIVE) Ui.OnPrimary else Ui.DisabledContent
-                iconPaint.strokeWidth = radius * 0.16f
-
-                val stemHalf = radius * 0.36f
-                val topY = cy - stemHalf
-                val bottomY = cy + stemHalf
-                // 箭头垂直主干
-                canvas.drawLine(cx, bottomY, cx, topY, iconPaint)
-
-                // 箭头两侧翼
-                val wingSpan = radius * 0.32f
-                val wingLen = radius * 0.30f
-                canvas.drawLine(cx - wingSpan, topY + wingLen, cx, topY, iconPaint)
-                canvas.drawLine(cx + wingSpan, topY + wingLen, cx, topY, iconPaint)
-            }
-            State.BUSY -> {
-                squarePaint.color = Ui.OnDanger
-                val halfSide = radius * 0.30f
-                val corner = radius * 0.08f
-                canvas.drawRoundRect(
-                    cx - halfSide,
-                    cy - halfSide,
-                    cx + halfSide,
-                    cy + halfSide,
-                    corner,
-                    corner,
-                    squarePaint
-                )
-            }
-        }
-    }
-}
 
 private class ImportActionButton(context: android.content.Context) : View(context) {
     var hasAttachments: Boolean = false

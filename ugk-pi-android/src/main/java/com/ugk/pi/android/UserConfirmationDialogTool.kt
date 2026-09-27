@@ -22,8 +22,16 @@ data class UserConfirmationDialogButton(
     val label: String
 )
 
+/**
+ * @param selectedButtonId the id of the button the host resolved with.
+ * @param withoutUserDecision true when the host resolved the dialog **without the
+ * user deciding anything** — it was dismissed, its window was destroyed, or its
+ * owner finished first. Hosts that cannot tell leave it false; a protected Tool
+ * then reports the selection as a user refusal only when it really was one.
+ */
 data class UserConfirmationDialogResult(
-    val selectedButtonId: String
+    val selectedButtonId: String,
+    val withoutUserDecision: Boolean = false
 )
 
 interface UserConfirmationDialogPresenter {
@@ -133,6 +141,9 @@ class UserConfirmationDialogTool(
             name = name,
             content = buildJsonObject {
                 put("selectedButtonId", result.selectedButtonId)
+                if (result.withoutUserDecision) {
+                    put("withoutUserDecision", true)
+                }
                 ticket?.let { put("ticket", it.toJsonObject()) }
             }.toString()
         )

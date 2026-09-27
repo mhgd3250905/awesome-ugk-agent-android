@@ -112,6 +112,8 @@ class InAppUpdateController(
     private val activity: Activity,
     private val updateLauncher: ActivityResultLauncher<IntentSenderRequest>,
     state: InAppUpdateFlowState = InAppUpdateProcessScope.flowState,
+    private val canPresent: () -> Boolean = { true },
+    private val onExternalFlow: () -> Unit = {},
 ) {
     private val state = state
     // Per-controller: each Activity instance owns its own manager and
@@ -168,6 +170,7 @@ class InAppUpdateController(
     }
 
     private fun dispatch(action: InAppUpdateAction, info: AppUpdateInfo) {
+        if (!canPresent()) return
         when (action) {
             InAppUpdateAction.START_UPDATE_FLOW -> launchUpdateFlow(info)
             InAppUpdateAction.SHOW_RESTART_SNACKBAR -> showRestartSnackbar()
@@ -184,6 +187,7 @@ class InAppUpdateController(
         val manager = appUpdateManager ?: return
         registerDownloadListener(manager)
         playSilently("start flexible update flow") {
+            onExternalFlow()
             manager.startUpdateFlowForResult(
                 info,
                 updateLauncher,
@@ -210,6 +214,7 @@ class InAppUpdateController(
     }
 
     private fun showRestartSnackbar() {
+        if (!canPresent()) return
         if (activity.isFinishing || activity.isDestroyed) return
         val anchor = activity.findViewById<View>(android.R.id.content) ?: return
         Snackbar.make(anchor, "新版本已下载，重启后完成安装", Snackbar.LENGTH_INDEFINITE)

@@ -5,6 +5,7 @@ import android.view.ViewGroup
 import android.widget.TextView
 import androidx.test.ext.junit.runners.AndroidJUnit4
 import androidx.test.platform.app.InstrumentationRegistry
+import org.junit.Assert.assertEquals
 import org.junit.Assert.assertFalse
 import org.junit.Assert.assertNotNull
 import org.junit.Assert.assertTrue
@@ -56,6 +57,19 @@ class DemoChatProcessCardInstrumentedTest {
         assertNotNull(toolRow)
         instrumentation.runOnMainSync { toolRow?.performClick() }
         assertTrue(findText(rendered, "完整工具结果，不应在步骤默认状态显示"))
+
+        val analysisRow = findView(rendered) { view -> view.tag == "process-step:analysis" }
+        assertNotNull(analysisRow)
+        instrumentation.runOnMainSync { analysisRow?.performClick() }
+        assertEquals(View.VISIBLE, requireNotNull(findView(rendered) { it.tag == "process-detail:analysis" }).visibility)
+        assertEquals("Opening another step must preserve the first step's expansion", View.VISIBLE,
+            requireNotNull(findView(rendered) { it.tag == "process-detail:tool" }).visibility)
+        instrumentation.runOnMainSync {
+            findView(rendered) { it.tag == "process-step:analysis" }?.performClick()
+        }
+        assertTrue("Collapsing a sibling must preserve the full tool result",
+            findText(rendered, "完整工具结果，不应在步骤默认状态显示"))
+        assertEquals(View.GONE, requireNotNull(findView(rendered) { it.tag == "process-detail:analysis" }).visibility)
 
         val collapseFooter = findView(rendered) { view ->
             view.contentDescription == "收起整个过程"

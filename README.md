@@ -13,7 +13,7 @@ Android Agent Runtime SDK：提供通用 Agent 工具循环、Android Skill，�
 - v1 不支持、不打包、不宣称 Node.js、Git、OpenSSH、jq。
 - Runtime 无 UI，不要求安装 Termux 或第二个 App；它与宿主共享 Android UID，不是安全沙箱。
 - `pi-system-skill-android` 提供白名单 Android 原生 Intent Tool；打开网页、相机、拨号、地图、分享等动作不通过终端执行。
-- `demo-app` 当前保存版本为 `1.0.5`（`versionCode 105`），版本边界标签为 `demo-app-v1.0.5@11d764a`。自 `1.0.2` 起以 `com.ugk.pi.agent` 身份经 Google Play 分发：`1.0.2 (102)` 封闭测试全球上线（177 国家/地区，2026-09-01），`1.0.3 (103)` 悬浮窗软键盘避让与 `1.0.4 (104)` Play 应用内更新提示（FLEXIBLE）均已发布到内部测试轨道（2026-09-02）。`0.9.x` 及更早的变更明细见 [`docs/demo-app-version-ledger.md`](docs/demo-app-version-ledger.md)。
+- `demo-app` 当前源码版本为本地测试 `1.10.0`（`versionCode 123`），包含视觉优先屏幕自动化、单对话单次/周期计时任务、重要提醒按钮与表单。计时提案从底部请求确认，等待倒计时从顶部显示；主聊天以一行进展及可展开的工具记录呈现过程，后台悬浮对话复用同一组件并采用紧凑字号和间距。进入 App 时按实际状态引导缺失权限，系统不再询问时提供设置入口；后台耗电、自启动另作可跳过的建议。周期任务每轮结果写回后才重新等待完整间隔。2026-09-27 补充阶段已获用户真机反馈“测试通过”；验证范围和原版本标签边界见 [`docs/demo-app-version-ledger.md`](docs/demo-app-version-ledger.md)。本版本尚未提交 Play。
 - 2026-08-29 已完成快速迭代后的模块化架构收敛：生命周期、配置、Provider、会话、transcript、capability assembly 与 Terminal/Screen interlock 均有单一 owner；本机 JVM、Debug/Release 构建和 Terminal 包验收通过，设备/发布矩阵仍未关闭。
 
 ## 模块
@@ -24,6 +24,7 @@ Android Agent Runtime SDK：提供通用 Agent 工具循环、Android Skill，�
 :pi-terminal-skill-android   terminal_bash_execute Agent Tool
 :pi-file-skill-android       应用私有文件 Skill
 :pi-schedule-skill-android   定时任务 Skill
+:pi-attention-skill-android  可选的即时通知与宿主悬浮提醒 Skill
 :ugk-agent-task-runtime-android Android 定时任务持久化、AlarmManager/JobScheduler 与通知运行时
 :pi-agent-skill-runtime-android 文件型 SKILL.md 运行时与 agent-memory 记忆 Skill
 :pi-system-skill-android     系统设置/权限/Intent/剪贴板 Skill
@@ -43,7 +44,7 @@ Windows PowerShell：
 
 完整单元测试、双宿主仪器测试和 Runtime 静态验收见 [`AGENTS.md`](AGENTS.md) 与 [`docs/terminal-runtime-validation.md`](docs/terminal-runtime-validation.md)。
 
-当前授权真机以 [`HANDOVER.md`](HANDOVER.md) 为准，仅允许操作小米设备（`QSG6Q8IFDMDELVGQ`、`2304FPN6DC`/`e0b93f2f`，以 HANDOVER 的当期清单为准）。此前与 `0.8.0` 生产代码一致的 Debug APK 已以 `0.8.0 / versionCode 10` 元数据通过 `adb install -r -d` 覆盖安装到该设备，未卸载、未清理数据；该事实仅证明安装与 package metadata，不等同于 skill authoring 行为验收。当前 `1.0.4 / versionCode 104` 未安装到真机，本阶段不进行设备操作（`1.0.2`–`1.0.4` 的验收均在 `ugk_dev_api35_smooth` 模拟器完成）。
+当前 Demo 真机验证使用用户授权的小米 `QSG6Q8IFDMDELVGQ`，操作前按序列号复核设备。2026-09-27 13:55（Asia/Shanghai）最新 `1.10.0 / 123` Debug APK 已在确认没有活动计时任务后以 `adb install -r` 保留数据覆盖安装，版本和进程已核对；用户随后反馈“可以了 测试通过”。最终构建、179 项 JVM 和 API 35 上 12 项定向仪器测试通过，具体范围与 APK 校验值见版本台账；该结论不代表长期后台常驻。[`HANDOVER.md`](HANDOVER.md) 是 2026-09-01 的历史快照，里面的设备、版本和权限描述不代表当前授权。
 
 ## 文档入口
 
@@ -57,10 +58,12 @@ Windows PowerShell：
 - [`docs/terminal-runtime-decisions.md`](docs/terminal-runtime-decisions.md)：正式决策；
 - [`docs/terminal-runtime-release-checklist.md`](docs/terminal-runtime-release-checklist.md)：发布清单；
 - [`docs/demo-app-ui-redesign.md`](docs/demo-app-ui-redesign.md)：demo-app 聊天、过程、输入和悬浮窗的当前交互基线与验收记录；
+- [`docs/demo-app-permission-guide.md`](docs/demo-app-permission-guide.md)：权限申请、关闭后恢复、通知分类核对及可选后台运行建议；
 - [`docs/demo-app-version-ledger.md`](docs/demo-app-version-ledger.md)：demo-app 版本、变更和验收台账；
 - [`docs/android-accessibility-screen-automation.md`](docs/android-accessibility-screen-automation.md)：Android Accessibility 屏幕自动化 Tool/Skill、宿主接入和验证边界；
 - [`docs/android-clipboard.md`](docs/android-clipboard.md)：Android 文本剪贴板 Tool/Skill、确认策略、隐私和 API 限制。
 - [`docs/android-scheduled-tasks.md`](docs/android-scheduled-tasks.md)：定时任务控制面、Android 运行时适配、能力边界和验收方法。
+- [`docs/android-agent-attention.md`](docs/android-agent-attention.md)：即时通知 AAR、悬浮提醒宿主适配和外部接入。
 - [`docs/android-agent-skills.md`](docs/android-agent-skills.md)：文件型 Skill、命名根嵌入、动态加载和 agent-memory 事实源。
 - [`docs/sdk-optimization-ledger.md`](docs/sdk-optimization-ledger.md)：SDK 架构整改阶段、checkpoint、验证与遗留边界。
 - [`docs/sdk-core-consumer-contract.md`](docs/sdk-core-consumer-contract.md)：当前 Core AAR 外部消费和 API/ABI 证据边界。
@@ -110,9 +113,8 @@ Android 原生 Intent 和跨 App 自动化接入：轻量宿主可注册
 剪贴板 Tool/Skill 的 API 限制、原文短暂传递策略和宿主接入方式见
 [`docs/android-clipboard.md`](docs/android-clipboard.md)。
 
-定时任务由 `pi-schedule-skill-android` 和 `ugk-agent-task-runtime-android` 分层提供：前者注册
-`agent_task_create/list/get/update/cancel`，后者对通知任务使用 `AlarmManager`，对 Agent Prompt 使用
-`JobScheduler` 启动后台执行窗口。Demo 已接入 `RUN_AGENT_PROMPT`，会恢复关联会话并实际运行一轮 Agent；整体设计与限制见 [`docs/android-scheduled-tasks.md`](docs/android-scheduled-tasks.md)。
+SDK 通用定时任务仍由 `pi-schedule-skill-android` 和 `ugk-agent-task-runtime-android` 分层提供：前者注册
+`agent_task_create/list/get/update/cancel`，后者使用 `AlarmManager` 或 `JobScheduler`。Demo 当前使用单对话计时任务：用户确认后占用一个进程级槽位，可一次执行或按固定间隔重复；每轮都向同一对话提交新消息，直到用户停止周期任务。见 [`docs/demo-delayed-conversation.md`](docs/demo-delayed-conversation.md)；SDK 调度器另见 [`docs/android-scheduled-tasks.md`](docs/android-scheduled-tasks.md)。
 
 文件型 Skill 由 `pi-agent-skill-runtime-android` 提供：`SKILL.md` 放在 App 私有
 `filesDir/agent-skills` 下，运行时通过 `skill_list` / `skill_read` 发现和加载；预制的

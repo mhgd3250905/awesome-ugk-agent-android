@@ -608,6 +608,12 @@ fun AgentTaskSchedule.nextRunAtMillis(nowMillis: Long): Long? {
     return when (this) {
         is AgentTaskSchedule.OneShot -> runAtMillis.takeIf { it >= nowMillis && it >= 0L }
         is AgentTaskSchedule.RepeatingUntil -> {
+            // A non-positive interval is unreachable from the tools (creation
+            // validates it) but reachable from a decoded record, and the
+            // ceiling division below truncates a negative interval to zero
+            // elapsed intervals: the "next" run collapses onto startAtMillis in
+            // the past, which the platform scheduler arms as immediately due.
+            if (intervalMillis <= 0L) return null
             if (nowMillis > endAtMillis) return null
             if (nowMillis <= startAtMillis) return startAtMillis.takeIf { it >= 0L }
             runCatching {

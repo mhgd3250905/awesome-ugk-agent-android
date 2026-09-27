@@ -300,7 +300,9 @@ class AgentRuntime(
                     ModelRequest(
                         sessionId = session.id,
                         messages = requestMessages,
-                        tools = tools
+                        tools = tools,
+                        runSource = input.source,
+                        isFirstModelRequest = modelRequestIteration == 1
                     )
                 ).collect { chunk ->
                     when (chunk) {

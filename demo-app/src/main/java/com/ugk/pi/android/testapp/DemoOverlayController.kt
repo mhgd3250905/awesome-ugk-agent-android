@@ -11,6 +11,8 @@ class DemoOverlayController(context: Context) {
     private val appContext = context.applicationContext
     private val commandRouter = DemoOverlayCommandRouter()
 
+    internal var onUrgentInteraction: ((DemoUrgentInteraction) -> Boolean)? = null
+
     val window: AgentFloatingWindow by lazy {
         AgentFloatingWindow(appContext).apply {
             onSendMessage = { text -> commandRouter.send(text) }
@@ -18,11 +20,18 @@ class DemoOverlayController(context: Context) {
             onOpenApp = { commandRouter.openApp() }
             onHide = { commandRouter.hide() }
             onDraftChanged = { value -> commandRouter.draftChanged(value) }
+            onUrgentInteraction = { event ->
+                this@DemoOverlayController.onUrgentInteraction?.invoke(event) == true
+            }
         }
     }
 
     fun bindCommands(owner: Any, commands: DemoOverlayCommands) {
         commandRouter.bind(owner, commands)
+    }
+
+    fun setFallbackCommands(commands: DemoOverlayCommands) {
+        commandRouter.setFallback(commands)
     }
 
     fun unbindCommands(owner: Any) {
