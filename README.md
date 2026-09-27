@@ -46,6 +46,8 @@ Windows PowerShell：
 
 当前 Demo 真机验证使用用户授权的小米 `QSG6Q8IFDMDELVGQ`，操作前按序列号复核设备。2026-09-27 13:55（Asia/Shanghai）最新 `1.10.0 / 123` Debug APK 已在确认没有活动计时任务后以 `adb install -r` 保留数据覆盖安装，版本和进程已核对；用户随后反馈“可以了 测试通过”。最终构建、179 项 JVM 和 API 35 上 12 项定向仪器测试通过，具体范围与 APK 校验值见版本台账；该结论不代表长期后台常驻。[`HANDOVER.md`](HANDOVER.md) 是 2026-09-01 的历史快照，里面的设备、版本和权限描述不代表当前授权。
 
+2026-09-27/28 第五、六轮 P0 审查修复已合并进主干（PR #7 20 项、PR #8 5 项，见版本台账与 [`docs/terminal-runtime-validation.md`](docs/terminal-runtime-validation.md) §31）；`1.10.0 / 123` 的上述验收对应合并前的 `2f5a56c` 构建。合并后主干门禁为全模块 JVM `630` tests / `3` skipped / 0 failure、API 35 仪器测试 `62/62`；APK 元数据未变，尚未提交 Play。
+
 ## 文档入口
 
 从 [`docs/README.md`](docs/README.md) 开始。当前唯一事实源包括：

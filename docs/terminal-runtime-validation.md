@@ -472,3 +472,19 @@ Core API/JVM 边界：
   - 同批落实审查建议：BOM 处理改为 `\uFEFF` 可见转义；`isTokenServed` 补 `-`/`_` 开头 token 用例；补 OpenAI 侧 `postStream` 默认回退用例；`toAnthropicMessage` 的 Assistant 分支标注"通常由合并路径先消费"（Kotlin when 穷尽性要求保留）。
   - 审查确认不修的已知项：无 `index` 交错续传为已声明的固有限制（注释声明）；自家 server 极慢冷启动超 10s 时 `PORT_IN_USE` 措辞可能误导（行为正确）。
 - 边界与未执行：未操作真机、未调用真实 Provider/API、未跑 `-CheckPackages` 与 Release 矩阵；arm64（尤其 16 KB）Gate 状态不变。
+
+## 31. 第六轮 P0 审查修复与第五/六轮合并验收（PR #8、PR #7）
+
+第六轮验证日期：2026-09-27（分支 `fix/p0-review-round6-20260927`，基于 `main@c10773e`，2 提交）；合并验收日期：2026-09-27/28。本轮两 PR 均不改变 Terminal v1 scope、原生载荷或权限边界；不关闭任何 Gate。
+
+- 第六轮修复 5 项（先红后绿 + 突变自检，详见 PR #8 描述）：
+  - `ugk-agent-task-runtime-android`：任务收敛一律 `tryLock()`（删除 `skipBusyTasks`）；原先忙兄弟任务的 in-flight prompt 执行会让排后任务拿不到触发器、`jobFinished()` 永不提交，Android 在 deadline 强停服务并丢失 running 预留。
+  - `ugk-pi-android`：新增 `SseStreamFraming.kt`（`asSseLines()` 支持跨行发射装配、CRLF 优先、整段 JSON 文档原样保留；单行优先解析 + 缓冲事件上限 1,000,000 字符 fail-closed），两 Provider 的 SSE `data:` 解析改单行优先、多行缓冲拼接；解析失败的行不再静默丢弃（原先截断回答伪装成成功完成并写入会话）。
+  - `demo-app`：周期任务引入 `DemoDelayedTaskRound`/`consecutiveFailedRounds`，连续 3 轮未完成即停止并说明；原先失败后无限自我重挂（真机实证 12 秒 11 轮），空内容的 `Completed` 亦计为未完成轮次。
+  - `ugk-pi-android` 确认工具：拒绝判定复用"紧邻上下文"规则并新增 `withoutUserDecision`；未识别按钮与宿主生命周期兜底结果不再被误报为"用户已拒绝"。
+  - `pi-schedule-skill-android`：`nextRunAtMillis` 对反序列化后的 `intervalMillis <= 0` 返回 null（原先向上取整截断成过去时间，被平台当立即到期紧密重触发）。
+- 第六轮分支门禁（2026-09-27 实跑）：全模块 JVM `--rerun-tasks` `595` tests / `3` skipped / 0 failure（Core 171、Demo 172、Task Runtime 40、Schedule 15、System 44、Agent Skill 83、Terminal Runtime 17、Terminal Skill 40、File 13）；设备定向 `DemoDelayedTaskFailureLoopInstrumentedTest` 2/2、`AgentOverlayTranscriptRenderInstrumentedTest` 2/2。
+- PR #8 合并验收（2026-09-27，merge `7d00ff0`）：合并前在 `round5_api35`（API 35 x86_64 / 4 KB）独占复跑——分支全量 JVM `595/0/3` 与声称一致；定向 `ProcessPresentationInstrumentedTest` 5/5 无崩溃挂起（前次异常未复现）；全量 `:demo-app:connectedDebugAndroidTest` 44 项中 36 通过 + 8 项 `FloatingConversationInstrumentedTest` 因 AGP 重装 APK 重置悬浮窗 appops 的前置断言失败，重授权后 `adb shell am instrument` 复跑 8/8 通过。合并后 main JVM `605/0/3`（实跑）。
+- PR #7（第五轮）合并验收（2026-09-28，merge `c5e78fa`）：`fix/p0-review-round5-20260908`（9 提交，2026-09-08 开）与演进后 main 的 4 处冲突解决后合并——`HttpTransport.postStream` 取第六轮 `asSseLines()` 实现（第五轮"按行切分"语义的超集）；demo 工厂 `reservedSkillIds` 接线扩展覆盖 attention/delay 插件；会话 store 互斥与 flush 出锁移植到 `writeExecutor` 结构（`rename`/`delete` 纳入 store 监视器单临界区，`appendMessagesAndFlush`/`saveAndFlush` 落盘等待移出监视器）；demo `versionCode` 保持 123 不回退。合并分支 JVM `630` tests / `3` skipped / 0 failure（`--rerun-tasks` 实跑，净增 25 与第五轮声称一致；第五/六轮流式测试套件共存全过）；设备 `:demo-app:connectedDebugAndroidTest` `62/62` 一次通过（含第五轮新增 `DemoConversationStoreConcurrencyInstrumentedTest`）。合并后 main 全量 JVM 复跑 `630/0/3`。
+- 两 PR 合并后，第五轮的"验证通过但修复未进主干"状态解除；`demo-app` APK 元数据保持 `1.10.0 / versionCode 123`（缺陷修复无新增可感能力，不 bump），见版本台账。
+- 边界与未执行：未调用真实 Provider/API、未跑 `-CheckPackages` 与 Release 矩阵；arm64（尤其 16 KB）Gate 状态不变。本地证据：`.verify-shots/pr8-round6-merge-gate-20260927/`、`.verify-shots/pr7-round5-merge-gate-20260928/`（未提交）。
