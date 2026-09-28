@@ -16,7 +16,10 @@ import java.util.zip.ZipInputStream
  * manifest is part of the APK and gates the first launch after any change, so
  * a stale or tampered standard-library tree is rebuilt on the next invocation.
  * Repeated launches skip the full hash walk through a fingerprint marker that
- * is only written after a complete verification pass.
+ * is only written after a complete verification pass; when the interpreter
+ * nevertheless dies during startup, [invalidateVerifiedMarker] drops the
+ * marker so the rebuild promise holds for same-UID accidents (partial writes,
+ * bit rot) that strike underneath a still-valid marker.
  */
 internal class PythonDistribution(context: Context) {
     private val appContext = context.applicationContext
@@ -114,6 +117,31 @@ internal class PythonDistribution(context: Context) {
                 }
             } finally {
                 if (staged.exists()) staged.delete()
+            }
+        }
+    }
+
+    /**
+     * Forces the next [home] call to run the full manifest verification and
+     * rebuild the tree when a file no longer matches.
+     *
+     * The verified marker proves only that an earlier invocation completed a
+     * full pass; a same-UID accident (partial write, bit rot, a crashed
+     * updater) can corrupt files underneath a still-valid marker, and the
+     * hot-path skip would then keep serving the broken tree forever. Dropping
+     * the marker costs exactly one hash walk and keeps the rebuild promise in
+     * this class's documentation true.
+     */
+    @Synchronized
+    fun invalidateVerifiedMarker() {
+        val target = File(
+            appContext.filesDir,
+            "$RUNTIME_DATA_DIRECTORY/$DISTRIBUTION_DIRECTORY"
+        )
+        runCatching {
+            val marker = File(target, VERIFIED_MARKER_FILE_NAME)
+            if (marker.exists() && !marker.delete()) {
+                marker.deleteOnExit()
             }
         }
     }

@@ -47,19 +47,54 @@ class BashRuntime(context: Context) : BashCommandExecutor {
             timeoutMillis = request.timeoutMillis,
             maxCapturedBytes = request.maxCapturedBytes
         )
+        val finalResult = if (isInterpreterStartupCrash(result)) {
+            // The interpreter aborted before running any script statement, so
+            // one repair retry cannot repeat user side effects. Rebuilding the
+            // environment drops the standard-library marker and gives the
+            // documented "rebuilt on the next invocation" behavior a chance to
+            // actually run; without it the verified-marker fast path keeps
+            // serving a corrupted tree forever.
+            pythonDistribution.invalidateVerifiedMarker()
+            val repairedEnvironment = managedEnvironment(workspace).toMutableMap().apply {
+                putAll(request.environment)
+            }
+            NativeExecutableProcess.execute(
+                executable = executableFile(appContext),
+                arguments = listOf("--noprofile", "--norc", "-c", request.script),
+                workingDirectory = workspace,
+                runtimeDataDirectory = appContext.cacheDir,
+                environment = repairedEnvironment,
+                timeoutMillis = request.timeoutMillis,
+                maxCapturedBytes = request.maxCapturedBytes
+            )
+        } else {
+            result
+        }
         return BashCommandResult(
-            command = result.command,
-            executablePath = result.executablePath,
-            exitCode = result.exitCode,
-            stdout = result.stdout,
-            stderr = result.stderr,
-            durationMillis = result.durationMillis,
-            timedOut = result.timedOut,
-            outputTruncated = result.outputTruncated,
+            command = finalResult.command,
+            executablePath = finalResult.executablePath,
+            exitCode = finalResult.exitCode,
+            stdout = finalResult.stdout,
+            stderr = finalResult.stderr,
+            durationMillis = finalResult.durationMillis,
+            timedOut = finalResult.timedOut,
+            outputTruncated = finalResult.outputTruncated,
             workingDirectory = workspace.absolutePath,
-            stdoutTruncated = result.stdoutTruncated,
-            stderrTruncated = result.stderrTruncated
+            stdoutTruncated = finalResult.stdoutTruncated,
+            stderrTruncated = finalResult.stderrTruncated
         )
+    }
+
+    /**
+     * Matches only the abort raised while the interpreter boots: "Failed to
+     * import encodings module" fires before any script statement runs, so a
+     * repair retry is side-effect free. Ordinary script failures (tracebacks,
+     * non-zero exits) never carry this marker and are returned untouched.
+     */
+    private fun isInterpreterStartupCrash(result: NativeExecutableProcessResult): Boolean {
+        return result.exitCode != null && result.exitCode != 0 &&
+            !result.timedOut &&
+            result.stderr.contains("Fatal Python error: Failed to import encodings module")
     }
 
     fun defaultWorkspace(): File = File(appContext.filesDir, DEFAULT_WORKSPACE_DIRECTORY)
