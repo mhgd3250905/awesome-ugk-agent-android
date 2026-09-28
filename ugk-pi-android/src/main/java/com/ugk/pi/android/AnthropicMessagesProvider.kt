@@ -20,6 +20,7 @@ import kotlinx.coroutines.CancellationException
 import kotlinx.coroutines.delay
 import kotlinx.coroutines.flow.Flow
 import kotlinx.coroutines.flow.emitAll
+import java.io.IOException
 import kotlinx.coroutines.flow.flow
 
 data class AnthropicRetryPolicy(
@@ -32,6 +33,33 @@ data class AnthropicRetryPolicy(
         require(initialDelayMillis >= 0) { "initialDelayMillis must be greater than or equal to 0" }
         require(maxDelayMillis >= 0) { "maxDelayMillis must be greater than or equal to 0" }
     }
+}
+
+internal fun isRetryableHttpStatus(statusCode: Int): Boolean {
+    return statusCode == 408 || statusCode == 429 || statusCode in 500..599
+}
+
+/**
+ * Whether a streaming transport failure is worth replaying: non-2xx with a
+ * retryable status (the [HttpTransport.postStream] contract raises it as
+ * "HTTP request failed: <status> ..." before emitting anything), or a
+ * connection failure where the request demonstrably never reached the peer.
+ * Other IO failures happen mid-read — a maxStreamedBytes violation and a
+ * half-received body both surface as plain IOException, and replaying them
+ * would mask the real failure and re-bill the request — so they, like
+ * protocol-level errors (malformed events, API payloads parsed mid-stream),
+ * never retry.
+ */
+internal fun Throwable.isRetryableTransportFailure(): Boolean = when (this) {
+    is java.net.ConnectException -> true
+    is java.net.UnknownHostException -> true
+    is IllegalStateException -> message?.let { message ->
+        Regex("^HTTP request failed: (\\d{3})").find(message)
+            ?.groupValues?.get(1)
+            ?.toIntOrNull()
+            ?.let(::isRetryableHttpStatus)
+    } == true
+    else -> false
 }
 
 class AnthropicMessagesProvider(
@@ -97,8 +125,35 @@ class AnthropicMessagesProvider(
             body = requestBody(request, stream = true).toString()
         )
 
-        val rawLinesFlow = effectiveTransport.postStream(httpRequest).asSseLines()
-        emitAll(parseSseStream(rawLinesFlow))
+        // Transport-level failures before the first emitted chunk are safe to
+        // replay — the host has seen nothing. After that the failure
+        // propagates: a half-delivered answer cannot be restarted without
+        // duplicating what the runtime already stored.
+        var attempt = 1
+        var emittedAny = false
+        var nextDelayMillis = retryPolicy.initialDelayMillis
+        while (true) {
+            try {
+                parseSseStream(effectiveTransport.postStream(httpRequest).asSseLines()).collect { chunk ->
+                    emittedAny = true
+                    emit(chunk)
+                }
+                return@flow
+            } catch (error: CancellationException) {
+                throw error
+            } catch (error: Throwable) {
+                attempt += 1
+                if (emittedAny || attempt > retryPolicy.maxAttempts || !error.isRetryableTransportFailure()) {
+                    throw error
+                }
+            }
+            if (nextDelayMillis > 0) {
+                delay(nextDelayMillis)
+            }
+            nextDelayMillis = (nextDelayMillis * 2)
+                .coerceAtLeast(retryPolicy.initialDelayMillis)
+                .coerceAtMost(retryPolicy.maxDelayMillis)
+        }
     }
 
     private fun parseSseStream(rawLines: Flow<String>): Flow<ModelStreamChunk> = flow {
@@ -338,9 +393,7 @@ class AnthropicMessagesProvider(
         throw lastError ?: IllegalStateException("Anthropic messages request failed before execution")
     }
 
-    private fun Int.isRetryableStatusCode(): Boolean {
-        return this == 408 || this == 429 || this in 500..599
-    }
+    private fun Int.isRetryableStatusCode(): Boolean = isRetryableHttpStatus(this)
 
     private fun requestBody(request: ModelRequest, stream: Boolean = false): JsonObject {
         return buildJsonObject {

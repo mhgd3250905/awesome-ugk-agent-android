@@ -12,9 +12,12 @@ import kotlinx.serialization.json.contentOrNull
 import kotlinx.serialization.json.jsonArray
 import kotlinx.serialization.json.jsonObject
 import kotlinx.serialization.json.jsonPrimitive
+import kotlinx.coroutines.CancellationException
+import kotlinx.coroutines.delay
 import kotlinx.coroutines.flow.Flow
 import kotlinx.coroutines.flow.emitAll
 import kotlinx.coroutines.flow.flow
+import java.io.IOException
 import kotlinx.serialization.json.put
 import kotlinx.serialization.json.putJsonArray
 import kotlinx.serialization.json.putJsonObject
@@ -24,7 +27,14 @@ class OpenAiChatCompletionsProvider(
     private val model: String,
     private val transport: HttpTransport? = null,
     private val endpoint: String = "https://api.openai.com/v1/chat/completions",
-    private val maxStreamedBytes: Int = DEFAULT_MAX_STREAMED_BYTES
+    private val maxStreamedBytes: Int = DEFAULT_MAX_STREAMED_BYTES,
+    /**
+     * The retry policy is provider-agnostic in shape (attempt budget and delay
+     * curve only), so both providers share one type instead of keeping two
+     * copies that drift. It previously only covered the Anthropic
+     * non-streaming call; streaming and the OpenAI paths now honor it too.
+     */
+    private val retryPolicy: AnthropicRetryPolicy = AnthropicRetryPolicy()
 ) : LLMProvider {
     init {
         // maxStreamedBytes is only plumbed into the default transport; a
@@ -48,7 +58,7 @@ class OpenAiChatCompletionsProvider(
     }
 
     override suspend fun generate(request: ModelRequest): ModelResponse {
-        val httpResponse = effectiveTransport.post(
+        val httpResponse = executeWithRetry(
             HttpRequest(
                 url = endpoint,
                 headers = mapOf(
@@ -78,8 +88,64 @@ class OpenAiChatCompletionsProvider(
             body = requestBody(request, stream = true).toString()
         )
 
-        val rawLinesFlow = effectiveTransport.postStream(httpRequest).asSseLines()
-        emitAll(parseOpenAiSseStream(rawLinesFlow))
+        // Same replay window as the Anthropic streaming path: transport-level
+        // failures before the first emitted chunk are invisible to the host
+        // and safe to retry; after that the failure propagates untouched.
+        var attempt = 1
+        var emittedAny = false
+        var nextDelayMillis = retryPolicy.initialDelayMillis
+        while (true) {
+            try {
+                parseOpenAiSseStream(effectiveTransport.postStream(httpRequest).asSseLines()).collect { chunk ->
+                    emittedAny = true
+                    emit(chunk)
+                }
+                return@flow
+            } catch (error: CancellationException) {
+                throw error
+            } catch (error: Throwable) {
+                attempt += 1
+                if (emittedAny || attempt > retryPolicy.maxAttempts || !error.isRetryableTransportFailure()) {
+                    throw error
+                }
+            }
+            if (nextDelayMillis > 0) {
+                delay(nextDelayMillis)
+            }
+            nextDelayMillis = (nextDelayMillis * 2)
+                .coerceAtLeast(retryPolicy.initialDelayMillis)
+                .coerceAtMost(retryPolicy.maxDelayMillis)
+        }
+    }
+
+    private suspend fun executeWithRetry(request: HttpRequest): HttpResponse {
+        var attempt = 1
+        var nextDelayMillis = retryPolicy.initialDelayMillis
+
+        while (attempt <= retryPolicy.maxAttempts) {
+            try {
+                val response = effectiveTransport.post(request)
+                if (!isRetryableHttpStatus(response.statusCode) || attempt == retryPolicy.maxAttempts) {
+                    return response
+                }
+            } catch (error: CancellationException) {
+                throw error
+            } catch (error: Throwable) {
+                if (attempt == retryPolicy.maxAttempts) {
+                    throw error
+                }
+            }
+
+            if (nextDelayMillis > 0) {
+                delay(nextDelayMillis)
+            }
+            nextDelayMillis = (nextDelayMillis * 2)
+                .coerceAtLeast(retryPolicy.initialDelayMillis)
+                .coerceAtMost(retryPolicy.maxDelayMillis)
+            attempt += 1
+        }
+
+        throw IllegalStateException("OpenAI chat completions request failed before execution")
     }
 
     private fun parseOpenAiSseStream(rawLines: Flow<String>): Flow<ModelStreamChunk> = flow {
