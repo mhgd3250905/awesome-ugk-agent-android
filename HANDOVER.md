@@ -21,7 +21,7 @@
 
 ---
 
-## 0. 2026-08-29—09-01 架构、视觉、两轮 P0 修复、0.9.3 体验收束与第三轮 P0 修复（当前事实）
+## 0. 2026-08-29—09-01 架构、视觉、两轮 P0 修复、0.9.3 体验收束与第三轮 P0 修复（历史事实快照，非当前状态；当前状态见文首声明）
 
 - 2026-09-01 第三轮 P0 审查修复（分支 `fix/p0-review-round3-20260901`）：审查范围覆盖 `1170268`（正式保存的 `0.9.3 / versionCode 14` composer/多图，标签 `demo-app-v0.9.3`，版本台账有完整条目）与全仓 SDK 模块；确认并修复——terminal 工具空白完成致 Anthropic 会话永久 400（双层防御）、截断工具参数被静默当空输入执行（两 Provider）、流式取消不生效（阻塞至 180s）与无行长上限、任务执行期间 cancel/update 被过期快照覆盖复活、`writeTextAtomically` 固定临时名 + 删除拷贝兜底可删整个文件（Windows 确定性复现）、seeder 种子竞态加固、`nextRunAtMillis` 溢出热循环加固、bash 自然退出不清理后台子进程（进程组契约强制 + 模拟器仪器验证）、Python stdlib 每调用 10.8MB 全量哈希（指纹短路）、`LocalHttpServerManager` 存活误判/端口砖化加固、demo `onSaveInstanceState` 覆盖后台轮次、flush 落盘 `apply()`→`commit()`。门禁：全模块 JVM `916` tests（`910` passed/`6` skipped/0 fail）、`codex_api35` 模拟器 `connectedDebugAndroidTest 28/28`（含新增后台进程清扫用例）、`assembleDebug` 通过。版本提升到 `0.9.4 / versionCode 15`，详见 `docs/terminal-runtime-validation.md` §27 与版本台账 0.9.4 条目；未操作真机、未调真实 Provider。
 - 2026-08-31—09-01 在隔离 clone `codex/fix-input-composer-ui` 分支完成 Demo 输入区与附件体验优化（输入文字垂直对齐、去除输入框上方贴边横线、附件信息上移并可移除、删除附件后清除"已导入"提示、进入设置不再闪现悬浮球、会话历史改底部 Bottom Sheet，新增 material 1.13.0 依赖）与多图方案 A（相册批量选择/相机追加、最多 4 张、横向待发送缩略图、单张删除、全屏预览、按顺序发送、历史持久化兼容旧单图数据）；独立审查（Luna）关闭图片异步跨会话竞态、历史缩略图 Bitmap 内存峰值、毫秒文件名碰撞三类问题，结论 `PASS`。九模块 JVM 62 个结果 XML 合计 `441` 测试（`438` passed、`3` skipped、0 failure/error）；Demo 门禁（`--max-workers=1`）与 `git diff --check` 通过；APK metadata `com.ugk.pi.android.testapp / versionCode 14 / versionName 0.9.3`；`0.9.3` Debug APK 覆盖安装并启动到授权小米 `QSG6Q8IFDMDELVGQ`（`2602BRT18C`，Android 16 / API 36），用户完成界面/功能测试并明确回复"测试通过"。保存 commit `1170268` 已快进推送到远端 `main`；标签 `demo-app-v0.9.3` 随后已创建，指向 `1170268`。本轮无 connected AndroidTest 结果（仅 Kotlin 编译）。

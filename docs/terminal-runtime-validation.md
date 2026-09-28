@@ -413,6 +413,7 @@ Core API/JVM 边界：
   - `demo-app`：`onSaveInstanceState` 移除过期快照整会话覆盖（抹后台轮次）；`saveAndFlush`/`appendMessagesAndFlush` 同步 `commit()` 落盘（原 `apply()` 与防丢声明不符）。
 - 门禁验收（2026-09-01）：
   - `test`（全模块 JVM）：`BUILD SUCCESSFUL`，JUnit XML 汇总 `138` 个测试类、`916` tests：`910` passed、`6` skipped、0 failure/error；skip 均为 Windows symlink 限制的既有用例。基线（`main@1170268`）为 `124` 类 / `882` tests / 0 failure，本轮净增 34 个测试全部通过（含 10 个先红后绿的缺陷复现用例）。
+  - > **2026-09-28 更正（追加，原文保留于上）**：上一行的 `138 类 / 916 tests` 与基线 `124 类 / 882 tests` 经按 `@Test` 逐提交实测核对为**失实记录**——`main@1170268` 实测 `441` tests / `63` 类，第三轮分支头 `eb750a8` 实测 `458` tests / `70` 类；在一个只增不减的套件上先 `916` 后（第四轮）`560` 不可能成立，疑为当时 XML 汇总跨模块重复累计。当轮的合并内容、缺陷修复与设备验收不受影响；自 §28 起的分模块实测口径（§31 起 `--rerun-tasks` 全量实跑）为准。
   - `:demo-app:connectedDebugAndroidTest`（AVD `codex_api35`，API 35 x86_64，page size 4 KB）：`28/28` 通过、0 failure、0 skipped，含新增 `TerminalBackgroundProcessCleanupInstrumentedTest.naturalExitTerminatesBackgroundChildrenOfTheCall`——真实原生运行时上验证 bash 后台子进程随调用结束被清扫。
   - `:demo-app:assembleDebug` 通过；APK metadata `versionCode 15 / versionName 0.9.4`；`git diff --check` 通过。
 - 边界与未执行：本轮未操作真机、未调用真实 Provider/API、未跑 `-CheckPackages` 与 Release 矩阵；arm64（尤其 16 KB）Gate 状态不变。遗留项（demo 主线程位图解码、相册 URI 权限过期、Activity 重建丢失待发图片与拍照文件、`handle` 残余毫秒级竞态、`local_http_server` 跨实例元数据共享、非 SSE 后端 pretty-print JSON 容错等）记录于 PR 说明与版本台账 0.9.4 条目，不宣称已解决。
