@@ -35,9 +35,10 @@ import kotlinx.coroutines.withContext
 import java.text.DateFormat
 import java.util.Date
 
-/** Slice A: local demonstrations only. No model calls or execution promises. */
+/** Local demonstrations, reviewed operation versions, and explicitly confirmed runs. */
 class DemoOperationLearningActivity : Activity() {
     private val recorder get() = DemoProcessScope.get(this).operationRecorder
+    private val workflow get() = DemoProcessScope.get(this).workflowController
     private val uiScope = CoroutineScope(SupervisorJob() + Dispatchers.Main.immediate)
     private val listenerOwner = Any()
     private lateinit var content: LinearLayout
@@ -59,12 +60,40 @@ class DemoOperationLearningActivity : Activity() {
     private var pendingTitle = ""
     private var restoreStart = false
     private var displayedDark = false
+    private lateinit var workflowCard: LinearLayout
+    private lateinit var workflowStatus: TextView
+    private lateinit var workflowDetails: TextView
+    private lateinit var workflowStop: TextView
+    private val guardedViews = mutableListOf<View>()
+    private var workflowEntries = emptyMap<String, OperationWorkflowEntry>()
+    private var workflowRevision = -1L
+    private var workflowDialog: Dialog? = null
+    private var pendingGoal = ""
+    private var pendingCriteria = ""
+    private var pendingGoalDraftId: String? = null
+    private var workflowFormKind: String? = null
+    private var restoreWorkflowForm = false
+    private var completionReviewDraftId: String? = null
+    private var completionReviewConsumedId: String? = null
+    private var compileAfterIntentSaveDraftId: String? = null
+    private var activityResumed = false
 
     override fun onCreate(savedInstanceState: Bundle?) {
         super.onCreate(savedInstanceState)
         ThemeManager.init(this)
-        selectedId = savedInstanceState?.getString(EXTRA_DRAFT_ID) ?: intent.getStringExtra(EXTRA_DRAFT_ID)
+        selectedId = if (savedInstanceState != null) savedInstanceState.getString(EXTRA_DRAFT_ID)
+            else intent.getStringExtra(EXTRA_DRAFT_ID)
         pendingTitle = savedInstanceState?.getString("operation_title").orEmpty()
+        pendingGoal = savedInstanceState?.getString("workflow_goal").orEmpty()
+        pendingCriteria = savedInstanceState?.getString("workflow_criteria").orEmpty()
+        pendingGoalDraftId = savedInstanceState?.getString("workflow_goal_draft")
+        workflowFormKind = savedInstanceState?.getString("workflow_form")
+        restoreWorkflowForm = workflowFormKind != null
+        completionReviewConsumedId = savedInstanceState?.getString("workflow_review_consumed")
+        completionReviewDraftId = if (savedInstanceState != null) savedInstanceState.getString("workflow_review_pending")
+            else selectedId?.takeIf { intent.getBooleanExtra(EXTRA_REVIEW_COMPLETION, false) }
+        compileAfterIntentSaveDraftId = savedInstanceState?.getString("workflow_compile_after_save")
+        intent.removeExtra(EXTRA_REVIEW_COMPLETION)
         restoreStart = savedInstanceState?.getBoolean("operation_start_sheet")
             ?: intent.getBooleanExtra(EXTRA_START_RECORDING, false)
         buildPage()
@@ -72,18 +101,22 @@ class DemoOperationLearningActivity : Activity() {
 
     override fun onResume() {
         super.onResume()
+        activityResumed = true
         DemoProcessScope.get(this).setOperationUiVisible(listenerOwner, true)
         if (displayedDark != Ui.isDark) buildPage()
         recorder.attach(listenerOwner, ::renderSnapshot)
+        workflow.attach(listenerOwner, ::renderWorkflowSnapshot)
         loadContent()
-        if (restoreStart && recorder.snapshot().phase == DemoOperationPhase.IDLE) {
+        if (restoreStart && !isBusy()) {
             restoreStart = false
             showStartSheet()
         }
     }
 
     override fun onPause() {
+        activityResumed = false
         recorder.detach(listenerOwner)
+        workflow.detach(listenerOwner)
         DemoProcessScope.get(this).setOperationUiVisible(listenerOwner, false)
         super.onPause()
     }
@@ -91,6 +124,7 @@ class DemoOperationLearningActivity : Activity() {
     override fun onDestroy() {
         DemoProcessScope.get(this).setOperationUiVisible(listenerOwner, false)
         startDialog?.dismiss()
+        workflowDialog?.dismiss()
         uiScope.cancel()
         super.onDestroy()
     }
@@ -98,6 +132,13 @@ class DemoOperationLearningActivity : Activity() {
     override fun onSaveInstanceState(outState: Bundle) {
         outState.putString(EXTRA_DRAFT_ID, selectedId)
         outState.putString("operation_title", pendingTitle)
+        outState.putString("workflow_goal", pendingGoal)
+        outState.putString("workflow_criteria", pendingCriteria)
+        outState.putString("workflow_goal_draft", pendingGoalDraftId)
+        outState.putString("workflow_form", workflowFormKind)
+        outState.putString("workflow_review_pending", completionReviewDraftId)
+        outState.putString("workflow_review_consumed", completionReviewConsumedId)
+        outState.putString("workflow_compile_after_save", compileAfterIntentSaveDraftId)
         outState.putBoolean("operation_start_sheet", startDialog?.isShowing == true || restoreStart)
         super.onSaveInstanceState(outState)
     }
@@ -105,7 +146,17 @@ class DemoOperationLearningActivity : Activity() {
     override fun onNewIntent(intent: Intent) {
         super.onNewIntent(intent)
         setIntent(intent)
-        selectedId = intent.getStringExtra(EXTRA_DRAFT_ID)
+        val nextId = intent.getStringExtra(EXTRA_DRAFT_ID)
+        if (nextId != selectedId) {
+            workflowDialog?.dismiss()
+            workflowFormKind = null
+            restoreWorkflowForm = false
+            completionReviewDraftId = null
+            compileAfterIntentSaveDraftId = null
+        }
+        selectedId = nextId
+        if (intent.getBooleanExtra(EXTRA_REVIEW_COMPLETION, false)) requestCompletionReview(nextId)
+        intent.removeExtra(EXTRA_REVIEW_COMPLETION)
         loadContent()
         if (intent.getBooleanExtra(EXTRA_START_RECORDING, false)) showStartSheet()
     }
@@ -156,11 +207,31 @@ class DemoOperationLearningActivity : Activity() {
                 recorder.resume().onFailure { notice(it.message ?: "暂时无法继续录制") }
             } else recorder.pause()
         }.apply { tag = "operation_page_pause" }
-        finishButton = TaskNoteUi.button(this, "结束并保存", true) { recorder.finish() }.apply { tag = "operation_page_finish" }
+        finishButton = TaskNoteUi.button(this, "结束并保存", true) {
+            requestCompletionReview(recorder.snapshot().draftId)
+            recorder.finish()
+        }.apply { tag = "operation_page_finish" }
         actions.addView(pauseButton, LinearLayout.LayoutParams(0, -2, 1f).apply { rightMargin = dp(8) })
         actions.addView(finishButton, LinearLayout.LayoutParams(0, -2, 1f))
         activeCard.addView(actions)
         root.addView(activeCard)
+        workflowCard = column().apply {
+            visibility = View.GONE
+            setPadding(dp(20), dp(12), dp(20), dp(12))
+            setBackgroundColor(TaskNoteUi.Paper)
+            tag = "workflow_active_card"
+        }
+        val workflowHeading = LinearLayout(this).apply { gravity = Gravity.CENTER_VERTICAL }
+        workflowStatus = detailText("", 16f, TaskNoteUi.Ink, true).apply { tag = "workflow_active_status" }
+        workflowHeading.addView(workflowStatus, LinearLayout.LayoutParams(0, -2, 1f))
+        workflowStop = quiet("停止") { workflow.stop() }.apply {
+            setTextColor(TaskNoteUi.Ink); gravity = Gravity.CENTER; tag = "workflow_page_stop"
+        }
+        workflowHeading.addView(workflowStop, LinearLayout.LayoutParams(dp(64), dp(48)))
+        workflowCard.addView(workflowHeading)
+        workflowDetails = detailText("", 13f, TaskNoteUi.Secondary).apply { maxLines = 3 }
+        workflowCard.addView(workflowDetails, spaced(3))
+        root.addView(workflowCard)
         content = column().apply { setPadding(dp(20), dp(16), dp(20), dp(28)) }
         contentScroll = ScrollView(this).apply { isFillViewport = true; addView(content) }
         displayedContentKey = null
@@ -201,6 +272,45 @@ class DemoOperationLearningActivity : Activity() {
             loadContent()
         }
         previousPhase = state.phase
+        updateBusyControls()
+    }
+
+    private fun renderWorkflowSnapshot(state: DemoWorkflowSnapshot) {
+        workflowCard.visibility = if (state.phase == DemoWorkflowPhase.IDLE) View.GONE else View.VISIBLE
+        workflowStatus.text = when (state.phase) {
+            DemoWorkflowPhase.COMPILING -> "正在整理操作"
+            DemoWorkflowPhase.RUNNING -> "正在执行 · ${state.completedSteps}/${state.totalSteps}"
+            DemoWorkflowPhase.JUDGING -> "AI 判断画面 · ${state.completedSteps}/${state.totalSteps}"
+            DemoWorkflowPhase.SAVING -> "正在保存"
+            DemoWorkflowPhase.IDLE -> ""
+        }
+        workflowDetails.text = listOf(state.message.takeIf { it.isNotBlank() },
+            "${state.modelCalls} 次模型调用 · ${state.imagesSent} 张图片").filterNotNull().joinToString("\n")
+        workflowStop.text = if (state.phase == DemoWorkflowPhase.COMPILING) "取消" else "停止"
+        workflowStop.isEnabled = state.phase != DemoWorkflowPhase.SAVING
+        workflowStop.alpha = if (workflowStop.isEnabled) 1f else .45f
+        updateBusyControls()
+        if (workflowRevision != state.revision) {
+            workflowRevision = state.revision
+            loadContent()
+        }
+    }
+
+    private fun isBusy() = recorder.snapshot().phase != DemoOperationPhase.IDLE ||
+        workflow.snapshot().phase != DemoWorkflowPhase.IDLE
+
+    private fun guard(view: View): View {
+        guardedViews += view
+        view.isEnabled = !isBusy()
+        view.alpha = if (view.isEnabled) 1f else .45f
+        return view
+    }
+
+    private fun updateBusyControls() {
+        val idle = !isBusy()
+        guardedViews.forEach { it.isEnabled = idle; it.alpha = if (idle) 1f else .45f }
+        headerMore.isEnabled = idle && displayedDraftId != null
+        headerMore.alpha = if (headerMore.isEnabled) 1f else .4f
     }
 
     private fun loadContent() {
@@ -214,6 +324,19 @@ class DemoOperationLearningActivity : Activity() {
                 runCatching { requestedId?.let { recorder.readDraft(it) } to recorder.listDrafts() }
             }
             if (generation != loadGeneration) return@launch
+            val entries = linkedMapOf<String, OperationWorkflowEntry>()
+            result.getOrNull()?.let { (draft, drafts) ->
+                (drafts + listOfNotNull(draft)).distinctBy { it.id }.forEach { item ->
+                    entries[item.id] = runCatching {
+                        val plan = workflow.load(item.id)
+                        OperationWorkflowEntry(plan = plan, records = if (plan != null) workflow.records(item.id) else emptyList(),
+                            intent = workflow.readIntent(item.id))
+                    }.getOrElse { OperationWorkflowEntry(error = it.message ?: "暂时无法读取操作版本") }
+                }
+            }
+            if (generation != loadGeneration) return@launch
+            workflowEntries = entries
+            guardedViews.clear()
             content.removeAllViews()
             if (recorder.snapshot().phase != DemoOperationPhase.IDLE) {
                 content.addView(quiet("取消录制，保留已记录内容") { recorder.finish("用户取消录制") })
@@ -225,48 +348,64 @@ class DemoOperationLearningActivity : Activity() {
                 updateHeader(null)
                 content.addView(text("暂时无法读取本地草稿，请返回后重试。", 16f))
             })
+            updateBusyControls()
             val key = result.getOrNull()?.first?.id ?: "list"
             if (displayedContentKey != key) {
                 displayedContentKey = key
                 contentScroll.post { if (generation == loadGeneration) contentScroll.scrollTo(0, 0) }
             }
+            result.getOrNull()?.first?.let(::restoreOrReviewCompletion)
         }
     }
 
     private fun showList(drafts: List<DemoOperationDraft>) {
-        content.addView(text("把一次操作，先记下来", 25f, bold = true))
-        content.addView(text("你来操作，助手记录事件和关键画面。当前只保存演示草稿，尚不进行 AI 整理或自动执行。", 15f, Ui.TextSecondary))
-        content.addView(TaskNoteUi.button(this, "录制一次演示", true) { showStartSheet() }.apply {
-            tag = "operation_start"; isEnabled = recorder.snapshot().phase == DemoOperationPhase.IDLE
-            alpha = if (isEnabled) 1f else .45f
-        }, spaced())
-        content.addView(text("本地草稿  ·  ${drafts.size}", 14f, Ui.TextSecondary), spaced(24))
+        content.addView(text("教一次，下次帮你做", 25f, bold = true))
+        content.addView(text("录下演示，整理成步骤。检查并试跑通过后，就能再次运行。", 15f, Ui.TextSecondary))
+        content.addView(guard(TaskNoteUi.button(this, "录制一次演示", true) { showStartSheet() }.apply {
+            tag = "operation_start"
+        }), spaced())
+        content.addView(text("我的操作  ·  ${drafts.size}", 14f, Ui.TextSecondary), spaced(24))
         if (drafts.isEmpty()) {
             content.addView(text("还没有演示\n从你熟悉的一小段操作开始。录完后可以查看事件和关键画面。", 16f, Ui.TextSecondary), spaced(12))
         }
         drafts.forEach { draft ->
+            val entry = workflowEntries[draft.id]
+            val plan = entry?.plan
+            val needsCompilation = plan != null && needsCompilation(plan, entry?.intent)
+            val verified = plan != null && !needsCompilation && DemoWorkflowUi.isVerified(plan, entry?.records.orEmpty())
             val card = column().apply {
                 background = Ui.rounded(this@DemoOperationLearningActivity, Ui.Surface, 18)
                 setPadding(dp(16), dp(10), dp(16), dp(10))
-                addView(text(draft.title, 18f, bold = true))
-                addView(text("${draftState(draft)} · ${draft.events.size} 条事件 · ${draft.frames.size} 张画面", 13f, Ui.TextSecondary))
+                addView(DemoWorkflowUi.pill(this@DemoOperationLearningActivity,
+                    if (needsCompilation) "待重新整理" else if (verified) "可运行" else if (plan != null) "待试跑" else draftState(draft)), LinearLayout.LayoutParams(-2, -2))
+                addView(text(plan?.title ?: draft.title, 18f, bold = true), spaced(6))
+                addView(text(if (plan != null) "${plan.steps.size} 个步骤 · ${plan.steps.map { appLabel(it.packageName) }.distinct().joinToString("、")}" else
+                    "${draft.events.size} 条事件 · ${draft.frames.size} 张画面", 13f, Ui.TextSecondary))
                 addView(text(DateFormat.getDateTimeInstance(DateFormat.SHORT, DateFormat.SHORT).format(Date(draft.startedAt)), 12f, Ui.TextMuted))
-                addView(quiet("查看草稿 →") { selectedId = draft.id; loadContent() })
+                addView(quiet(if (plan != null) "审阅步骤 →" else "查看草稿 →") { selectedId = draft.id; loadContent() })
             }
             content.addView(card, spaced(10))
         }
     }
 
     private fun updateHeader(draftId: String?) {
-        displayedDraftId = draftId.takeIf { recorder.snapshot().phase == DemoOperationPhase.IDLE }
-        headerTitle.text = if (draftId == null) "教我操作" else "演示草稿"
+        displayedDraftId = draftId
+        headerTitle.text = if (draftId == null) "教我操作" else if (workflowEntries[draftId]?.plan != null) "已整理操作" else "演示草稿"
         headerOwl.visibility = if (draftId == null) View.VISIBLE else View.GONE
         headerMore.visibility = if (draftId == null) View.GONE else View.VISIBLE
-        headerMore.isEnabled = displayedDraftId != null
+        headerMore.isEnabled = displayedDraftId != null && !isBusy()
         headerMore.alpha = if (headerMore.isEnabled) 1f else .4f
     }
 
     private fun showDraft(draft: DemoOperationDraft) {
+        val entry = workflowEntries[draft.id] ?: OperationWorkflowEntry()
+        if (entry.plan != null) {
+            showWorkflow(draft, entry.plan, entry.records, entry.intent)
+            val raw = column()
+            addRawDraft(draft, raw)
+            content.addView(collapsible("原始记录 · ${draft.events.size} 条事件", "workflow_raw_recording", raw), spaced(18))
+            return
+        }
         val summary = detailSurface(TaskNoteUi.Paper, TaskNoteUi.Rule).apply { tag = "operation_draft_summary" }
         summary.addView(detailText(draftState(draft), 12f, TaskNoteUi.Secondary).apply {
             background = Ui.rounded(this@DemoOperationLearningActivity, TaskNoteUi.Sticker, 6)
@@ -289,9 +428,31 @@ class DemoOperationLearningActivity : Activity() {
             LinearLayout.LayoutParams(dp(1), dp(38)).apply { leftMargin = dp(14); rightMargin = dp(14) })
         stats.addView(stat(draft.frames.size, "关键画面"), LinearLayout.LayoutParams(0, -2, 1f))
         summary.addView(stats, spaced(20))
-        summary.addView(detailText("尚未整理、试跑", 12f, TaskNoteUi.Secondary), spaced(16))
+        summary.addView(detailText("演示已保存在本机", 12f, TaskNoteUi.Secondary), spaced(16))
+        summary.addView(detailText("完成标准", 12f, TaskNoteUi.Secondary), spaced(14))
+        summary.addView(detailText(entry.intent?.completionCriteria ?: "补一句：看到什么才算完成？", 15f, TaskNoteUi.Ink).apply {
+            maxLines = 3; ellipsize = android.text.TextUtils.TruncateAt.END
+            tag = "workflow_draft_criteria"
+        }, spaced(5))
+        summary.addView(guard(quiet(if (entry.intent == null) "补充完成标准" else "修改完成标准") {
+            showCompletionReview(draft)
+        }.apply { tag = "workflow_review_completion" }))
+        if (draft.events.isNotEmpty()) {
+            summary.addView(guard(TaskNoteUi.button(this, "整理成操作", true) { confirmCompilation(draft) }.apply {
+                tag = "workflow_compile"
+            }), spaced(16))
+        }
         content.addView(summary)
+        entry.error?.let { content.addView(detailText(it, 13f, Ui.TextSecondary), spaced(10)) }
+        val currentWorkflow = workflow.snapshot()
+        if (currentWorkflow.phase == DemoWorkflowPhase.IDLE && currentWorkflow.draftId == draft.id &&
+            currentWorkflow.message.isNotBlank()) {
+            content.addView(detailText(currentWorkflow.message, 13f, Ui.TextSecondary), spaced(10))
+        }
+        addRawDraft(draft, content)
+    }
 
+    private fun addRawDraft(draft: DemoOperationDraft, parent: LinearLayout) {
         if (draft.events.isEmpty()) {
             val empty = detailSurface().apply { tag = "operation_draft_empty" }
             empty.addView(TaskNoteUi.owl(this, 56), LinearLayout.LayoutParams(dp(56), dp(56)).apply { gravity = Gravity.CENTER_HORIZONTAL })
@@ -302,13 +463,11 @@ class DemoOperationLearningActivity : Activity() {
             if (draft.frames.isNotEmpty()) {
                 empty.addView(detailText("已保留 ${draft.frames.size} 张关键画面，可在下方查看。", 13f, Ui.TextSecondary), spaced(8))
             }
-            empty.addView(TaskNoteUi.button(this, "重新录制", true) { showStartSheet() }.apply {
+            empty.addView(guard(TaskNoteUi.button(this, "重新录制", true) { showStartSheet() }.apply {
                 tag = "operation_draft_record_again"
-                isEnabled = recorder.snapshot().phase == DemoOperationPhase.IDLE
-                alpha = if (isEnabled) 1f else .45f
                 contentDescription = "重新录制一份新演示，保留当前草稿"
-            }, spaced(16))
-            content.addView(empty, spaced(16))
+            }), spaced(16))
+            parent.addView(empty, spaced(16))
         } else {
             val timeline = detailSurface().apply { tag = "operation_draft_timeline" }
             timeline.addView(detailText("操作记录", 17f, bold = true), spaced(0))
@@ -336,19 +495,19 @@ class DemoOperationLearningActivity : Activity() {
                 if (index < draft.events.lastIndex) timeline.addView(View(this).apply { setBackgroundColor(Ui.Divider) },
                     LinearLayout.LayoutParams(-1, dp(1)).apply { leftMargin = dp(30) })
             }
-            content.addView(timeline, spaced(16))
+            parent.addView(timeline, spaced(16))
         }
         val linked = draft.events.flatMap { listOfNotNull(it.preFrameId, it.postFrameId) }.toSet()
         val otherFrames = draft.frames.filter { it.id !in linked }
         if (otherFrames.isNotEmpty()) {
             val framesCard = detailSurface().apply { tag = "operation_draft_other_frames" }
             addEvidence(framesCard, draft, otherFrames)
-            content.addView(framesCard, spaced(12))
+            parent.addView(framesCard, spaced(12))
         }
-        if (draft.gaps.isNotEmpty()) addDraftNotes(draft)
+        if (draft.gaps.isNotEmpty()) addDraftNotes(draft, parent)
     }
 
-    private fun addDraftNotes(draft: DemoOperationDraft) {
+    private fun addDraftNotes(draft: DemoOperationDraft, parent: LinearLayout = content) {
         val card = column().apply { tag = "operation_draft_notes" }
         val details = column().apply {
             visibility = View.GONE
@@ -379,17 +538,292 @@ class DemoOperationLearningActivity : Activity() {
             }
         }
         card.addView(toggle); card.addView(details)
-        content.addView(card, spaced(12))
+        parent.addView(card, spaced(12))
+    }
+
+    private fun showWorkflow(draft: DemoOperationDraft, plan: DemoWorkflowPlan, records: List<DemoWorkflowRunRecord>,
+                             savedIntent: DemoWorkflowIntent?) {
+        val needsCompilation = needsCompilation(plan, savedIntent)
+        val verified = !needsCompilation && DemoWorkflowUi.isVerified(plan, records)
+        val summary = detailSurface(TaskNoteUi.Paper, TaskNoteUi.Rule).apply { tag = "workflow_summary" }
+        summary.addView(DemoWorkflowUi.pill(this, "${if (needsCompilation) "待重新整理" else if (verified) "可运行" else "待试跑"} · 第 ${plan.version} 版"),
+            LinearLayout.LayoutParams(-2, -2))
+        summary.addView(detailText(plan.title, 25f, TaskNoteUi.Ink, true), spaced(14))
+        summary.addView(detailText(plan.goal, 15f, TaskNoteUi.Secondary), spaced(10))
+        summary.addView(detailText("完成标准", 12f, TaskNoteUi.Secondary), spaced(14))
+        summary.addView(detailText((if (needsCompilation) savedIntent?.completionCriteria else null)
+            ?: plan.completionCriteria.ifBlank { "请先补充完成标准" }, 15f, TaskNoteUi.Ink).apply {
+            tag = "workflow_plan_criteria"
+        }, spaced(5))
+        summary.addView(detailText("${plan.steps.size} 个步骤 · ${plan.steps.map { appLabel(it.packageName) }.distinct().joinToString("、")}",
+            13f, TaskNoteUi.Secondary), spaced(14))
+        summary.addView(guard(TaskNoteUi.button(this, if (needsCompilation) "重新整理操作" else if (verified) "再次运行" else "检查并试跑", true) {
+            if (needsCompilation) confirmCompilation(draft) else confirmRun(plan, isTrial = !verified)
+        }.apply { tag = if (needsCompilation) "workflow_recompile" else if (verified) "workflow_run_again" else "workflow_trial" }), spaced(18))
+        summary.addView(guard(quiet("编辑名称与目标") {
+            if (!canUsePlan(plan)) return@quiet
+            workflowDialog?.dismiss()
+            workflowDialog = DemoWorkflowUi.overviewEditor(this, plan, ::savePlan)
+        }.apply { tag = "workflow_edit_overview" }))
+        summary.addView(guard(quiet("修改标准并重新整理") {
+            showCompletionReview(draft, recompile = true)
+        }.apply { tag = "workflow_revise_completion" }))
+        if (!verified) summary.addView(detailText(when {
+            needsCompilation -> "完成标准已更新，重新整理后再试跑。"
+            records.any { it.isTrial && it.status == "succeeded" } -> "内容已更新，需要重新试跑。"
+            else -> "核对下面的步骤与完成条件，再开始试跑。"
+        },
+            12f, TaskNoteUi.Secondary), spaced(4))
+        content.addView(summary)
+        workflow.snapshot().takeIf { it.phase == DemoWorkflowPhase.IDLE && it.draftId == plan.draftId &&
+            it.message.isNotBlank() }?.let {
+            content.addView(detailText(it.message, 13f, Ui.TextSecondary), spaced(10))
+        }
+
+        if (plan.warnings.isNotEmpty()) {
+            val warnings = column().apply {
+                setPadding(dp(12), dp(4), dp(12), dp(12))
+                plan.warnings.forEach { addView(detailText(it, 13f, Ui.TextSecondary), spaced(8)) }
+            }
+            content.addView(collapsible("需要核对 · ${plan.warnings.size} 项", "workflow_warnings", warnings), spaced(12))
+        }
+        content.addView(detailText(if (needsCompilation) "上次整理的步骤" else "操作步骤", 17f, bold = true), spaced(24))
+        plan.steps.forEachIndexed { index, step ->
+            val card = DemoWorkflowUi.stepCard(this, index, step, appLabel(step.packageName)) { anchor ->
+                showStepMenu(plan, index, anchor)
+            }
+            card.findViewWithTag<View>("workflow_step_menu_${step.id}")?.let(::guard)
+            content.addView(card, spaced(10))
+        }
+        val sortedRecords = records.sortedByDescending { it.startedAt }
+        if (sortedRecords.isNotEmpty()) {
+            val recordCard = detailSurface().apply { tag = "workflow_latest_result" }
+            recordCard.addView(detailText("最近结果", 17f, bold = true))
+            recordCard.addView(DemoWorkflowUi.runRecord(this, sortedRecords.first(), plan))
+            content.addView(recordCard, spaced(18))
+            if (sortedRecords.size > 1) {
+                val history = column()
+                sortedRecords.drop(1).forEach { history.addView(DemoWorkflowUi.runRecord(this, it, plan)) }
+                content.addView(collapsible("更早的运行 · ${sortedRecords.size - 1} 次", "workflow_run_history", history), spaced(10))
+            }
+        }
+        content.addView(detailText("本次整理 · ${plan.modelCalls} 次模型调用 · ${plan.imagesSent} 张图片", 12f, Ui.TextMuted), spaced(18))
+    }
+
+    private fun collapsible(label: String, viewTag: String, body: LinearLayout): LinearLayout = column().apply {
+        tag = viewTag
+        body.visibility = View.GONE
+        val chevron = ImageView(this@DemoOperationLearningActivity).apply {
+            setImageResource(R.drawable.ic_process_expand_more)
+            imageTintList = android.content.res.ColorStateList.valueOf(Ui.TextSecondary)
+            importantForAccessibility = View.IMPORTANT_FOR_ACCESSIBILITY_NO
+        }
+        val toggle = LinearLayout(this@DemoOperationLearningActivity).apply {
+            gravity = Gravity.CENTER_VERTICAL
+            minimumHeight = dp(48)
+            setPadding(dp(12), dp(8), dp(12), dp(8))
+            background = Ui.clickableRounded(this@DemoOperationLearningActivity, Ui.Background, Ui.SurfaceSubtle, 12)
+            isClickable = true; isFocusable = true
+            tag = "${viewTag}_toggle"
+            addView(detailText(label, 13f, Ui.TextSecondary), LinearLayout.LayoutParams(0, -2, 1f))
+            addView(chevron, LinearLayout.LayoutParams(dp(20), dp(20)))
+            contentDescription = "$label，已收起，点击展开"
+            setOnClickListener {
+                val expanded = body.visibility != View.VISIBLE
+                body.visibility = if (expanded) View.VISIBLE else View.GONE
+                chevron.rotation = if (expanded) 180f else 0f
+                contentDescription = "$label，${if (expanded) "已展开，点击收起" else "已收起，点击展开"}"
+            }
+        }
+        addView(toggle); addView(body)
+    }
+
+    private fun needsCompilation(plan: DemoWorkflowPlan, savedIntent: DemoWorkflowIntent?): Boolean =
+        plan.completionCriteria.isBlank() || savedIntent?.let {
+            it.completionCriteria.trim() != plan.completionCriteria.trim()
+        } == true
+
+    private fun requestCompletionReview(draftId: String?) {
+        if (draftId != null && draftId != completionReviewConsumedId) completionReviewDraftId = draftId
+    }
+
+    /** Consume the finish request once; recreation restores the open form and its text separately. */
+    private fun restoreOrReviewCompletion(draft: DemoOperationDraft) {
+        if (!activityResumed || isBusy() || workflowDialog?.isShowing == true || startDialog?.isShowing == true) return
+        if (restoreWorkflowForm) {
+            restoreWorkflowForm = false
+            val kind = workflowFormKind
+            workflowFormKind = null
+            if (pendingGoalDraftId == draft.id) {
+                when (kind) {
+                    "completion" -> showCompletionReview(draft)
+                    "revise_completion" -> showCompletionReview(draft, recompile = true)
+                    "compile" -> confirmCompilation(draft)
+                }
+                return
+            }
+        }
+        if (compileAfterIntentSaveDraftId == draft.id) {
+            compileAfterIntentSaveDraftId = null
+            val stored = workflowEntries[draft.id]?.intent
+            if (stored != null && stored.goal == pendingGoal.trim() && stored.completionCriteria == pendingCriteria.trim()) {
+                confirmCompilation(draft)
+                return
+            }
+        }
+        if (completionReviewDraftId == draft.id) {
+            completionReviewDraftId = null
+            completionReviewConsumedId = draft.id
+            val entry = workflowEntries[draft.id]
+            if (entry?.plan == null && entry?.intent == null) showCompletionReview(draft)
+        }
+    }
+
+    private fun prepareIntentFields(draft: DemoOperationDraft) {
+        if (pendingGoalDraftId != draft.id) {
+            val entry = workflowEntries[draft.id]
+            pendingGoalDraftId = draft.id
+            pendingGoal = entry?.intent?.goal ?: entry?.plan?.goal ?: draft.title
+            pendingCriteria = entry?.intent?.completionCriteria ?: entry?.plan?.completionCriteria.orEmpty()
+        }
+    }
+
+    private fun trackWorkflowForm(kind: String, dialog: Dialog) {
+        workflowDialog = dialog
+        workflowFormKind = kind
+        restoreWorkflowForm = false
+        dialog.setOnDismissListener {
+            if (workflowDialog === dialog) {
+                workflowDialog = null
+                workflowFormKind = null
+                restoreWorkflowForm = false
+            }
+        }
+    }
+
+    private fun showCompletionReview(draft: DemoOperationDraft, recompile: Boolean = false) {
+        if (isBusy()) { notice("请先结束当前录制或操作"); return }
+        prepareIntentFields(draft)
+        completionReviewDraftId = null
+        completionReviewConsumedId = draft.id
+        workflowDialog?.dismiss()
+        val dialog = DemoWorkflowUi.completionSheet(this, pendingGoal, pendingCriteria, recompile,
+            { goal, criteria -> pendingGoal = goal; pendingCriteria = criteria }) { goal, criteria ->
+            if (isBusy() || selectedId != draft.id) {
+                notice("页面状态已变化，请重新打开说明")
+                false
+            } else workflow.saveIntent(draft.id, goal, criteria).fold(onSuccess = {
+                pendingGoal = goal
+                pendingCriteria = criteria
+                if (recompile) compileAfterIntentSaveDraftId = draft.id
+                true
+            }, onFailure = {
+                notice(it.message ?: "暂时无法保存，填写内容仍保留")
+                false
+            })
+        }
+        trackWorkflowForm(if (recompile) "revise_completion" else "completion", dialog)
+    }
+
+    private fun confirmCompilation(draft: DemoOperationDraft) {
+        if (isBusy()) { notice("请先结束当前录制或操作"); return }
+        if (draft.events.isEmpty()) { notice("先录下一段操作，再整理"); return }
+        prepareIntentFields(draft)
+        workflowDialog?.dismiss()
+        val dialog = DemoWorkflowUi.compileSheet(this, draft, pendingGoal, pendingCriteria,
+            { goal, criteria -> pendingGoal = goal; pendingCriteria = criteria }) { goal, criteria ->
+            if (isBusy() || selectedId != draft.id) {
+                notice("页面状态已变化，请重新打开整理卡")
+                false
+            } else workflow.compile(draft.id, goal, criteria).fold(onSuccess = { true }, onFailure = {
+                notice(it.message ?: "暂时无法整理，演示仍保存在本机")
+                false
+            })
+        }
+        trackWorkflowForm("compile", dialog)
+    }
+
+    private fun showStepMenu(plan: DemoWorkflowPlan, index: Int, anchor: View) {
+        if (!canUsePlan(plan)) return
+        PopupMenu(this, anchor).apply {
+            menu.add(0, 1, 0, "编辑步骤与完成条件")
+            menu.add(0, 2, 1, "删除这一步").isEnabled = plan.steps.size > 1
+            setOnMenuItemClickListener { item ->
+                if (!canUsePlan(plan)) return@setOnMenuItemClickListener true
+                if (item.itemId == 1) {
+                    workflowDialog?.dismiss()
+                    workflowDialog = DemoWorkflowUi.stepEditor(this@DemoOperationLearningActivity, plan, index, ::savePlan)
+                } else {
+                    AlertDialog.Builder(this@DemoOperationLearningActivity, Ui.dialogTheme())
+                        .setTitle("删除第 ${index + 1} 步？")
+                        .setMessage("${plan.steps[index].title}\n保存后生成新版本，需要重新试跑。")
+                        .setNegativeButton("保留", null)
+                        .setPositiveButton("删除并保存") { _, _ ->
+                            savePlan(plan.copy(steps = plan.steps.filterIndexed { i, _ -> i != index }))
+                        }.show()
+                }
+                true
+            }
+            show()
+        }
+    }
+
+    private fun savePlan(plan: DemoWorkflowPlan): Boolean {
+        if (!canUsePlan(plan, compareDigest = false)) return false
+        val current = workflowEntries[plan.draftId]?.plan ?: return false
+        if (current.digest() == plan.digest()) return true
+        return workflow.saveRevision(plan).fold(onSuccess = { true }, onFailure = {
+            notice(it.message ?: "暂时无法保存，请保留当前修改后重试")
+            false
+        })
+    }
+
+    private fun canUsePlan(plan: DemoWorkflowPlan, compareDigest: Boolean = true): Boolean {
+        val current = workflowEntries[plan.draftId]?.plan
+        if (isBusy()) { notice("请先结束当前录制或操作"); return false }
+        if (selectedId != plan.draftId || current == null || current.version != plan.version ||
+            (compareDigest && current.digest() != plan.digest())) {
+            notice("操作版本已变化，请重新打开")
+            return false
+        }
+        return true
+    }
+
+    private fun confirmRun(plan: DemoWorkflowPlan, isTrial: Boolean) {
+        if (!canUsePlan(plan)) return
+        if (needsCompilation(plan, workflowEntries[plan.draftId]?.intent)) {
+            notice("请先按当前完成标准重新整理操作")
+            return
+        }
+        workflowDialog?.dismiss()
+        workflowDialog = DemoWorkflowUi.runConfirmation(this, plan, isTrial, ::appLabel) {
+            if (!canUsePlan(plan)) false
+            else if (needsCompilation(plan, workflowEntries[plan.draftId]?.intent)) {
+                notice("完成标准已更新，请先重新整理")
+                false
+            }
+            else if (!isTrial && !DemoWorkflowUi.isVerified(plan, workflowEntries[plan.draftId]?.records.orEmpty())) {
+                notice("这个版本还需要成功试跑一次")
+                false
+            } else workflow.start(plan, isTrial).fold(onSuccess = { true }, onFailure = {
+                notice(it.message ?: "暂时无法开始，请检查设备状态")
+                false
+            })
+        }
     }
 
     private fun showDraftMenu() {
         val id = displayedDraftId?.takeIf { it == selectedId } ?: return
-        if (recorder.snapshot().phase != DemoOperationPhase.IDLE) return
+        if (isBusy()) return
         PopupMenu(this, headerMore).apply {
-            menu.add("删除草稿与素材").apply { isEnabled = recorder.snapshot().phase == DemoOperationPhase.IDLE }
-            setOnMenuItemClickListener {
-                if (displayedDraftId == id && selectedId == id && recorder.snapshot().phase == DemoOperationPhase.IDLE) {
-                    confirmDraftDeletion(id)
+            if (workflowEntries[id]?.plan != null) menu.add(0, 1, 0, "重新整理演示")
+            menu.add(0, 2, 1, "删除演示与操作")
+            setOnMenuItemClickListener { item ->
+                if (displayedDraftId == id && selectedId == id && !isBusy()) {
+                    if (item.itemId == 1) uiScope.launch {
+                        val draft = withContext(Dispatchers.IO) { runCatching { recorder.readDraft(id) }.getOrNull() }
+                        if (draft != null && selectedId == id) confirmCompilation(draft)
+                    } else confirmDraftDeletion(id)
                 }
                 true
             }
@@ -404,18 +838,18 @@ class DemoOperationLearningActivity : Activity() {
             if (result.isFailure) { notice("暂时无法读取这份草稿，请稍后重试"); return@launch }
             val current = result.getOrNull()
             if (current == null) { loadContent(); notice("这份草稿已不可用"); return@launch }
-            if (recorder.snapshot().phase != DemoOperationPhase.IDLE) { notice("请先结束当前录制"); return@launch }
+            if (isBusy()) { notice("请先结束当前录制或操作"); return@launch }
             AlertDialog.Builder(this@DemoOperationLearningActivity, Ui.dialogTheme())
                 .setTitle("删除这份演示？")
-                .setMessage("将删除“${current.title}”及它的本地关键画面。")
+                .setMessage("将删除“${current.title}”的演示素材、整理版本和运行记录。")
                 .setNegativeButton("保留", null)
                 .setPositiveButton("删除") { _, _ ->
-                    if (selectedId != id || displayedDraftId != id || recorder.snapshot().phase != DemoOperationPhase.IDLE) {
+                    if (selectedId != id || displayedDraftId != id || isBusy()) {
                         notice("草稿或录制状态已变化，请重新打开菜单")
                         return@setPositiveButton
                     }
                     uiScope.launch {
-                        val result = withContext(Dispatchers.IO) { recorder.deleteDraft(id) }
+                        val result = workflow.delete(id)
                         result.onSuccess { if (selectedId == id) selectedId = null; loadContent() }
                             .onFailure { notice(it.message ?: "暂时无法删除草稿") }
                     }
@@ -484,7 +918,7 @@ class DemoOperationLearningActivity : Activity() {
     }
 
     private fun showStartSheet() {
-        if (recorder.snapshot().phase != DemoOperationPhase.IDLE) { notice("请先结束当前录制"); return }
+        if (isBusy()) { notice("请先结束当前录制或操作"); return }
         startDialog?.dismiss()
         val root = column().apply {
             background = Ui.asymmetricRounded(this@DemoOperationLearningActivity, TaskNoteUi.Paper, 28, 28, 0, 0)
@@ -526,6 +960,7 @@ class DemoOperationLearningActivity : Activity() {
         body.addView(preparation, spaced())
         val footer = column()
         val primary = TaskNoteUi.button(this, "开始录制", true) {
+            if (isBusy()) { notice("请先结束当前录制或操作"); return@button }
             if (name.text.toString().trim().isBlank()) { name.error = "给这段操作起个名字"; return@button }
             recorder.start(name.text.toString().trim()).fold(onSuccess = {
                 startDialog?.dismiss(); startDialog = null
@@ -539,7 +974,7 @@ class DemoOperationLearningActivity : Activity() {
             preparation.removeAllViews()
             val serviceReady = AgentAccessibilityService.running && AgentAccessibilityService.instance != null
             val overlayReady = Settings.canDrawOverlays(this)
-            primary.isEnabled = Build.VERSION.SDK_INT >= 30 && serviceReady && overlayReady
+            primary.isEnabled = Build.VERSION.SDK_INT >= 30 && serviceReady && overlayReady && !isBusy()
             if (Build.VERSION.SDK_INT < 30) preparation.addView(text("页面关键画面需要 Android 11 或更新版本。此设备仍可查看已有草稿。", 14f, TaskNoteUi.Secondary))
             if (!serviceReady) preparation.addView(quiet("开启无障碍 →") {
                 restoreStart = true; startDialog?.dismiss(); startDialog = null
@@ -619,5 +1054,13 @@ class DemoOperationLearningActivity : Activity() {
     companion object {
         const val EXTRA_DRAFT_ID = "operation_draft_id"
         const val EXTRA_START_RECORDING = "operation_start_recording"
+        const val EXTRA_REVIEW_COMPLETION = "operation_review_completion"
     }
 }
+
+private data class OperationWorkflowEntry(
+    val plan: DemoWorkflowPlan? = null,
+    val records: List<DemoWorkflowRunRecord> = emptyList(),
+    val intent: DemoWorkflowIntent? = null,
+    val error: String? = null
+)

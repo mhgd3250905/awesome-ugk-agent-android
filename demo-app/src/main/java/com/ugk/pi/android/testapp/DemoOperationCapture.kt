@@ -13,8 +13,19 @@ import android.view.accessibility.AccessibilityWindowInfo
 import java.io.ByteArrayOutputStream
 import java.util.concurrent.Executors
 
-internal data class DemoOperationPage(val packageName: String, val sensitive: Boolean, val nodes: List<DemoOperationNode> = emptyList())
+internal data class DemoOperationPage(val packageName: String, val sensitive: Boolean, val nodes: List<DemoOperationNode> = emptyList(), val windowSignature: List<String> = emptyList())
 internal data class DemoOperationImage(val bytes: ByteArray, val width: Int, val height: Int)
+internal data class DemoOperationScrollObservation(val deltaX: Int?, val deltaY: Int?, val x: Int, val y: Int, val fromIndex: Int, val toIndex: Int) {
+    val isZeroMovement: Boolean get() = deltaX == 0 && deltaY == 0
+}
+
+/** A reported zero displacement is a layout notification, not proof of user input. */
+internal fun DemoOperationEvent.isZeroMovementScrollNotification(): Boolean =
+    type == 4096 && scrollDeltaX == 0 && scrollDeltaY == 0
+
+/** Keep external stacking order, but not layer offsets caused by our own overlay. */
+internal fun demoOperationWindowSignature(activeWindowId: Int, externalWindows: List<Pair<Int, String>>): List<String> =
+    listOf("active:$activeWindowId") + externalWindows.sortedWith(compareBy<Pair<Int, String>> { it.first }.thenBy { it.second }).map { it.second }
 
 /** No native event/node escapes these synchronous reads. Text entry is never copied. */
 internal object DemoOperationCapture {
@@ -30,16 +41,26 @@ internal object DemoOperationCapture {
                 // Screenshots cover the display, not just the active app. Fail closed on IME or
                 // an input field in another visible window, before copying any text.
                 val windows = service.windows
+                val externalWindows = mutableListOf<Pair<Int, String>>()
                 try {
                     windows.forEach { window ->
                         if (window.type == AccessibilityWindowInfo.TYPE_INPUT_METHOD) unsafe = true
                         val other = window.root
                         if (other != null) try {
-                            if (other.packageName?.toString() != ownPackage && sensitive(other, intArrayOf(0), 0)) unsafe = true
+                            if (other.packageName?.toString() != ownPackage) {
+                                if (sensitive(other, intArrayOf(0), 0)) unsafe = true
+                                val bounds = Rect().also { window.getBoundsInScreen(it) }
+                                externalWindows += window.layer to "${window.id}:${window.type}:${other.packageName}:$bounds"
+                            }
                         } finally { other.recycle() }
+                        else {
+                            // Unknown roots cannot be assumed to belong to our overlay.
+                            val bounds = Rect().also { window.getBoundsInScreen(it) }
+                            externalWindows += window.layer to "${window.id}:${window.type}:unknown:$bounds"
+                        }
                     }
                 } finally { windows.forEach { it.recycle() } }
-                DemoOperationPage(pkg, unsafe, if (unsafe) emptyList() else collectNodes(root))
+                DemoOperationPage(pkg, unsafe, if (unsafe) emptyList() else collectNodes(root), demoOperationWindowSignature(root.windowId, externalWindows))
             }
         } finally { root.recycle() }
     }
@@ -52,7 +73,7 @@ internal object DemoOperationCapture {
             if (node.isVisibleToUser) nodes += DemoOperationNode(path, node.viewIdResourceName?.take(160),
                 node.className?.toString()?.take(120), node.text?.toString()?.take(120),
                 node.contentDescription?.toString()?.take(120), listOf(bounds.left, bounds.top, bounds.right, bounds.bottom),
-                node.isClickable, node.isScrollable, node.isChecked)
+                node.isClickable, node.isScrollable, node.isChecked, node.isCheckable)
             for (i in 0 until node.childCount) {
                 val child = node.getChild(i) ?: continue
                 try { visit(child, "$path.$i", depth + 1) } finally { child.recycle() }
@@ -71,7 +92,15 @@ internal object DemoOperationCapture {
         return false
     }
 
-    fun event(event: AccessibilityEvent, id: Int, preFrameId: String?): DemoOperationEvent {
+    fun scroll(event: AccessibilityEvent): DemoOperationScrollObservation? {
+        if (event.eventType != AccessibilityEvent.TYPE_VIEW_SCROLLED) return null
+        return DemoOperationScrollObservation(
+            if (Build.VERSION.SDK_INT >= 28) event.scrollDeltaX else null,
+            if (Build.VERSION.SDK_INT >= 28) event.scrollDeltaY else null,
+            event.scrollX, event.scrollY, event.fromIndex, event.toIndex)
+    }
+
+    fun event(event: AccessibilityEvent, id: Int, preFrameId: String?, scroll: DemoOperationScrollObservation? = DemoOperationCapture.scroll(event)): DemoOperationEvent {
         val node = event.source
         return try {
             val rect = Rect()
@@ -79,11 +108,15 @@ internal object DemoOperationCapture {
             DemoOperationEvent(id, System.currentTimeMillis(), event.eventType,
                 event.packageName?.toString().orEmpty(), (node?.className ?: event.className)?.toString()?.take(160),
                 node?.viewIdResourceName?.take(200),
-                if (node?.isEditable == true || node?.isPassword == true) null
+                if (event.isPassword || node?.isEditable == true || node?.isPassword == true ||
+                    node != null && node.packageName?.toString() != event.packageName?.toString()) null
                 else (node?.text?.toString()?.takeIf { it.isNotBlank() }
                     ?: node?.contentDescription?.toString()?.takeIf { it.isNotBlank() }
+                    ?: event.contentDescription?.toString()?.takeIf { it.isNotBlank() }
                     ?: event.text.take(4).joinToString(" ").takeIf { it.isNotBlank() })?.take(120),
-                listOf(rect.left, rect.top, rect.right, rect.bottom), preFrameId)
+                listOf(rect.left, rect.top, rect.right, rect.bottom), preFrameId,
+                scrollDeltaX = scroll?.deltaX, scrollDeltaY = scroll?.deltaY,
+                scrollX = scroll?.x, scrollY = scroll?.y, fromIndex = scroll?.fromIndex, toIndex = scroll?.toIndex)
         } finally { node?.recycle() }
     }
 

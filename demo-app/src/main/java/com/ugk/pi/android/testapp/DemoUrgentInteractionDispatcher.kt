@@ -45,7 +45,7 @@ internal class DemoUrgentInteractionDispatcher(
 
     /** Called on the main thread by the overlay. A true result consumes this screen's event once. */
     fun submit(event: DemoUrgentInteraction): Boolean {
-        if (DemoCapabilityInterlock.isRecordingOwned()) return false
+        if (DemoCapabilityInterlock.isScreenOperationOwned()) return false
         if (pending.size >= MAX_PENDING || event.binding.presentationId in acceptedPresentationIds) return false
         if (!timerAllowsInteraction(event)) return false
         if (!ownsCurrentSession(event)) return false
@@ -84,7 +84,7 @@ internal class DemoUrgentInteractionDispatcher(
         }
 
     private fun drain(): Boolean {
-        if (DemoCapabilityInterlock.isRecordingOwned()) {
+        if (DemoCapabilityInterlock.isScreenOperationOwned()) {
             cancelPending()
             return false
         }

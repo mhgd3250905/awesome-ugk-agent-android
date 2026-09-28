@@ -112,6 +112,9 @@ internal class DemoOperationDraftStore(private val root: File) {
             e.className?.let { put("className", it) }; e.viewId?.let { put("viewId", it) }
             e.label?.let { put("label", it) }; put("bounds", JsonArray(e.bounds.map(::JsonPrimitive)))
             e.preFrameId?.let { put("preFrameId", it) }; e.postFrameId?.let { put("postFrameId", it) }
+            e.scrollDeltaX?.let { put("scrollDeltaX", it) }; e.scrollDeltaY?.let { put("scrollDeltaY", it) }
+            e.scrollX?.let { put("scrollX", it) }; e.scrollY?.let { put("scrollY", it) }
+            e.fromIndex?.let { put("fromIndex", it) }; e.toIndex?.let { put("toIndex", it) }
         } }))
         put("frames", JsonArray(d.frames.map { f -> buildJsonObject {
             put("id", f.id); put("at", f.at); put("fileName", f.fileName); put("packageName", f.packageName)
@@ -122,6 +125,7 @@ internal class DemoOperationDraftStore(private val root: File) {
                 n.text?.let { put("text", it) }; n.description?.let { put("description", it) }
                 put("bounds", JsonArray(n.bounds.map(::JsonPrimitive)))
                 put("clickable", n.clickable); put("scrollable", n.scrollable); put("checked", n.checked)
+                n.checkable?.let { put("checkable", it) }
             } }))
         } }))
     }
@@ -135,7 +139,10 @@ internal class DemoOperationDraftStore(private val root: File) {
             o.getValue("events").jsonArray.map { item -> item.jsonObject.let { e ->
                 DemoOperationEvent(e.n("id").toInt(), e.n("at"), e.n("type").toInt(), e.s("packageName")!!,
                     e.s("className"), e.s("viewId"), e.s("label"), e.getValue("bounds").jsonArray.map { it.jsonPrimitive.int },
-                    e.s("preFrameId"), e.s("postFrameId"))
+                    e.s("preFrameId"), e.s("postFrameId"),
+                    e["scrollDeltaX"]?.jsonPrimitive?.intOrNull, e["scrollDeltaY"]?.jsonPrimitive?.intOrNull,
+                    e["scrollX"]?.jsonPrimitive?.intOrNull, e["scrollY"]?.jsonPrimitive?.intOrNull,
+                    e["fromIndex"]?.jsonPrimitive?.intOrNull, e["toIndex"]?.jsonPrimitive?.intOrNull)
             } },
             o.getValue("frames").jsonArray.map { item -> item.jsonObject.let { f ->
                 DemoOperationFrame(f.s("id")!!, f.n("at"), f.s("fileName")!!, f.s("packageName")!!,
@@ -144,7 +151,7 @@ internal class DemoOperationDraftStore(private val root: File) {
                         DemoOperationNode(n.s("path")!!, n.s("viewId"), n.s("className"), n.s("text"), n.s("description"),
                             n.getValue("bounds").jsonArray.map { it.jsonPrimitive.int },
                             n.getValue("clickable").jsonPrimitive.boolean, n.getValue("scrollable").jsonPrimitive.boolean,
-                            n.getValue("checked").jsonPrimitive.boolean)
+                            n.getValue("checked").jsonPrimitive.boolean, n["checkable"]?.jsonPrimitive?.booleanOrNull)
                     } }.orEmpty(), f["treeTruncated"]?.jsonPrimitive?.booleanOrNull ?: false)
             } }, o.getValue("gaps").jsonArray.map { it.jsonPrimitive.content })
     }

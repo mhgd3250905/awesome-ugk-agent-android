@@ -22,6 +22,38 @@ class DemoProcessScope private constructor(context: Context) {
     private val recordingOwner = Any()
     private var openDraftAfterFinish: String? = null
     private val recordingUiOwners = mutableSetOf<Any>()
+    private val workflowUiOwner = Any()
+    private val workflowOverlay by lazy {
+        DemoWorkflowOverlay(appContext,
+            onStop = { workflowController.stop() },
+            onOpen = { openOperationLearning(workflowController.snapshot().draftId) })
+    }
+    internal val workflowController: DemoWorkflowController by lazy {
+        DemoWorkflowController(appContext, recorder = { operationRecorder },
+            startBlockReason = {
+                when {
+                    conversationRuntime.runCoordinator.isRunning() -> "请先停止当前任务"
+                    conversationRuntime.runCoordinator.snapshot().queuedMessages > 0 -> "请先处理排队消息"
+                    delayedTasks.snapshot() !is DemoDelayedTaskState.Idle -> "请先停止当前定时任务"
+                    urgentInteractionDispatcher.hasPending() -> "请先处理悬浮提醒中的操作"
+                    overlayController.window.hasBlockingPresentation() -> "请先关闭提醒或确认窗口"
+                    else -> null
+                }
+            },
+            onFinished = { openOperationLearning(it) }
+        ).apply {
+            onCaptureVisibilityChanged = { hidden -> workflowOverlay.setCaptureHidden(hidden) }
+            attach(workflowUiOwner) { state ->
+                if (state.phase == DemoWorkflowPhase.RUNNING || state.phase == DemoWorkflowPhase.JUDGING) {
+                    overlayController.window.hide()
+                }
+                overlayController.window.setExternalAutomationMode(
+                    DemoCapabilityInterlock.isScreenOperationOwned() || conversationRuntime.capabilityInterlock.isCapabilityOwned()
+                )
+                workflowOverlay.bind(state)
+            }
+        }
+    }
     private val recordingOverlay by lazy {
         DemoOperationRecordingOverlay(
             appContext,
@@ -43,6 +75,7 @@ class DemoProcessScope private constructor(context: Context) {
             context = appContext,
             startBlockReason = {
                 when {
+                    workflowController.isBusy() -> "请先结束当前整理或操作运行"
                     conversationRuntime.runCoordinator.isRunning() -> "请先停止当前任务，再开始演示。"
                     conversationRuntime.runCoordinator.snapshot().queuedMessages > 0 -> "请先处理或停止排队消息。"
                     delayedTasks.snapshot() !is DemoDelayedTaskState.Idle -> "请先停止待确认、等待中或执行中的定时任务。"
@@ -64,22 +97,29 @@ class DemoProcessScope private constructor(context: Context) {
                 if (state.phase == DemoOperationPhase.IDLE) {
                     val id = openDraftAfterFinish
                     openDraftAfterFinish = null
-                    if (id != null) openOperationLearning(id)
+                    if (id != null) openOperationLearning(id, reviewCompletion = true)
                 }
             }
         }
     }
 
-    internal fun openOperationLearning(draftId: String? = null) {
+    internal fun openOperationLearning(draftId: String? = null, reviewCompletion: Boolean = false) {
         appContext.startActivity(Intent(appContext, DemoOperationLearningActivity::class.java).apply {
             addFlags(Intent.FLAG_ACTIVITY_NEW_TASK or Intent.FLAG_ACTIVITY_REORDER_TO_FRONT)
             draftId?.let { putExtra(DemoOperationLearningActivity.EXTRA_DRAFT_ID, it) }
+            if (reviewCompletion) putExtra(DemoOperationLearningActivity.EXTRA_REVIEW_COMPLETION, true)
         })
     }
 
     internal fun setOperationUiVisible(owner: Any, visible: Boolean) {
         if (visible) recordingUiOwners.add(owner) else recordingUiOwners.remove(owner)
         recordingOverlay.setHostVisible(recordingUiOwners.isNotEmpty())
+        workflowOverlay.setHostVisible(recordingUiOwners.isNotEmpty())
+    }
+
+    internal fun stopOperationWork() {
+        if (DemoCapabilityInterlock.isRecordingOwned()) operationRecorder.finish("用户停止录制")
+        if (workflowController.isBusy()) workflowController.stop()
     }
     internal val urgentMessagePresenter = DemoUrgentMessagePresenter(overlayController) { sessionId ->
         conversationRuntime.activeConversationId?.takeIf { id ->
@@ -106,7 +146,7 @@ class DemoProcessScope private constructor(context: Context) {
                 false
             },
             onStop = {
-                if (DemoCapabilityInterlock.isRecordingOwned()) operationRecorder.finish("用户停止录制")
+                stopOperationWork()
                 urgentInteractionDispatcher.cancelPending()
                 conversationRuntime.runCoordinator.clearQueue()
                 delayedTasks.stop()

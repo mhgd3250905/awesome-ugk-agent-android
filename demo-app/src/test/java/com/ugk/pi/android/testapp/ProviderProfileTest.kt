@@ -1,6 +1,7 @@
 package com.ugk.pi.android.testapp
 
 import com.ugk.pi.android.AgentMessage
+import com.ugk.pi.android.AnthropicRetryPolicy
 import com.ugk.pi.android.LLMProvider
 import com.ugk.pi.android.ModelRequest
 import kotlinx.coroutines.flow.Flow
@@ -13,6 +14,27 @@ import org.junit.Assert.assertTrue
 import org.junit.Test
 
 class ProviderProfileTest {
+
+    @Test
+    fun workflowCanLimitBothProtocolsToOneActualHttpAttempt() = runBlocking {
+        listOf(ProviderProtocol.ANTHROPIC_MESSAGES, ProviderProtocol.OPENAI_CHAT_COMPLETIONS).forEach { protocol ->
+            var attempts = 0
+            val transport = object : DemoHttpTransport {
+                override suspend fun request(request: DemoHttpRequest): DemoHttpResponse {
+                    attempts++
+                    return DemoHttpResponse(503, "{}")
+                }
+                override fun postStream(request: DemoHttpRequest): Flow<String> = error("not used")
+            }
+            val result = runCatching {
+                ProviderProfile.from(config(protocol = protocol)).createRuntimeProvider(
+                    transport, AnthropicRetryPolicy(maxAttempts = 1)
+                ).generate(simpleRequest())
+            }
+            assertTrue(result.isFailure)
+            assertEquals(1, attempts)
+        }
+    }
 
     @Test
     fun providerProtocolJsonRoundTripsAndUnknownLegacyValuesUseAuto() {

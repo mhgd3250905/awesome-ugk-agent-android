@@ -15,6 +15,7 @@ class AgentAccessibilityService : AccessibilityService() {
 
     override fun onInterrupt() {
         DemoProcessScope.get(this).operationRecorder.onServiceUnavailable()
+        DemoProcessScope.get(this).workflowController.onServiceUnavailable()
     }
 
     companion object {
@@ -44,6 +45,7 @@ class AgentAccessibilityService : AccessibilityService() {
 
     override fun onDestroy() {
         DemoProcessScope.get(this).operationRecorder.onServiceUnavailable()
+        DemoProcessScope.get(this).workflowController.onServiceUnavailable()
         super.onDestroy()
         running = false
         instance = null

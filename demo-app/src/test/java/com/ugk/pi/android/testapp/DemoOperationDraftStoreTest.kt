@@ -7,6 +7,28 @@ import org.junit.Assert.*
 import org.junit.Test
 
 class DemoOperationDraftStoreTest {
+    @Test fun checkableObservationRoundTripsWhileLegacyNodesRemainUnknown() = withStore { _, store ->
+        val oldNode = DemoOperationNode("0.1", null, "TextView", "Label", null, listOf(0, 0, 10, 10), false, false, false)
+        val draft = sample().copy(frames = listOf(DemoOperationFrame("f", 10, "frame-${UUID.randomUUID()}.jpg", "settings", 100, 100, 1,
+            nodes = listOf(oldNode, oldNode.copy(path = "0.2", checkable = false), oldNode.copy(path = "0.3", checkable = true)))))
+        store.create(draft)
+        val restored = store.read(draft.id)!!.frames.single().nodes
+        assertNull(restored[0].checkable)
+        assertEquals(false, restored[1].checkable)
+        assertEquals(true, restored[2].checkable)
+    }
+
+    @Test fun scrollMetadataRoundTripsAndLegacyMissingDeltasStayUnknown() = withStore { _, store ->
+        val legacy = DemoOperationEvent(1, 12, 4096, "settings", null, null, null, listOf(1, 2, 3, 4))
+        val observed = legacy.copy(id = 2, scrollDeltaX = 0, scrollDeltaY = 0, scrollX = 0, scrollY = 42, fromIndex = 1, toIndex = 8)
+        val draft = sample().copy(events = listOf(legacy, observed))
+        store.create(draft)
+        val restored = store.read(draft.id)!!
+        assertEquals(draft.events, restored.events)
+        assertFalse(restored.events[0].isZeroMovementScrollNotification())
+        assertTrue(restored.events[1].isZeroMovementScrollNotification())
+    }
+
     @Test fun checkpointRoundTripRetainsEvidenceAndRecoveryMarksInterrupted() = withStore { root, store ->
         val draft = sample().copy(events = listOf(DemoOperationEvent(1, 12, 1, "settings", "Button", "settings:id/item", "Display", listOf(1, 2, 3, 4))),
             frames = listOf(DemoOperationFrame("frame1", 11, "frame-${UUID.randomUUID()}.jpg", "settings", 100, 200, 10,

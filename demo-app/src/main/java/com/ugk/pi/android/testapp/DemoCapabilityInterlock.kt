@@ -100,11 +100,12 @@ internal class DemoCapabilityInterlock(
         private val lock = Any()
         private var owner: Any? = null
         private var recordingOwner: Any? = null
+        private var workflowOwner: Any? = null
         private val activeRuns = mutableSetOf<DemoCapabilityInterlock>()
         private var blockingCapability: String? = null
 
         fun startRun(by: DemoCapabilityInterlock) = synchronized(lock) {
-            check(recordingOwner == null) { "请先结束当前演示录制。" }
+            check(recordingOwner == null && workflowOwner == null) { "请先结束当前录制或操作运行。" }
             releaseLocked(by)
             activeRuns.add(by)
         }
@@ -126,6 +127,29 @@ internal class DemoCapabilityInterlock(
 
         fun isRecordingOwned(): Boolean = synchronized(lock) { recordingOwner != null }
 
+        fun acquireWorkflow(by: Any): Boolean = synchronized(lock) {
+            if (owner != null || activeRuns.isNotEmpty()) return false
+            owner = by
+            workflowOwner = by
+            blockingCapability = SCREEN_CAPABILITY
+            true
+        }
+
+        fun releaseWorkflow(by: Any) = synchronized(lock) {
+            if (workflowOwner === by) {
+                workflowOwner = null
+                releaseLocked(by)
+            }
+        }
+
+        fun isScreenOperationOwned(): Boolean = synchronized(lock) {
+            recordingOwner != null || workflowOwner != null
+        }
+
+        fun isWorkflowOwnedBy(by: Any): Boolean = synchronized(lock) {
+            workflowOwner === by && owner === by
+        }
+
         fun interlockDecisionFor(
             requester: DemoCapabilityInterlock,
             toolName: String,
@@ -144,7 +168,7 @@ internal class DemoCapabilityInterlock(
             val capability = blockingCapability ?: return null
             val requesterIsOwner = owner === requester
             val blocked = when {
-                recordingOwner != null -> workflowToolMatcher(toolName) || toolName in TERMINAL_TOOL_NAMES
+                recordingOwner != null || workflowOwner != null -> workflowToolMatcher(toolName) || toolName in TERMINAL_TOOL_NAMES
                 toolName in TERMINAL_TOOL_NAMES -> requesterIsOwner
                 workflowToolMatcher(toolName) -> !requesterIsOwner
                 else -> false
@@ -152,7 +176,7 @@ internal class DemoCapabilityInterlock(
             if (blocked) {
                 AgentToolInterlockDecision(
                     blockingCapability = capability,
-                    message = if (recordingOwner != null) "演示录制正在使用屏幕，请先结束录制。"
+                    message = if (recordingOwner != null || workflowOwner != null) "录制或操作运行正在使用屏幕，请先结束。"
                         else "该 Tool 当前不可用，因为 capability '$capability' 正被一个进行中的 Agent Run 持有。"
                 )
             } else {
@@ -193,6 +217,10 @@ internal class DemoCapabilityInterlock(
         fun tryAcquireRecording(owner: Any): Boolean = ProcessState.acquireRecording(owner)
         fun releaseRecording(owner: Any) = ProcessState.releaseRecording(owner)
         fun isRecordingOwned(): Boolean = ProcessState.isRecordingOwned()
+        fun tryAcquireWorkflow(owner: Any): Boolean = ProcessState.acquireWorkflow(owner)
+        fun releaseWorkflow(owner: Any) = ProcessState.releaseWorkflow(owner)
+        fun isScreenOperationOwned(): Boolean = ProcessState.isScreenOperationOwned()
+        fun isWorkflowOwnedBy(owner: Any): Boolean = ProcessState.isWorkflowOwnedBy(owner)
 
         private const val SCREEN_CAPABILITY = "android-screen-automation"
 

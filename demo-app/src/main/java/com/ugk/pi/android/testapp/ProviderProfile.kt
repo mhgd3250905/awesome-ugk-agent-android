@@ -1,6 +1,7 @@
 package com.ugk.pi.android.testapp
 
 import com.ugk.pi.android.AnthropicMessagesProvider
+import com.ugk.pi.android.AnthropicRetryPolicy
 import com.ugk.pi.android.LLMProvider
 import com.ugk.pi.android.OpenAiChatCompletionsProvider
 
@@ -70,7 +71,10 @@ data class ProviderProfile(
         get() = endpoint
 
     /** Creates the SDK provider through the demo's injectable transport seam. */
-    fun createRuntimeProvider(transport: DemoHttpTransport): LLMProvider {
+    fun createRuntimeProvider(
+        transport: DemoHttpTransport,
+        retryPolicy: AnthropicRetryPolicy = AnthropicRetryPolicy()
+    ): LLMProvider {
         val coreTransport = DemoHttpTransportAdapter(transport)
         return when (resolvedProtocol) {
             ProviderProtocol.ANTHROPIC_MESSAGES -> AnthropicMessagesProvider(
@@ -80,14 +84,16 @@ data class ProviderProfile(
                 // endpoint is canonicalized to that suffix above.
                 baseUrl = endpoint.removeSuffix(ANTHROPIC_MESSAGES_SUFFIX),
                 transport = coreTransport,
-                maxTokens = config.maxOutputTokens ?: 8192
+                maxTokens = config.maxOutputTokens ?: 8192,
+                retryPolicy = retryPolicy
             )
 
             ProviderProtocol.OPENAI_CHAT_COMPLETIONS -> OpenAiChatCompletionsProvider(
                 apiKey = config.apiKey,
                 model = config.model,
                 transport = coreTransport,
-                endpoint = endpoint
+                endpoint = endpoint,
+                retryPolicy = retryPolicy
             )
 
             ProviderProtocol.AUTO -> error("ProviderProfile must contain a resolved protocol")

@@ -126,8 +126,8 @@ internal class DemoDelayedTaskController(
     ): Result<DemoDelayedTask> = withContext(Dispatchers.Main.immediate) {
         val conversationId = conversationRuntime.activeConversationId
         when {
-            DemoCapabilityInterlock.isRecordingOwned() ->
-                Result.failure(IllegalStateException("请先结束当前演示录制，再创建定时任务。"))
+            DemoCapabilityInterlock.isScreenOperationOwned() ->
+                Result.failure(IllegalStateException("请先结束当前录制或操作运行，再创建定时任务。"))
             delaySeconds !in 1L..86_400L || instruction.isBlank() || instruction.length > 2_000 ->
                 Result.failure(IllegalArgumentException("定时任务时长或内容无效。"))
             state !is DemoDelayedTaskState.Idle ->
@@ -151,7 +151,7 @@ internal class DemoDelayedTaskController(
 
     /** The duration begins only after the user confirms the proposed task. */
     fun confirm(taskId: String): Boolean {
-        if (DemoCapabilityInterlock.isRecordingOwned()) return false
+        if (DemoCapabilityInterlock.isScreenOperationOwned()) return false
         val proposed = state as? DemoDelayedTaskState.Proposed ?: return false
         if (proposed.task.id != taskId) return false
         val nowElapsed = SystemClock.elapsedRealtime()

@@ -41,6 +41,7 @@ internal class DemoOperationRecorder(
     private var generation = 0L
     private var observationRevision = 0L
     private var stableFrame: DemoOperationFrame? = null
+    private val observationState = DemoOperationObservationState()
     private val postEvidence = DemoOperationPostEvidence()
     private var captureJob: Job? = null
     private var ticker: Job? = null
@@ -82,6 +83,7 @@ internal class DemoOperationRecorder(
             draft = value; startedElapsed = SystemClock.elapsedRealtime(); generation++
             activeElapsed = 0; activeSince = startedElapsed
             stableFrame = null; observationRevision = 0; lastCaptureAt = 0
+            observationState.invalidate()
             postEvidence.invalidate()
             launcherGapRecorded = false
             launcherPackages = listOfNotNull(context.packageManager.resolveActivity(
@@ -170,16 +172,17 @@ internal class DemoOperationRecorder(
         if (phase != DemoOperationPhase.RECORDING || event == null) return
         if (locked()) { finish("设备已锁定或熄屏"); return }
         val pkg = event.packageName?.toString().orEmpty()
-        if (pkg.isBlank()) return
-        if (pkg == context.packageName) {
+        val windowChange = event.eventType == AccessibilityEvent.TYPE_WINDOWS_CHANGED
+        if (pkg.isBlank() && !windowChange) return
+        if (pkg == context.packageName && !windowChange) {
             val activeRoot = service.rootInActiveWindow
             val isHostPage = try { activeRoot?.packageName?.toString() == context.packageName }
                 finally { activeRoot?.recycle() }
             if (isHostPage) invalidateCapture()
             return
         }
-        if (pkg in imePackages) { invalidateCapture(); return }
-        if (pkg in launcherPackages) {
+        if (pkg in imePackages && !windowChange) { invalidateCapture(); return }
+        if (pkg in launcherPackages && !windowChange) {
             invalidateCapture()
             if (!launcherGapRecorded) {
                 launcherGapRecorded = true; addGap("桌面选App阶段不采集事件或截图；进入目标App后开始记录")
@@ -197,26 +200,31 @@ internal class DemoOperationRecorder(
             message = "输入页面已暂停录制，请离开后手动继续"; checkpoint(); publish(); return
         }
         postEvidence.observePackage(page.packageName)
-        if (page.packageName in imePackages || page.packageName != pkg) return
-        observationRevision++
+        if (page.packageName in imePackages || page.packageName != pkg && !windowChange) { invalidateCapture(); return }
         val current = draft ?: return
         val actionEvent = event.eventType in ACTION_EVENTS
+        val scroll = runCatching { DemoOperationCapture.scroll(event) }.getOrNull()
+        val pageNotification = event.eventType == AccessibilityEvent.TYPE_WINDOW_STATE_CHANGED || scroll?.isZeroMovement == true
+        val changed = observationState.observe(page, actionEvent || event.eventType in PAGE_CHANGE_EVENTS)
+        if (changed) observationRevision++
         if (actionEvent) {
-            postEvidence.invalidate()
+            if (!pageNotification) postEvidence.invalidate()
             if (current.events.size >= DemoOperationLimits.MAX_EVENTS) { finish("已达500条事件上限"); return }
-            val pre = stableFrame?.takeIf { it.packageName == pkg && System.currentTimeMillis() - it.at <= 10_000 }?.id
-            val copied = runCatching { DemoOperationCapture.event(event, current.events.size + 1, pre) }.getOrNull()
+            val pre = DemoOperationObservationState.reliablePreFrame(stableFrame, pkg, System.currentTimeMillis())
+            val copied = runCatching { DemoOperationCapture.event(event, current.events.size + 1, pre, scroll) }.getOrNull()
             if (copied == null) addGap("事件源读取失败")
             else {
                 draft = current.copy(events = current.events + copied,
                     gaps = if (pre == null) (current.gaps + "事件${copied.id}缺少可靠前置帧").takeLast(100) else current.gaps)
-                postEvidence.recordEvent(copied.id, copied.packageName)
+                postEvidence.recordEvent(copied.id, copied.packageName, isPageNotification = pageNotification)
             }
             stableFrame = null
             checkpoint(); publish()
         }
-        stableFrame = null
-        scheduleCapture(service, page.packageName)
+        if (changed) {
+            stableFrame = null
+            scheduleCapture(service, page.packageName)
+        }
     }
 
     private fun scheduleCapture(service: AccessibilityService, packageName: String) {
@@ -255,12 +263,17 @@ internal class DemoOperationRecorder(
             DemoOperationCapture.screenshot(service) { result ->
                 if (captureTicket != ticket) return@screenshot
                 timeout.cancel()
-                captureInFlight = false; captureVisibility(false)
-                if (!accepts(token, revision)) return@screenshot
-                val after = runCatching { DemoOperationCapture.page(service, context.packageName, launcherPackages) }.getOrNull()
-                if (after == null || after.sensitive || after.packageName != packageName || locked()) return@screenshot
-                result.fold(onSuccess = { image -> persistFrame(token, revision, packageName, pendingPostEventId, image, capturePage.nodes) },
-                    onFailure = { addGap("关键帧不可用：${it.message}"); checkpoint(); publish() })
+                captureInFlight = false
+                try {
+                    if (!accepts(token, revision)) return@screenshot
+                    // Validate against the same hidden-overlay state as capturePage.
+                    val after = runCatching { DemoOperationCapture.page(service, context.packageName, launcherPackages) }.getOrNull()
+                    if (after == null || after.sensitive || after != capturePage || locked()) return@screenshot
+                    result.fold(onSuccess = { image -> persistFrame(token, revision, packageName, pendingPostEventId, image, capturePage.nodes) },
+                        onFailure = { addGap("关键帧不可用：${it.message}"); checkpoint(); publish() })
+                } finally {
+                    captureVisibility(false)
+                }
             }
         }
     }
@@ -306,6 +319,7 @@ internal class DemoOperationRecorder(
     private fun accepts(token: Long, revision: Long) = phase == DemoOperationPhase.RECORDING && generation == token && observationRevision == revision
     private fun invalidateCapture() {
         generation++; stableFrame = null; captureJob?.cancel(); captureJob = null
+        observationState.invalidate()
         postEvidence.invalidate()
         captureTicket++; captureInFlight = false
         captureVisibility(false)
@@ -323,5 +337,26 @@ internal class DemoOperationRecorder(
     private companion object {
         val ACTION_EVENTS = setOf(AccessibilityEvent.TYPE_VIEW_CLICKED, AccessibilityEvent.TYPE_VIEW_LONG_CLICKED,
             AccessibilityEvent.TYPE_VIEW_SCROLLED, AccessibilityEvent.TYPE_WINDOW_STATE_CHANGED)
+        // Window notifications also describe our overlay disappearing/reappearing;
+        // compare the actual external window signature instead of forcing invalidation.
+        val PAGE_CHANGE_EVENTS = setOf(AccessibilityEvent.TYPE_WINDOW_CONTENT_CHANGED)
+    }
+}
+
+/** Pure evidence policy: unrelated notifications must not destroy stable observations. */
+internal class DemoOperationObservationState {
+    private var previous: DemoOperationPage? = null
+
+    fun observe(page: DemoOperationPage, contentMayHaveChanged: Boolean): Boolean {
+        val changed = contentMayHaveChanged || previous != page
+        previous = page
+        return changed
+    }
+
+    fun invalidate() { previous = null }
+
+    companion object {
+        fun reliablePreFrame(frame: DemoOperationFrame?, packageName: String, nowEpochMillis: Long): String? =
+            frame?.takeIf { it.packageName == packageName && nowEpochMillis - it.at in 0..10_000L }?.id
     }
 }

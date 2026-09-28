@@ -5,7 +5,10 @@ internal class DemoOperationPostEvidence {
     private var eventId: Int? = null
     private var packageName: String? = null
 
-    fun recordEvent(id: Int, packageName: String) {
+    fun recordEvent(id: Int, packageName: String, isPageNotification: Boolean = false) {
+        // A window transition can settle a preceding action. It must not steal
+        // that action's eventual stable observation. Another real action does.
+        if (isPageNotification && pendingFor(packageName) != null) return
         eventId = id
         this.packageName = packageName
     }

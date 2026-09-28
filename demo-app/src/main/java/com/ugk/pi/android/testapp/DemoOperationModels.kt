@@ -16,7 +16,10 @@ internal data class DemoOperationEvent(
     val id: Int, val at: Long, val type: Int, val packageName: String,
     val className: String?, val viewId: String?, val label: String?,
     val bounds: List<Int>, val preFrameId: String? = null,
-    val postFrameId: String? = null
+    val postFrameId: String? = null,
+    val scrollDeltaX: Int? = null, val scrollDeltaY: Int? = null,
+    val scrollX: Int? = null, val scrollY: Int? = null,
+    val fromIndex: Int? = null, val toIndex: Int? = null
 )
 
 internal data class DemoOperationFrame(
@@ -30,7 +33,8 @@ internal data class DemoOperationFrame(
 internal data class DemoOperationNode(
     val path: String, val viewId: String?, val className: String?,
     val text: String?, val description: String?, val bounds: List<Int>,
-    val clickable: Boolean, val scrollable: Boolean, val checked: Boolean
+    val clickable: Boolean, val scrollable: Boolean, val checked: Boolean,
+    val checkable: Boolean? = null
 )
 
 internal data class DemoOperationDraft(
