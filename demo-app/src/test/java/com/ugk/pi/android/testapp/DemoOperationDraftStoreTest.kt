@@ -129,6 +129,27 @@ class DemoOperationDraftStoreTest {
         assertEquals("corrupt", File(corruptDir, "draft.json").readText())
     }
 
+    @Test fun guidedStepsRetainReviewCorrectionsAndDiscardedEvidence() = withStore { _, store ->
+        val step = DemoOperationStep(1, listOf(1, 2), "before", "after", "local", "ai", "correction", true)
+        val draft = sample().copy(guided = true, steps = listOf(step, step.copy(id = 2, confirmed = false, discarded = true)))
+        store.create(draft)
+        assertEquals(draft, store.read(draft.id))
+    }
+
+    @Test fun schemaOneWithoutGuidedFieldsRemainsReadable() = withStore { root, store ->
+        val draft = sample().copy(endedAt = 20)
+        store.create(draft)
+        val file = File(root, "${draft.id}/draft.json")
+        val original = kotlinx.serialization.json.Json.parseToJsonElement(file.readText()) as kotlinx.serialization.json.JsonObject
+        val legacy = kotlinx.serialization.json.JsonObject(original.filterKeys { it != "steps" && it != "guided" }.toMutableMap().apply {
+            put("schemaVersion", kotlinx.serialization.json.JsonPrimitive(1))
+        })
+        file.writeText(legacy.toString())
+        val restored = store.read(draft.id)!!
+        assertFalse(restored.guided)
+        assertTrue(restored.steps.isEmpty())
+    }
+
     private fun sample() = DemoOperationDraft(UUID.randomUUID().toString(), "设置演示", 10)
     private fun withStore(block: (File, DemoOperationDraftStore) -> Unit) {
         val root = Files.createTempDirectory("operation-store-test").toFile()

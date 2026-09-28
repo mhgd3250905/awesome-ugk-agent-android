@@ -7,9 +7,13 @@ import android.graphics.Path
 import android.os.Build
 import android.os.Bundle
 import android.util.Base64
+import android.util.Log
 import android.view.Display
 import android.view.accessibility.AccessibilityNodeInfo
 import android.view.accessibility.AccessibilityWindowInfo
+import kotlinx.coroutines.delay
+import kotlinx.coroutines.currentCoroutineContext
+import kotlinx.coroutines.ensureActive
 import kotlinx.coroutines.suspendCancellableCoroutine
 import kotlinx.coroutines.withTimeoutOrNull
 import java.io.ByteArrayOutputStream
@@ -197,13 +201,19 @@ class AccessibilityScreenAutomationBackend(
             )
         }
 
+        val observedPackage = currentExternalPackageName(service)
+        val observedRotation = currentDisplayRotation(service)
+        val observedWidth = service.resources.displayMetrics.widthPixels
+        val observedHeight = service.resources.displayMetrics.heightPixels
         val screenshot = requestScreenshot(service)
         val bitmap = screenshot.bitmap
             ?: return ScreenVisualCaptureResult(
                 code = screenshot.code,
                 message = screenshot.message ?: "Unable to capture the current screen."
             )
+        lateinit var comparison: VisualComparisonFrame
         val image = try {
+            comparison = bitmap.toComparisonFrame(service)
             bitmap.toAgentImage()
         } finally {
             bitmap.recycle()
@@ -216,20 +226,27 @@ class AccessibilityScreenAutomationBackend(
         }
 
         val displayMetrics = service.resources.displayMetrics
+        if (observedPackage == "unknown" || currentExternalPackageName(service) != observedPackage ||
+            currentDisplayRotation(service) != observedRotation ||
+            displayMetrics.widthPixels != observedWidth || displayMetrics.heightPixels != observedHeight
+        ) return ScreenVisualCaptureResult(
+            code = ScreenAutomationErrorCodes.VISUAL_SCREENSHOT_FAILED,
+            message = "The foreground screen changed during capture. Capture again."
+        )
         val observation = ScreenVisualObservation(
             observationId = visualObservationIdGenerator(),
             sessionId = sessionId,
-            packageName = currentExternalPackageName(service),
-            screenWidth = displayMetrics.widthPixels,
-            screenHeight = displayMetrics.heightPixels,
+            packageName = observedPackage,
+            screenWidth = observedWidth,
+            screenHeight = observedHeight,
             imageWidth = image.width,
             imageHeight = image.height,
             displayId = Display.DEFAULT_DISPLAY,
-            rotation = currentDisplayRotation(service),
+            rotation = observedRotation,
             capturedAtEpochMillis = nowEpochMillis(),
             image = image.content
         )
-        rememberVisualObservation(observation)
+        rememberVisualObservation(observation, comparison)
         return ScreenVisualCaptureResult(observation = observation)
     }
 
@@ -266,19 +283,6 @@ class AccessibilityScreenAutomationBackend(
                 metadata = mapOf("observationId" to observation.observationId)
             )
         }
-        val ageMillis = nowEpochMillis() - observation.capturedAtEpochMillis
-        if (ageMillis < 0L || ageMillis > ScreenAutomationLimits.MAX_VISUAL_OBSERVATION_AGE_MILLIS) {
-            return failure(
-                code = ScreenAutomationErrorCodes.VISUAL_OBSERVATION_STALE,
-                message = "The visual observation is ${ageMillis.coerceAtLeast(0L)}ms old. Capture the screen again before acting.",
-                action = request.action,
-                metadata = mapOf(
-                    "observationId" to observation.observationId,
-                    "ageMillis" to ageMillis.coerceAtLeast(0L).toString()
-                )
-            )
-        }
-
         val service = serviceProvider.current()
             ?: return failure(
                 code = ScreenAutomationErrorCodes.ACCESSIBILITY_UNAVAILABLE,
@@ -314,10 +318,7 @@ class AccessibilityScreenAutomationBackend(
             )
         }
         val currentPackage = currentExternalPackageName(service)
-        if (observation.packageName != "unknown" &&
-            currentPackage != "unknown" &&
-            currentPackage != observation.packageName
-        ) {
+        if (observation.packageName == "unknown" || currentPackage != observation.packageName) {
             return failure(
                 code = ScreenAutomationErrorCodes.VISUAL_OBSERVATION_STALE,
                 message = "The foreground application changed after the visual observation. Capture the screen again.",
@@ -330,6 +331,21 @@ class AccessibilityScreenAutomationBackend(
             )
         }
 
+        // Pixel changes and model latency do not block gestures. Check cancellation before dispatch.
+        currentCoroutineContext().ensureActive()
+        // Claim once, after validation: concurrent/new observations cannot reuse this gesture evidence.
+        val claimed = synchronized(visualObservationLock) {
+            if (latestVisualObservations[sessionId] !== observation) false else {
+                latestVisualObservations.remove(sessionId)
+                true
+            }
+        }
+        if (!claimed) return failure(
+            code = ScreenAutomationErrorCodes.VISUAL_OBSERVATION_STALE,
+            message = "The observation was replaced or already used. Capture the screen again.",
+            action = request.action
+        )
+
         val center = resolveScreenVisualTargetCenter(request.target, screenWidth, screenHeight)
             ?: return failure(
                 code = ScreenAutomationErrorCodes.VISUAL_TARGET_INVALID,
@@ -338,20 +354,52 @@ class AccessibilityScreenAutomationBackend(
             )
         val x = center.first
         val y = center.second
-        return performGestureAt(service, request.action, x, y, screenWidth, screenHeight).let { result ->
-            result.copy(
-                metadata = result.metadata + mapOf(
-                    "observationId" to observation.observationId,
-                    "targetDescription" to request.targetDescription.orEmpty(),
-                    "normalizedTarget" to listOf(
-                        request.target.left,
-                        request.target.top,
-                        request.target.right,
-                        request.target.bottom
-                    ).joinToString(",")
-                )
+        val dispatched = performGestureAt(service, request.action, x, y, screenWidth, screenHeight)
+        val screenChange = if (dispatched.success) {
+            // Diagnostic observation only: never infer the user's goal from pixel changes.
+            delay(350L)
+            withTimeoutOrNull(2_000L) {
+                val capture = requestScreenshot(service)
+                val bitmap = capture.bitmap ?: return@withTimeoutOrNull "unavailable"
+                try {
+                    val afterPackage = currentExternalPackageName(service)
+                    if (afterPackage == "unknown") return@withTimeoutOrNull "unavailable"
+                    val same = afterPackage == observation.packageName &&
+                        currentDisplayRotation(service) == observation.rotation &&
+                        service.resources.displayMetrics.widthPixels == screenWidth &&
+                        service.resources.displayMetrics.heightPixels == screenHeight &&
+                        observation.comparison.matches(bitmap.toComparisonFrame(service), request.target)
+                    if (same) "unchanged" else "changed"
+                } catch (_: RuntimeException) {
+                    "unavailable"
+                } finally {
+                    bitmap.recycle()
+                }
+            } ?: "unavailable"
+        } else "unavailable"
+        Log.i("UGKScreenAction", "gestureId=${dispatched.metadata["gestureId"]} " +
+            "action=${request.action} dispatched=${dispatched.success} effectVerified=false screenChange=$screenChange")
+        return dispatched.copy(
+            message = if (!dispatched.success) dispatched.message else when (screenChange) {
+                "unchanged" -> "Android completed gesture dispatch, but the local screen comparison found no visible change from the original observed frame. " +
+                    "The comparison does not establish the exact timing or cause, and is not proof of a click or task success. " +
+                    "Do not blindly repeat the same coordinates. Obtain fresh evidence; try at most one independently grounded alternative, then request manual assistance."
+                "changed" -> "Android completed gesture dispatch and the screen differs from the original observed frame. The comparison does not establish when or why it changed; the intended effect is not verified. " +
+                    "inspect a fresh observation for the task's actual success condition."
+                else -> "Android completed gesture dispatch, but post-gesture screen evidence is unavailable. " +
+                    "The intended effect is not verified. Obtain fresh evidence before deciding another action; do not blindly repeat coordinates."
+            },
+            metadata = dispatched.metadata + mapOf(
+                "dispatched" to dispatched.success.toString(),
+                "effectVerified" to "false",
+                "screenChange" to screenChange,
+                "observationId" to observation.observationId,
+                "targetDescription" to request.targetDescription.orEmpty(),
+                "normalizedTarget" to listOf(
+                    request.target.left, request.target.top, request.target.right, request.target.bottom
+                ).joinToString(",")
             )
-        }
+        )
     }
 
     override suspend fun performAction(
@@ -571,12 +619,29 @@ class AccessibilityScreenAutomationBackend(
                 )
             )
             .build()
-        return when (dispatchGesture(service, gesture)) {
+        val gestureId = UUID.randomUUID().toString()
+        val packageName = currentExternalPackageName(service)
+        val rotation = currentDisplayRotation(service)
+        Log.i("UGKScreenAction", "gestureId=$gestureId action=$action package=$packageName " +
+            "start=${coordinates.startX},${coordinates.startY} end=${coordinates.endX},${coordinates.endY} " +
+            "durationMs=${coordinates.durationMillis} screen=${screenWidth}x$screenHeight rotation=$rotation")
+        val outcome = dispatchGesture(service, gesture)
+        Log.i("UGKScreenAction", "gestureId=$gestureId dispatchOutcome=$outcome")
+        return when (outcome) {
             GestureDispatchOutcome.COMPLETED -> ScreenOperationResult(
                 success = true,
                 code = ScreenAutomationErrorCodes.OK,
                 action = action,
+                message = "Android completed gesture dispatch. This does not prove the target app handled it or the intended task succeeded; verify with fresh evidence.",
                 metadata = mapOf(
+                    "gestureId" to gestureId,
+                    "dispatchOutcome" to outcome.name,
+                    "dispatched" to "true",
+                    "effectVerified" to "false",
+                    "screenChange" to "unavailable",
+                    "durationMillis" to coordinates.durationMillis.toString(),
+                    "packageName" to packageName,
+                    "rotation" to rotation.toString(),
                     "x" to coordinates.startX.toString(),
                     "y" to coordinates.startY.toString(),
                     "endX" to coordinates.endX.toString(),
@@ -589,17 +654,31 @@ class AccessibilityScreenAutomationBackend(
             GestureDispatchOutcome.CANCELLED -> failure(
                 code = ScreenAutomationErrorCodes.GESTURE_REJECTED,
                 message = "AccessibilityService cancelled or rejected the gesture.",
-                action = action
+                action = action,
+                metadata = mapOf("gestureId" to gestureId, "dispatchOutcome" to outcome.name,
+                    "dispatched" to "false", "effectVerified" to "false")
             )
             GestureDispatchOutcome.TIMEOUT -> failure(
                 code = ScreenAutomationErrorCodes.GESTURE_TIMEOUT,
                 message = "Timed out waiting for AccessibilityService gesture completion.",
-                action = action
+                action = action,
+                metadata = mapOf("gestureId" to gestureId, "dispatchOutcome" to outcome.name,
+                    "dispatched" to "false", "effectVerified" to "false")
             )
         }
     }
 
     private suspend fun requestScreenshot(service: AccessibilityService): ScreenshotCapture {
+        // Other host components also capture screenshots, so account for their platform rate limit.
+        repeat(3) { attempt ->
+            val result = requestScreenshotOnce(service)
+            if (!result.rateLimited || attempt == 2) return result
+            delay(350L)
+        }
+        error("Unreachable")
+    }
+
+    private suspend fun requestScreenshotOnce(service: AccessibilityService): ScreenshotCapture {
         return withTimeoutOrNull(VISUAL_SCREENSHOT_TIMEOUT_MILLIS) {
             suspendCancellableCoroutine { continuation ->
                 val completed = AtomicBoolean(false)
@@ -610,7 +689,7 @@ class AccessibilityScreenAutomationBackend(
                         return
                     }
                     if (continuation.isActive) {
-                        continuation.resume(result)
+                        continuation.resume(result) { result.bitmap?.recycle() }
                     } else {
                         result.bitmap?.recycle()
                     }
@@ -629,7 +708,8 @@ class AccessibilityScreenAutomationBackend(
                                 complete(
                                     ScreenshotCapture(
                                         code = ScreenAutomationErrorCodes.VISUAL_SCREENSHOT_FAILED,
-                                        message = "AccessibilityService screenshot failed (errorCode=$errorCode)."
+                                        message = "AccessibilityService screenshot failed (errorCode=$errorCode).",
+                                        rateLimited = errorCode == AccessibilityService.ERROR_TAKE_SCREENSHOT_INTERVAL_TIME_SHORT
                                     )
                                 )
                             }
@@ -678,6 +758,22 @@ class AccessibilityScreenAutomationBackend(
         } finally {
             hardwareBitmap?.recycle()
             hardwareBuffer.close()
+        }
+    }
+
+    private fun Bitmap.toComparisonFrame(service: AccessibilityService): VisualComparisonFrame {
+        val scale = minOf(1.0, 640.0 / maxOf(width, height))
+        val scaled = Bitmap.createScaledBitmap(this, (width * scale).roundToInt().coerceAtLeast(1),
+            (height * scale).roundToInt().coerceAtLeast(1), true)
+        return try {
+            val pixels = IntArray(scaled.width * scaled.height)
+            scaled.getPixels(pixels, 0, scaled.width, 0, 0, scaled.width, scaled.height)
+            val resourceId = service.resources.getIdentifier("status_bar_height", "dimen", "android")
+            val statusBar = if (resourceId != 0) service.resources.getDimensionPixelSize(resourceId) else 0
+            VisualComparisonFrame(scaled.width, scaled.height, pixels,
+                (statusBar * scale).roundToInt().coerceIn(0, scaled.height / 10))
+        } finally {
+            if (scaled !== this) scaled.recycle()
         }
     }
 
@@ -763,16 +859,15 @@ class AccessibilityScreenAutomationBackend(
     private fun currentDisplayRotation(service: AccessibilityService): Int =
         runCatching { service.display?.rotation ?: 0 }.getOrDefault(0)
 
-    private fun rememberVisualObservation(observation: ScreenVisualObservation) {
+    private fun rememberVisualObservation(observation: ScreenVisualObservation, comparison: VisualComparisonFrame) {
         synchronized(visualObservationLock) {
             latestVisualObservations[observation.sessionId] = StoredVisualObservation(
                 observationId = observation.observationId,
-                sessionId = observation.sessionId,
                 packageName = observation.packageName,
                 screenWidth = observation.screenWidth,
                 screenHeight = observation.screenHeight,
                 rotation = observation.rotation,
-                capturedAtEpochMillis = observation.capturedAtEpochMillis
+                comparison = comparison
             )
             while (latestVisualObservations.size > MAX_VISUAL_OBSERVATION_SESSIONS) {
                 latestVisualObservations.entries.firstOrNull()?.let {
@@ -1155,18 +1250,18 @@ class AccessibilityScreenAutomationBackend(
 
     private data class StoredVisualObservation(
         val observationId: String,
-        val sessionId: String,
         val packageName: String,
         val screenWidth: Int,
         val screenHeight: Int,
         val rotation: Int,
-        val capturedAtEpochMillis: Long
+        val comparison: VisualComparisonFrame
     )
 
     private data class ScreenshotCapture(
         val bitmap: Bitmap? = null,
         val code: String = ScreenAutomationErrorCodes.OK,
-        val message: String? = null
+        val message: String? = null,
+        val rateLimited: Boolean = false
     )
 
     private data class EncodedVisualImage(

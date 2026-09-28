@@ -101,7 +101,7 @@ class DemoAgentRunCoordinator(
         onFinished: (() -> Unit)? = null
     ): Long {
         check(job == null) { "An Agent run is already active" }
-        check(!DemoCapabilityInterlock.isScreenOperationOwned()) { "请先结束当前录制或操作运行。" }
+        check(DemoCapabilityInterlock.canStartRun(runLifecycle)) { "请先结束当前录制或操作运行。" }
         val runId = ++generation
         this.conversationId = conversationId
         this.session = session

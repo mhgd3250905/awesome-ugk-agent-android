@@ -19,9 +19,16 @@ class DemoProcessScope private constructor(context: Context) {
     val confirmationPresenter: ActivityUserConfirmationDialogPresenter =
         ActivityUserConfirmationDialogPresenter()
     val overlayController: DemoOverlayController = DemoOverlayController(appContext)
+    private val teachingHost by lazy { DemoTeachingHost(appContext, this) }
+    internal val teachingController get() = teachingHost.controller
+    internal val teachingStore get() = teachingHost.store
+    internal val teachingCompiler get() = teachingHost.compiler
+    internal fun startTeaching(title: String): Result<Unit> = teachingHost.start(title)
+    internal fun resumeTeaching(id: String): Result<Unit> = teachingHost.resume(id)
     private val recordingOwner = Any()
     private var openDraftAfterFinish: String? = null
     private val recordingUiOwners = mutableSetOf<Any>()
+    private val recordingReview by lazy { DemoOperationReviewCoordinator(appContext) { operationRecorder } }
     private val workflowUiOwner = Any()
     private val workflowOverlay by lazy {
         DemoWorkflowOverlay(appContext,
@@ -67,8 +74,44 @@ class DemoProcessScope private constructor(context: Context) {
                 openDraftAfterFinish = operationRecorder.snapshot().draftId
                 operationRecorder.finish()
             },
-            onOpen = { openOperationLearning() }
+            onOpen = { openOperationLearning() },
+            onCompleteStep = { operationRecorder.completeStep().onFailure { recordingNotice(it.message) } },
+            onFailure = ::recordingOverlayFailed
         )
+    }
+    private val recordingStepOverlay by lazy {
+        DemoOperationStepReviewOverlay(appContext,
+            onBegin = { operationRecorder.beginStep().onFailure { recordingNotice(it.message) } },
+            onConfirm = { correction, finish ->
+                if (finish) openDraftAfterFinish = operationRecorder.snapshot().draftId
+                operationRecorder.confirmStep(correction, finish).onFailure {
+                    openDraftAfterFinish = null
+                    recordingNotice(it.message)
+                }
+            },
+            onRevise = { requestOperationStepReview(it) },
+            onRetry = { operationRecorder.retryStep().onFailure { recordingNotice(it.message) } },
+            onAdjustPage = { operationRecorder.pause() },
+            onExit = {
+                openDraftAfterFinish = operationRecorder.snapshot().draftId
+                operationRecorder.finish("用户结束逐步录制")
+            },
+            onFailure = ::recordingOverlayFailed,
+            frameFile = { draftId, frameId ->
+                operationRecorder.readDraft(draftId)?.frames?.firstOrNull { it.id == frameId }
+                    ?.let { operationRecorder.frameFile(draftId, it.fileName) }
+            })
+    }
+    private fun recordingNotice(message: String?) {
+        android.widget.Toast.makeText(appContext, message ?: "暂时无法操作", android.widget.Toast.LENGTH_LONG).show()
+    }
+    internal fun requestOperationStepReview(correction: String) {
+        recordingReview.requestReview(correction).onFailure { recordingNotice(it.message) }
+    }
+    private fun recordingOverlayFailed(message: String) {
+        recordingNotice(message)
+        openDraftAfterFinish = operationRecorder.snapshot().draftId
+        operationRecorder.finish(message)
     }
     internal val operationRecorder: DemoOperationRecorder by lazy {
         DemoOperationRecorder(
@@ -87,13 +130,19 @@ class DemoProcessScope private constructor(context: Context) {
             acquireScreen = { DemoCapabilityInterlock.tryAcquireRecording(recordingOwner) },
             releaseScreen = { DemoCapabilityInterlock.releaseRecording(recordingOwner) }
         ).apply {
-            onCaptureVisibilityChanged = { hidden -> recordingOverlay.setCaptureHidden(hidden) }
+            onStepReviewReady = { draft, step -> recordingReview.onStepReady(draft, step) }
+            onCaptureVisibilityChanged = { hidden ->
+                recordingOverlay.setCaptureHidden(hidden)
+                recordingStepOverlay.setCaptureHidden(hidden)
+            }
             attach(recordingOwner) { state ->
+                recordingReview.onSnapshot(state)
                 if (state.phase != DemoOperationPhase.IDLE) overlayController.window.hide()
                 overlayController.window.setExternalAutomationMode(
                     state.phase != DemoOperationPhase.IDLE || conversationRuntime.capabilityInterlock.isCapabilityOwned()
                 )
                 recordingOverlay.bind(state)
+                recordingStepOverlay.bind(state)
                 if (state.phase == DemoOperationPhase.IDLE) {
                     val id = openDraftAfterFinish
                     openDraftAfterFinish = null
@@ -118,6 +167,7 @@ class DemoProcessScope private constructor(context: Context) {
     }
 
     internal fun stopOperationWork() {
+        if (teachingController.snapshot().active) teachingController.cancel()
         if (DemoCapabilityInterlock.isRecordingOwned()) operationRecorder.finish("用户停止录制")
         if (workflowController.isBusy()) workflowController.stop()
     }

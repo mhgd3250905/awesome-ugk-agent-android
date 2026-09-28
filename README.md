@@ -13,7 +13,7 @@ Android Agent Runtime SDK：提供通用 Agent 工具循环、Android Skill，�
 - v1 不支持、不打包、不宣称 Node.js、Git、OpenSSH、jq。
 - Runtime 无 UI，不要求安装 Termux 或第二个 App；它与宿主共享 Android UID，不是安全沙箱。
 - `pi-system-skill-android` 提供白名单 Android 原生 Intent Tool；打开网页、相机、拨号、地图、分享等动作不通过终端执行。
-- `demo-app` 当前源码版本为本地测试 `1.12.0`（`versionCode 125`）。“添加与工具 → 教我操作”已接入手动整理、审阅编辑、确认试跑和再次运行：只有当前版本及内容摘要有成功试跑记录时才显示“可运行”。已知步骤由本地结构树定位执行，必要时通过用户当前 API 配置进行视觉判断；不自动从聊天召回操作，不接定时循环。Android 15 模拟器的设置流程已用真实 GLM 完成整理、试跑及同版本再次运行；范围与证据见 [`docs/demo-operation-learning-design.md`](docs/demo-operation-learning-design.md) 和 [`docs/demo-app-version-ledger.md`](docs/demo-app-version-ledger.md)。本版本尚未提交 Play。
+- `demo-app` 当前源码版本为本地测试 `1.13.0`（`versionCode 126`）。“教我操作”要求已配置模型、用户开启全授权、无障碍服务连接和悬浮窗权限；分段对话由 Agent 执行，结束后用户可明确整理经验。普通对话可检索相近经验，读取前询问用户；不按旧坐标重放。旧录制草稿与工作流保留。当前行为和证据见[对话教学规范](docs/demo-operation-learning-design.md)与[版本台账](docs/demo-app-version-ledger.md)。本地测试版本尚未提交 Play。
 - 2026-08-29 已完成快速迭代后的模块化架构收敛：生命周期、配置、Provider、会话、transcript、capability assembly 与 Terminal/Screen interlock 均有单一 owner；本机 JVM、Debug/Release 构建和 Terminal 包验收通过，设备/发布矩阵仍未关闭。
 
 ## 模块
@@ -44,13 +44,7 @@ Windows PowerShell：
 
 完整单元测试、双宿主仪器测试和 Runtime 静态验收见 [`AGENTS.md`](AGENTS.md) 与 [`docs/terminal-runtime-validation.md`](docs/terminal-runtime-validation.md)。
 
-当前 Demo 真机验证使用用户授权的小米 `QSG6Q8IFDMDELVGQ`，操作前按序列号复核设备。2026-09-27 13:55（Asia/Shanghai）最新 `1.10.0 / 123` Debug APK 已在确认没有活动计时任务后以 `adb install -r` 保留数据覆盖安装，版本和进程已核对；用户随后反馈“可以了 测试通过”。最终构建、179 项 JVM 和 API 35 上 12 项定向仪器测试通过，具体范围与 APK 校验值见版本台账；该结论不代表长期后台常驻。[`HANDOVER.md`](HANDOVER.md) 是 2026-09-01 的历史快照，里面的设备、版本和权限描述不代表当前授权。
-
-2026-09-27/28 第五、六轮 P0 审查修复已合并进主干（PR #7 20 项、PR #8 5 项，见版本台账与 [`docs/terminal-runtime-validation.md`](docs/terminal-runtime-validation.md) §31）；`1.10.0 / 123` 的上述验收对应合并前的 `2f5a56c` 构建。当时合并后门禁为全模块 JVM `630` tests / `3` skipped / 0 failure、API 35 仪器测试 `62/62`，当时 APK 元数据未变。该记录不替代后续阶段的验证。
-
-2026-09-28 的 `1.11.0 / 124` 在 API 35 AVD 验证本地录制、恢复、暂停、关键画面和草稿 UI；相关 JVM 测试 Demo 206 + System skill 44 = 250 项通过，录制控件仪器测试 1 项通过。最后两轮 UI 调整分别完成构建和实际布局检查，完整命令、源码校验值及范围见版本台账。本轮未操作上述真机，也未重跑无改动的 Terminal Runtime Gate；本地保存不代表 Play 发布。
-
-`1.12.0 / 125` 已通过 312 项 JVM 测试及一次内置设置流程的本机闭环验收。录制结束先询问“怎样算完成”，说明可本地保存或稍后填写，确认整理才上传；最后一张截图不等于任务成功。修改完成标准后须重新整理并试跑，不能沿用旧条件。旧录制若缺少可归因的动作前后素材，会要求补录，不推测补齐；请求数、图片数和耗时按实际运行记录展示，不估算 tokens。真实 GLM 最终整理使用 1 次请求/3 张图，试跑使用 1 次/1 张，同版本再次运行使用 2 次/2 张；这些是限定样本，不代表第三方 App 成功率或费用节省比例。
+当前 Demo 本地版本、对话教学与教学经验复用的行为、验证范围、未解决的 Play 菜单点击问题及发布边界，以[版本台账](docs/demo-app-version-ledger.md)为准。[HANDOVER.md](HANDOVER.md) 是 2026-09-01 的历史快照，不代表当前设备、版本或权限状态。
 
 ## 文档入口
 
@@ -66,7 +60,7 @@ Windows PowerShell：
 - [`docs/demo-app-ui-redesign.md`](docs/demo-app-ui-redesign.md)：demo-app 聊天、过程、输入和悬浮窗的当前交互基线与验收记录；
 - [`docs/demo-app-permission-guide.md`](docs/demo-app-permission-guide.md)：权限申请、关闭后恢复、通知分类核对及可选后台运行建议；
 - [`docs/demo-app-version-ledger.md`](docs/demo-app-version-ledger.md)：demo-app 版本、变更和验收台账；
-- [`docs/demo-operation-learning-design.md`](docs/demo-operation-learning-design.md)：演示录制、手动整理/审阅/试跑/再次运行的当前实现、边界与待验项；
+- [`docs/demo-operation-learning-design.md`](docs/demo-operation-learning-design.md)：对话教学、真实记录、明确发起的经验整理与复制参考，以及旧录制的保留边界和待验项；
 - [`docs/android-accessibility-screen-automation.md`](docs/android-accessibility-screen-automation.md)：Android Accessibility 屏幕自动化 Tool/Skill、宿主接入和验证边界；
 - [`docs/android-clipboard.md`](docs/android-clipboard.md)：Android 文本剪贴板 Tool/Skill、确认策略、隐私和 API 限制。
 - [`docs/android-scheduled-tasks.md`](docs/android-scheduled-tasks.md)：定时任务控制面、Android 运行时适配、能力边界和验收方法。
@@ -130,9 +124,9 @@ SDK 通用定时任务仍由 `pi-schedule-skill-android` 和 `ugk-agent-task-run
 [`docs/android-agent-skills.md`](docs/android-agent-skills.md)。
 
 普通 Agent 的跨 App 读屏和点击由宿主提供的 `screen_*` Tool 完成，Agent 必须先确认
-`readyForScreenAutomation=true`，每次动作后重新读取屏幕验证。所有外部可见动作默认仍需先通过
-`show_user_confirmation_dialog`。已学操作的手动运行使用独立的本次原生确认与受限动作网关，见[演示学习规范](docs/demo-operation-learning-design.md)，不复用普通 Agent 的单动作票据。Intent Tool 以真实 `Context.startActivity()` 结果为准；预查询可能受
-Android 11+ package visibility 影响，不能把 `resolveActivity()` 的空结果直接当成“设备没有浏览器”，也不能根据
+`readyForScreenAutomation=true`；每次屏幕动作后获取新鲜观察验证，若工具已返回仍有效的动作后观察可直接复用。所有外部可见动作默认仍需先通过
+`show_user_confirmation_dialog`。教学经验在普通对话中经检索和用户明确选择后作为参考，不授权自动重放；旧手动录制与受限工作流仍作为兼容能力保留，见[演示学习规范](docs/demo-operation-learning-design.md)。Intent Tool 直接调用 `Context.startActivity()`；预查询可能受
+Android 11+ package visibility 影响，不能把 `resolveActivity()` 的空结果直接当成“设备没有浏览器”。启动请求被 Android 接受只表示请求已提交，不证明目标 App 已到前台；Agent 需要检查后续前台画面，也不能根据
 终端里的 `am`/`pm` 失败推断 Android 应用状态。`AndroidSystemAgentPlugin` 与这两个插件应按能力选择，避免重复注册同名确认 Tool。
 
 SDK 内 Agent 的运行时规范另有一份同名 `AGENTS.md`：

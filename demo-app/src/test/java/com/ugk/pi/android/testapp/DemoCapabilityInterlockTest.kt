@@ -17,6 +17,65 @@ import org.junit.Test
 
 class DemoCapabilityInterlockTest {
     @Test
+    fun teachingAllowsOnlyBoundRunAndKeepsOwnershipBetweenSegments() = runBlocking {
+        val owner = Any()
+        val teaching = DemoCapabilityInterlock(DemoScreenAutomationPolicy::isScreenWorkflowTool)
+        val other = DemoCapabilityInterlock(DemoScreenAutomationPolicy::isScreenWorkflowTool)
+        val screen = RecordingTool("screen_read_ui_tree")
+        val terminal = RecordingTool("terminal_bash_execute")
+        try {
+            assertTrue(DemoCapabilityInterlock.tryAcquireTeaching(owner, teaching))
+            assertTrue(DemoCapabilityInterlock.canStartRun(teaching))
+            assertFalse(DemoCapabilityInterlock.canStartRun(other))
+            assertFalse(DemoCapabilityInterlock.canStartRun(null))
+            assertTrue(runCatching { other.onRunStarted() }.isFailure)
+            teaching.onRunStarted()
+            val call = ToolCall("screen", screen.name, JsonObject(emptyMap()))
+            val context = ToolExecutionContext("teaching")
+            assertFalse(teaching.toolDecorator().decorate(screen).execute(call, context).isError)
+            assertTrue(other.toolDecorator().decorate(screen).execute(call, context).isError)
+            assertTrue(teaching.toolDecorator().decorate(terminal).execute(
+                call.copy(name = terminal.name), context).isError)
+            teaching.onEvent(AgentEvent.Completed("done"))
+            teaching.onRunFinished()
+            assertTrue(DemoCapabilityInterlock.isScreenOperationOwned())
+            assertFalse(DemoCapabilityInterlock.tryAcquireRecording(Any()))
+            assertFalse(DemoCapabilityInterlock.tryAcquireWorkflow(Any()))
+            DemoCapabilityInterlock.releaseTeaching(Any())
+            assertTrue(DemoCapabilityInterlock.isScreenOperationOwned())
+            teaching.onRunStarted()
+            teaching.onRunCancelled()
+            teaching.onRunFinished()
+            assertTrue(DemoCapabilityInterlock.isScreenOperationOwned())
+        } finally {
+            teaching.onRunFinished()
+            other.onRunFinished()
+            DemoCapabilityInterlock.releaseTeaching(owner)
+        }
+        assertFalse(DemoCapabilityInterlock.isScreenOperationOwned())
+    }
+
+    @Test
+    fun teachingCannotAcquireWhileAnotherRunIsThinking() {
+        val owner = Any()
+        val other = DemoCapabilityInterlock(DemoScreenAutomationPolicy::isScreenWorkflowTool)
+        val teaching = DemoCapabilityInterlock(DemoScreenAutomationPolicy::isScreenWorkflowTool)
+        try {
+            other.onRunStarted()
+            assertFalse(DemoCapabilityInterlock.tryAcquireTeaching(owner, teaching))
+            other.onRunFinished()
+            assertTrue(DemoCapabilityInterlock.tryAcquireTeaching(owner, teaching))
+            teaching.onRunStarted()
+            DemoCapabilityInterlock.releaseTeaching(owner)
+            assertTrue(DemoCapabilityInterlock.isScreenOperationOwned())
+        } finally {
+            other.onRunFinished()
+            teaching.onRunFinished()
+            DemoCapabilityInterlock.releaseTeaching(owner)
+        }
+    }
+
+    @Test
     fun recordingCannotStartDuringAgentThinkingAndCanStartAfterRunFinishes() {
         val interlock = DemoCapabilityInterlock(DemoScreenAutomationPolicy::isScreenWorkflowTool)
         val recorder = Any()

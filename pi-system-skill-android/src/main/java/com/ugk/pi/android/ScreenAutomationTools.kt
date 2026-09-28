@@ -200,7 +200,7 @@ class ScreenCaptureVisualTool(
     private val failedCapturesBySession = LinkedHashMap<String, Int>()
 
     override val description: String =
-        "Captures the current external screen for an unknown interface, visual-only content, insufficient or ambiguous tree evidence, or a judgment requiring visual understanding, and attaches the image to the immediately following model request. Do not add a screenshot when fresh tree evidence already answers the current question. The image is sent to the configured model; capture only task-relevant screens."
+        "Captures the current external screen for an unknown interface, visual-only content, insufficient or ambiguous tree evidence, or a judgment requiring visual understanding, and attaches the image to the immediately following model request. Use this as the first choice for understanding the interface, locating click/swipe targets, and checking visible results. Do not query the View tree first; reuse an already current image when sufficient. The image is sent to the configured model; capture only task-relevant screens."
 
     override val inputSchema: JsonObject = buildJsonObject {
         put("type", "object")
@@ -282,7 +282,7 @@ class ScreenVisualGestureTool(
     override val name: String = "screen_visual_gesture"
 ) : AgentTool {
     override val description: String =
-        "Performs a bounded coordinate gesture against a fresh screen_capture_visual observation. Use the latest observationId and a normalized target rectangle identified from that screenshot."
+        "Performs a bounded coordinate gesture against the latest screen_capture_visual observation without a pre-gesture pixel comparison or age timeout. Animations do not block dispatch; session, app, display geometry and target bounds must still match. Each observation can be used for only one gesture. Use the latest observationId and a normalized target rectangle identified from that screenshot."
 
     override val inputSchema: JsonObject = buildJsonObject {
         put("type", "object")
@@ -608,6 +608,7 @@ private fun ScreenVisualObservation.toJson(): JsonObject = buildJsonObject {
     put("rotation", rotation)
     put("capturedAtEpochMillis", capturedAtEpochMillis)
     put("coordinateSpace", "normalized_0_to_1")
-    put("observationMaxAgeMillis", ScreenAutomationLimits.MAX_VISUAL_OBSERVATION_AGE_MILLIS)
+    put("preGesturePixelCheck", false)
+    put("singleUse", true)
     put("imageAttached", true)
 }

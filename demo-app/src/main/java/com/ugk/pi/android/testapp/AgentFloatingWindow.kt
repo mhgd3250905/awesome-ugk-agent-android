@@ -94,6 +94,167 @@ class AgentFloatingWindow(private val context: Context) : ConfirmationOverlayHos
     private var expandedY = dp(160)
     private var collapsedX = dp(16)
     private var collapsedY = dp(180)
+    private var teachingActive = false
+    private var surfaceTransition: android.animation.AnimatorSet? = null
+    private var transitionOpening: Boolean? = null
+    private var queuedOpening: Boolean? = null
+    private var transitionGeneration = 0L
+    private var transitionReadyCleanup: (() -> Unit)? = null
+    private var transitionGeometryCleanup: (() -> Unit)? = null
+    private var slideFromLeft = true
+    private var preparingScreenOperation = false
+    private var surfaceTransitionFinished: kotlinx.coroutines.CompletableDeferred<Unit>? = null
+    private var restoreBubbleAfterScreen = false
+
+    /** Let the visible close finish before hiding pixels or dispatching a screen tool. */
+    suspend fun prepareScreenOperation() {
+        preparingScreenOperation = true
+        queuedOpening = null
+        check(pendingConfirmation == null && takeoverView == null) { "请先完成当前确认或提醒" }
+        kotlinx.coroutines.withTimeout(5000) {
+            surfaceTransitionFinished?.await()
+            if (expandedView != null) collapseToBubble()
+            surfaceTransitionFinished?.await()
+            check(pendingConfirmation == null) { "请先完成当前确认" }
+        }
+        check(expandedView == null) { "悬浮窗尚未完成收起，未执行屏幕操作" }
+        restoreBubbleAfterScreen = restoreBubbleAfterScreen || collapsedView != null
+        // Remove the input window, not just its pixels/flags. A detached view cannot eat a tap.
+        hideCollapsed(strict = true)
+        check(collapsedView == null && expandedView == null) { "悬浮窗未移除，未执行屏幕操作" }
+        kotlinx.coroutines.delay(120) // Allow the removed surface/input window to settle before capture.
+    }
+
+    fun finishScreenOperation() {
+        preparingScreenOperation = false
+        if (restoreBubbleAfterScreen) {
+            restoreBubbleAfterScreen = false
+            showCollapsed()
+        }
+    }
+
+    /** Cancellation never runs completion actions or resurrects a hidden surface. */
+    private fun cancelSurfaceTransition(cleanup: () -> Unit = {}) {
+        transitionGeneration++
+        queuedOpening = null
+        transitionReadyCleanup?.invoke()
+        transitionReadyCleanup = null
+        val animator = surfaceTransition
+        surfaceTransition = null
+        transitionOpening = null
+        val finished = surfaceTransitionFinished
+        animator?.removeAllListeners()
+        animator?.cancel()
+        transitionGeometryCleanup?.invoke()
+        transitionGeometryCleanup = null
+        try { cleanup() } finally { finished?.complete(Unit) }
+    }
+
+    private fun outsideScreenX(width: Int): Int = if (slideFromLeft) -width - dp(16)
+        else context.resources.displayMetrics.widthPixels + dp(16)
+
+    /** Source slides completely out, then the destination slides in from that same edge. */
+    private fun animateSurface(view: View, opening: Boolean, bubbleBounds: Rect, onEnd: () -> Unit = {}) {
+        val generation = ++transitionGeneration
+        val finished = kotlinx.coroutines.CompletableDeferred<Unit>()
+        surfaceTransitionFinished = finished
+        transitionOpening = opening
+        val bubble = collapsedView
+        val destination = if (opening) view else bubble
+        val panelX = expandedX
+        val bubbleX = bubbleBounds.left
+        val screenWidth = context.resources.displayMetrics.widthPixels
+        if (opening) slideFromLeft = bubbleBounds.exactCenterX() <= screenWidth / 2f
+        val panelOutside = outsideScreenX(expandedParams.width)
+        val bubbleOutside = outsideScreenX(collapsedParams.width)
+        expandedParams.x = if (opening) panelOutside else panelX
+        collapsedParams.x = if (opening) bubbleX else bubbleOutside
+        expandedParams.flags = expandedWindowFlags(pendingConfirmation != null)
+        runCatching { windowManager.updateViewLayout(view, expandedParams) }
+        collapsedParams.flags = collapsedParams.flags or WindowManager.LayoutParams.FLAG_LAYOUT_NO_LIMITS
+        bubble?.let { runCatching { windowManager.updateViewLayout(it, collapsedParams) } }
+        // Destination is attached outside the screen, fully opaque from its first frame.
+        transitionGeometryCleanup = {
+            expandedParams.x = panelX
+            collapsedParams.x = bubbleX
+            collapsedParams.flags = collapsedParams.flags and WindowManager.LayoutParams.FLAG_LAYOUT_NO_LIMITS.inv()
+            expandedParams.flags = expandedParams.flags and WindowManager.LayoutParams.FLAG_LAYOUT_NO_LIMITS.inv()
+        }
+        var completed = false
+        fun complete() {
+            if (completed) return
+            completed = true
+            if (generation != transitionGeneration) { finished.complete(Unit); return }
+            try {
+                onEnd()
+            } finally {
+                surfaceTransition = null
+                transitionOpening = null
+                transitionGeometryCleanup?.invoke()
+                transitionGeometryCleanup = null
+                collapsedView?.let { runCatching { windowManager.updateViewLayout(it, collapsedParams) } }
+                updateExpandedWindowFlags(pendingConfirmation != null)
+                if (opening) expandedView?.requestApplyInsets()
+                val next = queuedOpening
+                queuedOpening = null
+                try {
+                    if (pendingConfirmation != null) showExpanded()
+                    else if (!preparingScreenOperation && next != null) {
+                        if (next) showExpanded() else collapseToBubble()
+                    }
+                } finally { finished.complete(Unit) }
+            }
+        }
+        fun startAnimation() {
+            if (generation != transitionGeneration) return
+            fun slide(target: View?, params: WindowManager.LayoutParams, from: Int, to: Int, time: Long) =
+                android.animation.ValueAnimator.ofInt(from, to).apply {
+                    duration = time
+                    interpolator = android.view.animation.PathInterpolator(.22f, 1f, .36f, 1f)
+                    addUpdateListener {
+                        if (completed || generation != transitionGeneration || target == null) return@addUpdateListener
+                        params.x = it.animatedValue as Int
+                        runCatching { windowManager.updateViewLayout(target, params) }
+                    }
+                }
+            val exit = if (opening) slide(bubble, collapsedParams, bubbleX, bubbleOutside, 180L)
+                else slide(view, expandedParams, panelX, panelOutside, 200L)
+            val enter = if (opening) slide(view, expandedParams, panelOutside, panelX, 240L)
+                else slide(bubble, collapsedParams, bubbleOutside, bubbleX, 180L)
+            val animator = android.animation.AnimatorSet().apply {
+                playSequentially(exit, enter)
+                addListener(object : android.animation.AnimatorListenerAdapter() {
+                    override fun onAnimationEnd(animation: android.animation.Animator) = complete()
+                })
+            }
+            surfaceTransition = animator
+            animator.start()
+        }
+        if (destination == null) { complete(); return }
+        var started = false
+        val ready = object : ViewTreeObserver.OnPreDrawListener {
+            override fun onPreDraw(): Boolean {
+                if (started || generation != transitionGeneration) return true
+                started = true
+                transitionReadyCleanup?.invoke()
+                transitionReadyCleanup = null
+                startAnimation()
+                return true
+            }
+        }
+        // addView can precede attachment: Android transfers listeners from the floating
+        // observer to the attached observer and kills the former. Remove from the current
+        // observer, otherwise each frame would restart the movement.
+        transitionReadyCleanup = {
+            destination.viewTreeObserver.takeIf { it.isAlive }?.removeOnPreDrawListener(ready)
+        }
+        destination.viewTreeObserver.addOnPreDrawListener(ready)
+        destination.invalidate()
+    }
+
+    private var teachingCompletedSegments = 0
+    private var teachingActions: LinearLayout? = null
+    var onFinishTeaching: (() -> Unit)? = null
     private var externalAutomationMode = false
     private var preImeY: Int? = null
     private var preImeHeight: Int? = null
@@ -113,9 +274,10 @@ class AgentFloatingWindow(private val context: Context) : ConfirmationOverlayHos
         width = expandedWidth()
         height = expandedHeight()
         type = overlayType
+        windowAnimations = 0
         flags = WindowManager.LayoutParams.FLAG_NOT_TOUCH_MODAL
         format = PixelFormat.TRANSLUCENT
-        gravity = Gravity.TOP or Gravity.START
+        gravity = Gravity.TOP or Gravity.LEFT
         x = expandedX
         y = expandedY
         softInputMode = WindowManager.LayoutParams.SOFT_INPUT_STATE_UNCHANGED or
@@ -126,10 +288,11 @@ class AgentFloatingWindow(private val context: Context) : ConfirmationOverlayHos
         width = dp(112)
         height = dp(48)
         type = overlayType
+        windowAnimations = 0
         flags = WindowManager.LayoutParams.FLAG_NOT_FOCUSABLE or
                 WindowManager.LayoutParams.FLAG_NOT_TOUCH_MODAL
         format = PixelFormat.TRANSLUCENT
-        gravity = Gravity.TOP or Gravity.START
+        gravity = Gravity.TOP or Gravity.LEFT
         x = collapsedX
         y = collapsedY
         softInputMode = WindowManager.LayoutParams.SOFT_INPUT_STATE_ALWAYS_HIDDEN
@@ -139,6 +302,7 @@ class AgentFloatingWindow(private val context: Context) : ConfirmationOverlayHos
         width = WindowManager.LayoutParams.MATCH_PARENT
         height = WindowManager.LayoutParams.MATCH_PARENT
         type = overlayType
+        windowAnimations = 0
         flags = WindowManager.LayoutParams.FLAG_NOT_FOCUSABLE or
                 WindowManager.LayoutParams.FLAG_LAYOUT_IN_SCREEN
         format = PixelFormat.TRANSLUCENT
@@ -148,6 +312,7 @@ class AgentFloatingWindow(private val context: Context) : ConfirmationOverlayHos
     }
 
     fun show() {
+        if (preparingScreenOperation) { restoreBubbleAfterScreen = true; return }
         if (takeoverView != null) {
             // MainActivity may have moved to the background while the takeover is open.
             if (urgentPreviousSurface == UrgentPreviousSurface.HIDDEN) {
@@ -160,12 +325,21 @@ class AgentFloatingWindow(private val context: Context) : ConfirmationOverlayHos
     }
 
     fun showExpanded() {
+        if (preparingScreenOperation && pendingConfirmation == null) { restoreBubbleAfterScreen = true; return }
+        if (transitionOpening != null) {
+            if (transitionOpening == false) queuedOpening = true
+            return
+        }
         if (!Settings.canDrawOverlays(context) || takeoverView != null) return
         if (expandedView != null) return
 
+        val openingBounds = collapsedView?.let { bubble ->
+            Rect(collapsedParams.x, collapsedParams.y,
+                collapsedParams.x + (bubble.width.takeIf { it > 0 } ?: collapsedParams.width),
+                collapsedParams.y + (bubble.height.takeIf { it > 0 } ?: collapsedParams.height))
+        }
         collapsedX = collapsedParams.x
         collapsedY = collapsedParams.y
-        hideCollapsed()
         preImeY = null
         preImeHeight = null
         expandedParams.width = clampExpandedWidth(expandedParams.width)
@@ -177,11 +351,19 @@ class AgentFloatingWindow(private val context: Context) : ConfirmationOverlayHos
         expandedParams.flags = expandedWindowFlags(forceFocusable = pendingConfirmation != null)
 
         val view = buildExpandedView()
+        if (openingBounds != null) {
+            slideFromLeft = openingBounds.exactCenterX() <= context.resources.displayMetrics.widthPixels / 2f
+            expandedParams.x = outsideScreenX(expandedParams.width)
+            expandedParams.flags = expandedParams.flags or WindowManager.LayoutParams.FLAG_LAYOUT_NO_LIMITS
+        } else slideFromLeft = expandedParams.x + expandedParams.width / 2 <= context.resources.displayMetrics.widthPixels / 2
         if (addViewSafely(view, expandedParams)) {
             expandedView = view
             attachImeAvoidance(view)
             renderSnapshot()
+            openingBounds?.let { animateSurface(view, true, it) { hideCollapsed(strict = true) } }
         } else {
+            expandedParams.x = expandedX
+            expandedParams.flags = expandedWindowFlags(forceFocusable = pendingConfirmation != null)
             collapsedX = expandedX
             collapsedY = expandedY
             showCollapsed()
@@ -189,10 +371,14 @@ class AgentFloatingWindow(private val context: Context) : ConfirmationOverlayHos
     }
 
     fun hide() {
-        urgentPreviousSurface = UrgentPreviousSurface.HIDDEN
-        hideTakeover()
-        hideExpanded()
-        hideCollapsed()
+        restoreBubbleAfterScreen = false
+        // Returning to the Activity cancels restoration, not an in-flight tool guard.
+        cancelSurfaceTransition {
+            urgentPreviousSurface = UrgentPreviousSurface.HIDDEN
+            hideTakeover()
+            hideExpanded()
+            hideCollapsed()
+        }
     }
 
     /** Keep an urgent takeover visible when the main Activity returns to the foreground. */
@@ -205,6 +391,8 @@ class AgentFloatingWindow(private val context: Context) : ConfirmationOverlayHos
     }
 
     fun isShowing(): Boolean = expandedView != null || collapsedView != null || takeoverView != null
+
+    internal fun isTeachingChatShowing(): Boolean = teachingActive && expandedView != null
 
     internal fun hasBlockingPresentation(): Boolean = takeoverView != null || pendingConfirmation != null
 
@@ -237,8 +425,10 @@ class AgentFloatingWindow(private val context: Context) : ConfirmationOverlayHos
                 deliverUrgentInteraction(message, conversationId, DemoUrgentInteraction.Kind.FORM, form.id, form.label, value)
             }
         )
-        hideExpanded()
-        hideCollapsed()
+        cancelSurfaceTransition {
+            hideExpanded()
+            hideCollapsed()
+        }
         takeoverParams.flags = WindowManager.LayoutParams.FLAG_LAYOUT_IN_SCREEN or
                 if (message.form == null) WindowManager.LayoutParams.FLAG_NOT_FOCUSABLE else 0
         takeoverParams.softInputMode = if (message.form == null) {
@@ -342,6 +532,17 @@ class AgentFloatingWindow(private val context: Context) : ConfirmationOverlayHos
         confirmationResult = onResult
         pendingConfirmation = request.toOverlayConfirmation()
         snapshot = snapshot.copy(pendingConfirmation = pendingConfirmation)
+        if (transitionOpening == false) {
+            // A confirmation cannot wait behind a queued hide/collapse.
+            cancelSurfaceTransition {
+                hideCollapsed()
+                expandedView?.let {
+                    it.scaleX = 1f; it.scaleY = 1f
+                    it.translationX = 0f; it.translationY = 0f
+                    it.requestApplyInsets()
+                }
+            }
+        }
         if (expandedView == null) showExpanded()
         updateExpandedWindowFlags(forceFocusable = true)
         renderSnapshot()
@@ -361,6 +562,18 @@ class AgentFloatingWindow(private val context: Context) : ConfirmationOverlayHos
 
     /** Render a stable, complete snapshot with bounded confirmation summaries. */
     fun bindSnapshot(value: AgentOverlaySnapshot) {
+        if (teachingActive) return
+        applySnapshot(value)
+    }
+
+    fun bindTeachingSnapshot(value: AgentOverlaySnapshot) {
+        if (!teachingActive) return
+        applySnapshot(value)
+        // Teaching owns its session even while idle; only an active run needs automation mode.
+        if (externalAutomationMode != value.isBusy) setExternalAutomationMode(value.isBusy)
+    }
+
+    private fun applySnapshot(value: AgentOverlaySnapshot) {
         if (snapshot.conversationId != value.conversationId ||
             (snapshot.runId != null && snapshot.runId != value.runId)) {
             assistantPreview = null
@@ -380,6 +593,7 @@ class AgentFloatingWindow(private val context: Context) : ConfirmationOverlayHos
 
     /** Matches the main chat's throttled assistant stream without persisting a second message. */
     fun setAssistantPreview(text: String?) {
+        if (teachingActive) return
         if (assistantPreview == text) return
         assistantPreview = text
         renderSnapshot()
@@ -387,12 +601,14 @@ class AgentFloatingWindow(private val context: Context) : ConfirmationOverlayHos
 
     /** Legacy bridge retained for callers that update only a status label. */
     fun setStatus(text: String) {
+        if (teachingActive) return
         snapshot = snapshot.copy(statusLabel = text, statusDetail = text)
         renderSnapshot()
     }
 
     /** Legacy bridge retained for callers that append an activity line. */
     fun addLog(text: String) {
+        if (teachingActive) return
         if (text.isNotBlank()) {
             legacyLogs.addLast(text)
             while (legacyLogs.size > 40) legacyLogs.removeFirst()
@@ -434,19 +650,29 @@ class AgentFloatingWindow(private val context: Context) : ConfirmationOverlayHos
         renderSnapshot()
     }
 
-    /**
-     * Keeps the cross-app automation surface from stealing focus or covering
-     * the target app while AccessibilityService tools are running.
-     *
-     * The bubble remains available as a small status entry point. An expanded
-     * surface is temporarily allowed to receive focus only while a
-     * confirmation card is visible, because the user must be able to press a
-     * confirmation button.
-     */
+    /** Select teaching conversation content and controls; surface behavior stays shared. */
+    fun setTeachingState(active: Boolean, completedSegments: Int = 0) {
+        if (active && !teachingActive) {
+            externalAutomationMode = false
+            composerDraft = ""
+            inputField?.setText("")
+            assistantPreview = null
+        }
+        teachingActive = active
+        teachingCompletedSegments = completedSegments
+        teachingActions?.visibility = if (active) View.VISIBLE else View.GONE
+        expandedView?.findViewWithTag<View>("overlay-open-app")?.visibility = View.VISIBLE
+        expandedView?.findViewWithTag<View>("overlay-collapse")?.visibility = View.VISIBLE
+        expandedView?.findViewWithTag<View>("overlay-hide")?.contentDescription = "隐藏 Agent 悬浮窗"
+        renderSnapshot()
+    }
+
     fun setExternalAutomationMode(active: Boolean) {
-        if (active && takeoverView != null) dismissUrgentMessage()
-        externalAutomationMode = active
-        if (active && expandedView != null && pendingConfirmation == null) {
+        val effectiveActive = if (teachingActive) snapshot.isBusy else active
+        val enteringAutomation = effectiveActive && !externalAutomationMode
+        if (effectiveActive && takeoverView != null) dismissUrgentMessage()
+        externalAutomationMode = effectiveActive
+        if (enteringAutomation && expandedView != null && pendingConfirmation == null) {
             collapseToBubble()
         }
         if (expandedView == null) {
@@ -458,6 +684,7 @@ class AgentFloatingWindow(private val context: Context) : ConfirmationOverlayHos
 
     /** Synchronize the hidden overlay composer with the main Activity draft. */
     fun setComposerDraft(value: String) {
+        if (teachingActive) return
         if (composerDraft == value && inputField?.text?.toString() == value) return
         composerDraft = value
         inputField?.let { field ->
@@ -467,22 +694,36 @@ class AgentFloatingWindow(private val context: Context) : ConfirmationOverlayHos
         onDraftChanged?.invoke(composerDraft)
     }
 
-    private fun showCollapsed() {
-        if (collapsedView != null) return
-        collapsedParams.x = clampX(collapsedX, collapsedParams.width)
-        collapsedParams.y = clampY(collapsedY, collapsedParams.height)
-        val view = buildCollapsedView()
-        if (addViewSafely(view, collapsedParams)) collapsedView = view
+    private fun updateCollapsedDimensions() {
+        collapsedParams.width = dp(112)
+        collapsedParams.height = dp(48)
     }
 
-    private fun hideCollapsed() {
-        collapsedView?.let(::removeViewSafely)
+    private fun showCollapsed(startOutside: Boolean = false) {
+        if (collapsedView != null) return
+        updateCollapsedDimensions()
+        collapsedParams.x = if (startOutside) outsideScreenX(collapsedParams.width) else clampX(collapsedX, collapsedParams.width)
+        collapsedParams.y = clampY(collapsedY, collapsedParams.height)
+        collapsedParams.flags = collapsedParams.flags and WindowManager.LayoutParams.FLAG_LAYOUT_NO_LIMITS.inv()
+        if (startOutside) collapsedParams.flags = collapsedParams.flags or
+            WindowManager.LayoutParams.FLAG_LAYOUT_NO_LIMITS
+        val view = buildCollapsedView()
+        if (addViewSafely(view, collapsedParams)) collapsedView = view else hideCollapsed()
+    }
+
+    private fun hideCollapsed(strict: Boolean = false) {
+        collapsedView?.let {
+            if (strict) {
+                windowManager.removeViewImmediate(it)
+                check(!it.isAttachedToWindow) { "悬浮球尚未移除" }
+            } else removeViewSafely(it)
+        }
         collapsedView = null
         collapsedIconView = null
         collapsedStatusText = null
     }
 
-    private fun hideExpanded() {
+    private fun hideExpanded(strict: Boolean = false) {
         imagePreview?.dismiss()
         imagePreview = null
         inputField?.let { field ->
@@ -504,7 +745,9 @@ class AgentFloatingWindow(private val context: Context) : ConfirmationOverlayHos
         // A programmatic removal ends any in-flight touch gesture: no UP/CANCEL
         // will arrive for a detached view, so the suppression flag must reset here.
         overlayGestureActive = false
-        expandedView?.let(::removeViewSafely)
+        expandedView?.let { view ->
+            if (strict) windowManager.removeViewImmediate(view) else removeViewSafely(view)
+        }
         expandedView = null
         contentContainer = null
         scrollView = null
@@ -513,6 +756,7 @@ class AgentFloatingWindow(private val context: Context) : ConfirmationOverlayHos
         inputField = null
         sendButton = null
         stopButton = null
+        teachingActions = null
         transcriptView = null
         confirmationContainer = null
         renderedConfirmation = null
@@ -524,6 +768,12 @@ class AgentFloatingWindow(private val context: Context) : ConfirmationOverlayHos
     }
 
     private fun collapseToBubble() {
+        if (pendingConfirmation != null) return
+        if (transitionOpening != null) {
+            if (transitionOpening == true) queuedOpening = false
+            return
+        }
+        if (expandedView == null) return
         expandedX = expandedParams.x
         // Collapse from the user-intended position, not the IME-avoided one.
         // Only the y anchor is consumed here; the height anchor is left for
@@ -531,10 +781,24 @@ class AgentFloatingWindow(private val context: Context) : ConfirmationOverlayHos
         // next expand.
         expandedY = preImeY ?: expandedParams.y
         preImeY = null
-        collapsedX = clampX(expandedX, collapsedParams.width)
+        // Resolve the shared bubble size before anchoring the common animation.
+        updateCollapsedDimensions()
+        collapsedX = clampX(if (slideFromLeft) expandedX else expandedX + expandedParams.width - collapsedParams.width,
+            collapsedParams.width)
         collapsedY = clampY(expandedY, collapsedParams.height)
-        hideExpanded()
-        showCollapsed()
+        val closingBounds = Rect(collapsedX, collapsedY,
+            collapsedX + collapsedParams.width, collapsedY + collapsedParams.height)
+        val outgoing = expandedView
+        if (outgoing != null) {
+            inputField?.let { (context.getSystemService(Context.INPUT_METHOD_SERVICE) as InputMethodManager)
+                .hideSoftInputFromWindow(it.windowToken, 0) }
+            showCollapsed(startOutside = true)
+            if (collapsedView == null) return
+            animateSurface(outgoing, false, closingBounds) { hideExpanded(strict = true) }
+        } else {
+            hideExpanded()
+            showCollapsed()
+        }
     }
 
     enum class CollapsedDisplayState(
@@ -568,11 +832,17 @@ class AgentFloatingWindow(private val context: Context) : ConfirmationOverlayHos
     @SuppressLint("ClickableViewAccessibility")
     private fun buildCollapsedView(): View {
         val state = resolveCollapsedState()
-        val root = LinearLayout(context).apply {
+        // A NOT_TOUCHABLE overlay is made translucent by WindowManager. Consume animation
+        // touches locally instead; outside this small window remains normally interactive.
+        val root = object : LinearLayout(context) {
+            override fun dispatchTouchEvent(event: MotionEvent): Boolean =
+                if (transitionOpening != null) true else super.dispatchTouchEvent(event)
+        }.apply {
             orientation = LinearLayout.HORIZONTAL
             gravity = Gravity.CENTER
             setPadding(dp(10), dp(4), dp(10), dp(4))
             background = Ui.rounded(context, Ui.SurfaceElevated, 19, Ui.OutlineSubtle)
+            elevation = dp(3).toFloat()
             contentDescription = "Agent 悬浮窗 (${state.label})，点击展开"
             isClickable = true
             isFocusable = true
@@ -587,7 +857,7 @@ class AgentFloatingWindow(private val context: Context) : ConfirmationOverlayHos
                     outline.setRoundRect(0, 0, view.width, view.height, dp(8).toFloat())
                 }
             }
-            background = Ui.rounded(context, Ui.AssistantAvatarSurface, 10)
+            background = null
             contentDescription = "绿色猫头鹰助手，${state.label}"
         }
         collapsedIconView = icon
@@ -613,7 +883,11 @@ class AgentFloatingWindow(private val context: Context) : ConfirmationOverlayHos
 
     @SuppressLint("ClickableViewAccessibility")
     private fun buildExpandedView(): View {
-        val root = FrameLayout(context).apply {
+        val root = object : FrameLayout(context) {
+            override fun dispatchTouchEvent(event: MotionEvent): Boolean =
+                if (transitionOpening != null && pendingConfirmation == null) true
+                else super.dispatchTouchEvent(event)
+        }.apply {
             background = Ui.rounded(context, Ui.ConversationCanvas, 20, Ui.OutlineSubtle)
             clipChildren = true
             clipToOutline = true
@@ -673,6 +947,21 @@ class AgentFloatingWindow(private val context: Context) : ConfirmationOverlayHos
             collapseToBubble()
         }, LinearLayout.LayoutParams(dp(48), dp(48)))
         contentRoot.addView(header, LinearLayout.LayoutParams(-1, -2))
+        teachingActions = LinearLayout(context).apply {
+            gravity = Gravity.END or Gravity.CENTER_VERTICAL
+            visibility = if (teachingActive) View.VISIBLE else View.GONE
+            addView(TextView(context).apply {
+                text = "停止本段"; textSize = 13f; setTextColor(Ui.TextPrimary)
+                setPadding(dp(12), dp(10), dp(12), dp(10))
+                setOnClickListener { onStopAgent?.invoke() }
+            })
+            addView(TextView(context).apply {
+                text = "结束教学"; textSize = 13f; setTextColor(Ui.Primary)
+                setPadding(dp(12), dp(10), dp(12), dp(10))
+                setOnClickListener { onFinishTeaching?.invoke() }
+            })
+        }
+        contentRoot.addView(teachingActions, LinearLayout.LayoutParams(-1, -2))
         setupDrag(headerText, root, expandedParams) { }
 
         scrollView = ScrollView(context).apply {
@@ -993,7 +1282,9 @@ class AgentFloatingWindow(private val context: Context) : ConfirmationOverlayHos
         } else {
             0
         }
-        return WindowManager.LayoutParams.FLAG_NOT_TOUCH_MODAL or focusFlag
+        val touchFlag = if (transitionOpening != null)
+            WindowManager.LayoutParams.FLAG_LAYOUT_NO_LIMITS else 0
+        return WindowManager.LayoutParams.FLAG_NOT_TOUCH_MODAL or focusFlag or touchFlag
     }
 
     private fun updateExpandedWindowFlags(forceFocusable: Boolean) {
@@ -1082,7 +1373,7 @@ class AgentFloatingWindow(private val context: Context) : ConfirmationOverlayHos
     /** API 30+ path: IME state read from the insets dispatched to this overlay. */
     private fun handleImeInsets(insets: WindowInsets) {
         // A drag or resize gesture owns the position until the finger lifts.
-        if (overlayGestureActive) return
+        if (overlayGestureActive || transitionOpening != null) return
         if (!insets.isVisible(WindowInsets.Type.ime())) {
             restoreFromImeAvoidance()
             return
@@ -1115,7 +1406,7 @@ class AgentFloatingWindow(private val context: Context) : ConfirmationOverlayHos
     private fun handleImeGlobalLayout() {
         val root = expandedView ?: return
         // A drag or resize gesture owns the position until the finger lifts.
-        if (overlayGestureActive) return
+        if (overlayGestureActive || transitionOpening != null) return
         val rect = Rect()
         root.getWindowVisibleDisplayFrame(rect)
         val base = imeBaseVisibleBottom
@@ -1134,6 +1425,7 @@ class AgentFloatingWindow(private val context: Context) : ConfirmationOverlayHos
     }
 
     private fun applyImeAvoidance(imeTop: Int) {
+        if (transitionOpening != null) return
         val root = expandedView ?: return
         val decision = ImeAvoidance.avoidanceDecision(
             windowTop = expandedParams.y,
@@ -1160,6 +1452,7 @@ class AgentFloatingWindow(private val context: Context) : ConfirmationOverlayHos
     }
 
     private fun restoreFromImeAvoidance() {
+        if (transitionOpening != null) return
         val root = expandedView ?: return
         val restoreY = preImeY
         val restoreHeight = preImeHeight
@@ -1223,14 +1516,17 @@ class AgentFloatingWindow(private val context: Context) : ConfirmationOverlayHos
         val collapsedState = resolveCollapsedState()
         collapsedIconView?.apply {
             contentDescription = "绿色猫头鹰助手，${collapsedState.label}"
-            background = Ui.rounded(context, Ui.AssistantAvatarSurface, 10)
+            background = null
         }
         collapsedStatusText?.apply {
             text = collapsedState.label
             setTextColor(collapsedState.colorProvider())
         }
         collapsedView?.contentDescription = "Agent 悬浮窗 (${collapsedState.label})，点击展开"
-        titleText?.apply { text = snapshot.title; contentDescription = snapshot.title }
+        expandedView?.findViewWithTag<View>("overlay-open-app")?.visibility = View.VISIBLE
+        expandedView?.findViewWithTag<View>("overlay-collapse")?.visibility = View.VISIBLE
+        expandedView?.findViewWithTag<View>("overlay-hide")?.contentDescription = "隐藏 Agent 悬浮窗"
+        titleText?.apply { text = if (teachingActive) "教学中 · 已完成 $teachingCompletedSegments 段" else snapshot.title; contentDescription = text }
         statusText?.apply {
             text = snapshot.statusLabel
             setTextColor(if (snapshot.statusLabel.contains("失败")) Ui.Danger else Ui.TextSecondary)
@@ -1242,7 +1538,7 @@ class AgentFloatingWindow(private val context: Context) : ConfirmationOverlayHos
             button.buttonState = if (canSend) SendActionButton.State.ACTIVE else SendActionButton.State.DISABLED
             button.contentDescription = if (snapshot.isBusy) "发送并排队" else "发送悬浮窗消息"
         }
-        inputField?.hint = if (snapshot.isBusy) "发消息（排队）" else "发消息"
+        inputField?.hint = if (teachingActive) "描述下一步，或告诉我怎么纠正" else if (snapshot.isBusy) "发消息（排队）" else "发消息"
         if (expandedView == null) return
         val scroll = scrollView ?: return
         val wasAtBottom = !scroll.canScrollVertically(1)

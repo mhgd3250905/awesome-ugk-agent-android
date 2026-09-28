@@ -168,6 +168,9 @@ class SettingsActivity : ComponentActivity() {
         val active = apiStore.activeConfig()
         loadConfigToInputs(active)
         renderChips()
+        if (intent.getBooleanExtra(EXTRA_OPEN_AUTHORIZATION, false)) {
+            scrollContainer.post { scrollContainer.smoothScrollTo(0, authCard.top) }
+        }
     }
 
     override fun onResume() {
@@ -1060,4 +1063,8 @@ class SettingsActivity : ComponentActivity() {
         LinearLayout.LayoutParams.MATCH_PARENT,
         dp(48)
     ).apply { topMargin = dp(8) }
+
+    companion object {
+        const val EXTRA_OPEN_AUTHORIZATION = "open_authorization"
+    }
 }

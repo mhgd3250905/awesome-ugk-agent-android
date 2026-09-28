@@ -6,3 +6,6 @@ local.properties
 *.apk
 *.iml
 .idea/
+/.verify-shots/
+/.playwright-mcp/
+/a11y-*.png

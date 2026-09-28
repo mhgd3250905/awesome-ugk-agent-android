@@ -1,11 +1,52 @@
 # demo-app 版本与变更台账
 
-更新时间：2026-09-28
-当前本地测试版本：`1.12.0`（`versionCode 125`）
-版本范围：仅 `:demo-app`；SDK/AAR 模块版本继续独立维护。
-当前阶段：在 `main@0fa2208` 的既有录制与草稿基线上接入手动整理、审阅编辑新版本、确认试跑及再次运行，完成 `1.12.0 / 125` 的限定本机验收。真实 GLM 与 Android 15 模拟器的内置设置流程已跑通；本轮证据如下，不沿用 `1.11.0` 的通过结论。本条随本地 checkpoint 提交保存，提交主题为 `feat(demo): save v1.12.0 learned workflow and aligned docs`；不创建标签、不推送或发布，原版本标签与下方历史记录保持各自边界。
+更新时间：2026-09-29
+当前本地测试版本：`1.13.0`（`versionCode 126`）
+版本元数据范围：仅 `:demo-app`；本地收束也包含尚未发布的 `pi-system-skill-android` 源码调整，其模块/AAR 版本未改变。
+当前阶段：在 `main@311776c` 的既有学习能力上改为分段对话教学，完成本机快速定向验证和版本前收束，并由本地 checkpoint 保存。未打标签、推送或发布；旧版本记录保留各自验收边界。
 
 发布边界：`1.0.3`、`1.0.4` 已发布到 Play 内部测试轨道；`1.0.5` 的 Play 轨道发布状态无外部观察证据，`1.1.0` 及之后的本地测试版本尚未提交 Play。本地提交或标签不代表 Play 发布，已存在的 `demo-app-v1.0.5@11d764a` 版本边界保持不变。
+
+## 1.13.0 · 2026-09-28 · 分段对话教学与悬浮/视觉链路收敛
+
+### 当前行为
+
+- “教我操作”要求已配置可用模型、用户已开启全授权、无障碍服务已连接、悬浮窗权限可用且设备处于解锁交互状态。模型未配置时不能开始，不提供无模型录制路径。
+- 教学开始后回到手机主页，使用与普通对话相同的悬浮聊天窗分段指导 Agent；当前段结束后等待用户继续或纠正。停止只中断当前段，结束才保存本地教学记录；整理必须由用户明确发起。
+- 普通对话可检索整理后的教学经验，用户明确选择后才读取步骤；模型报告实际结果，用户核对完成条件后才能将经验标为可用。经验不按旧坐标重放，也不另装专属 Skill。旧录制草稿和旧工作流继续兼容，和新教学记录分开存放。
+- 经验使用回执按当前用户请求绑定，不依赖会被 transcript 压缩改变的历史消息数量；续教或整理中的记录会禁用经验状态按钮，竞态写入也会显示提示，不让 Activity 崩溃。
+- 悬浮窗只做串行横向位移：源对象完全离场后目标对象从同侧进场。展开时气泡离场180ms、面板进场240ms；收起时面板离场200ms、气泡进场180ms。没有透明度或缩放过渡。动画期间由各自根 View 消费窗口内触摸，不设置 FLAG_NOT_TOUCHABLE，避免系统把覆盖窗透明度强制降到0.8。
+- 普通对话与教学共用屏幕工具收起/恢复逻辑。截图和手势会移除悬浮窗后执行；启动其他 App 的 launch_android_app 与 launch_android_app_intent 则保留可见窗口，因为真机日志证明移除窗口可能导致 Android 静默拒绝后台启动。
+- 视觉手势不因模型耗时或固定15秒期限拒绝，也没有点击前像素帧差门禁。仍校验观察ID、目标App、屏幕几何/旋转和目标坐标范围，并限制观察单次使用。点击后画面比较只作诊断，不证明按钮响应或目标任务完成；画面变化不用于判定其原因。
+
+### 本轮验证与已知问题
+
+- 真机悬浮窗纯位移动效已在小米 QSG6Q8IFDMDELVGQ 上验证。修复系统强制透明后，七项定向窗口探针通过，系统窗口 alpha 告警为0，前后录屏确认进出场不再透底。证据保留于 .verify-shots/overlay-system-opacity-before.mp4、overlay-system-opacity-after.mp4、overlay-system-opacity-device.log、overlay-system-opacity-after.log、overlay-opaque-slide-device.log。
+- App 启动回归已用真机探针确认：保留悬浮窗时，从后台请求打开 Google Play 能到达前台。对应系统日志包含 BAL_ALLOW_NON_APP_VISIBLE_WINDOW/result2；证据为 .verify-shots/launch-visible-overlay-build.log 与 launch-visible-overlay-device.log。此结论只覆盖启动工具，不覆盖 Play 内部按钮点击。
+- 慢视觉模型探针把决策延迟模拟为40秒；目标按钮仍收到点击，背景动画变化不再拦截手势。Android 16 的敏感 View 测试可以复现“派发回调成功但 click listener 未触发”，但尚未证明 Google Play 目标按钮采用了相同保护。证据为 .verify-shots/visual-revalidation-build-final.log 与 visual-revalidation-device-3.log。
+- Play“管理应用和设备”仍有未解决的点击问题：真实无障碍手势回调成功但页面未跳转；用户的另一款 App 点击正常，ADB 同坐标可进入管理页。当前证据缩小了范围，不能确认根因；不要记作已修复。相关探针和设备日志见 .verify-shots/gesture-diagnostics-protected-device-final.log、gesture-diagnostics-device-actions.log、no-pixel-gate-device.log。
+- 真实模型教学闭环曾在 API 35 模拟器完成三段“打开时钟 → 计时器 → 按用户纠正进入秒表”，记录 2e456015-c0b9-4369-a1d5-168e72b8ed6f：3段、16次工具调用、3次屏幕动作、3张操作后截图，并整理出3项经验。该样本验证教学记录流程，不代表第三方 App 稳定性或 Play 点击已解决。设备报告为 .verify-shots/teaching-device-3.log。
+
+2026-09-29 清理后执行：
+
+```powershell
+.\gradlew.bat :demo-app:testDebugUnitTest :pi-system-skill-android:testDebugUnitTest :demo-app:assembleDebug :demo-app:assembleDebugAndroidTest --console=plain
+```
+
+**353 项 JVM 测试通过**（Demo 303、System skill 50；零失败、错误或跳过），Debug APK 和 AndroidTest APK 均构建成功。本次没有运行仪器测试或全模块/Terminal Gate，也没有把清理后的 APK 安装到设备；上方设备结果是先前的定向验证。`.verify-shots/` 内容仅为本机诊断证据，不作为唯一源码或版本事实源。本轮源码与规范文档已由本地 checkpoint 保存；未打标签、推送或发布。
+
+### 已替代的方案
+
+早期曾采用逐点确认录制、全屏触摸遮罩、贴边小球、透明度/缩放交叉渐变、固定15秒观察失效及手势前像素比对。这些方案已分别被分段对话、普通悬浮窗、纯位移动效和单次观察诊断替代，不属于当前行为。更早的 APK、失败探针与修复记录留在本机证据目录；以下 1.12.0 及更早条目仍按各自版本保存原始历史边界。
+
+### 历史 APK 校验索引（均非当前构建）
+
+| 阶段 | APK SHA-256 | 边界与证据 |
+| --- | --- | --- |
+| 首轮对话教学主流程 | `3e6dda82d66aac6199a038616e5c76d8d99ebc1640bf167150e84eef04c3938b` | API 35 时钟教学闭环；`.verify-shots/teaching-build-7.log`。后续悬浮窗和视觉操作修订不包含在此 APK。 |
+| 教学侧边图标动效 | `026f26e5235b40606b53aa1fdcd99f677267ff1af24d3753e4073e21fe89a6c8` | 已安装的中间样式版本，后被统一悬浮窗替代；`.verify-shots/teaching-motion-final-build.log`。 |
+| 全屏遮罩移除候选 | `8de85417f74a4775a167e13d1b3433a8d813cca17be10e406c5245ffa986881d` | 当时因保留设备中未结束教学而未安装；后续被普通悬浮窗流程替代；`.verify-shots/teaching-bubble-build.log`。 |
+| 普通对话经验检索 | `a2629b0bbc99458615105d02e10316613c72c4d56a321807eefe654f960d70b9` | 经验确认/反馈探针版本；`.verify-shots/teaching-experience-build.log` 与 `teaching-experience-device-final.log`。 |
 
 ## 1.12.0 · 2026-09-28 · 手动学习与复用闭环（本机定向验收）
 

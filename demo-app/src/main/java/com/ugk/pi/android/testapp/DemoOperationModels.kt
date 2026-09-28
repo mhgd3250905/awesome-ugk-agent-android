@@ -2,6 +2,21 @@ package com.ugk.pi.android.testapp
 
 internal enum class DemoOperationPhase { IDLE, RECORDING, PAUSED, SAVING }
 
+internal enum class DemoOperationGuidePhase { READY, PREPARING, ACTING, CAPTURING, ANALYZING, REVIEW }
+
+internal data class DemoOperationStep(
+    val id: Int,
+    val eventIds: List<Int> = emptyList(),
+    val preFrameId: String? = null,
+    val postFrameId: String? = null,
+    val localSummary: String = "",
+    val aiSummary: String? = null,
+    val userCorrection: String = "",
+    val confirmed: Boolean = false,
+    val preparation: Boolean = false,
+    val discarded: Boolean = false
+)
+
 internal data class DemoOperationSnapshot(
     val phase: DemoOperationPhase = DemoOperationPhase.IDLE,
     val draftId: String? = null,
@@ -9,7 +24,11 @@ internal data class DemoOperationSnapshot(
     val elapsedMillis: Long = 0,
     val eventCount: Int = 0,
     val frameCount: Int = 0,
-    val message: String? = null
+    val message: String? = null,
+    val guidePhase: DemoOperationGuidePhase = DemoOperationGuidePhase.READY,
+    val stepNumber: Int = 1,
+    val reviewStep: DemoOperationStep? = null,
+    val guidedAiEnabled: Boolean = false
 )
 
 internal data class DemoOperationEvent(
@@ -42,7 +61,9 @@ internal data class DemoOperationDraft(
     val endedAt: Long? = null, val status: String = "recording",
     val events: List<DemoOperationEvent> = emptyList(),
     val frames: List<DemoOperationFrame> = emptyList(),
-    val gaps: List<String> = emptyList()
+    val gaps: List<String> = emptyList(),
+    val steps: List<DemoOperationStep> = emptyList(),
+    val guided: Boolean = false
 )
 
 internal object DemoOperationLimits {

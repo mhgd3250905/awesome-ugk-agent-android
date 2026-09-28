@@ -10,6 +10,10 @@ import com.ugk.pi.android.AgentTaskStore
 import com.ugk.pi.android.AgentSkillRuntimePlugin
 import com.ugk.pi.android.AgentSkillSeeder
 import com.ugk.pi.android.AndroidAutomationAgentPlugin
+import com.ugk.pi.android.AgentTool
+import com.ugk.pi.android.ToolCall
+import com.ugk.pi.android.ToolExecutionContext
+import com.ugk.pi.android.ToolResult
 import com.ugk.pi.android.AgentToolDecorator
 import com.ugk.pi.android.LLMProvider
 import com.ugk.pi.android.LoadPolicySkillResolver
@@ -23,6 +27,9 @@ import com.ugk.pi.attention.AgentAttentionPlugin
 import com.ugk.pi.attention.AndroidNotificationPublisher
 import com.ugk.pi.attention.UrgentMessagePresenter
 import java.io.File
+import kotlinx.coroutines.Dispatchers
+import kotlinx.coroutines.NonCancellable
+import kotlinx.coroutines.withContext
 
 /**
  * Composition root for the Demo conversation runtime. A legacy headless
@@ -42,7 +49,9 @@ internal object DemoAgentRuntimeFactory {
         supportsBackgroundPromptExecution: Boolean = true,
         maxIterations: Int = DEFAULT_DEMO_MAX_ITERATIONS,
         isBackgroundRun: Boolean = false,
-        httpTransport: DemoHttpTransport = JavaNetDemoHttpTransport()
+        httpTransport: DemoHttpTransport = JavaNetDemoHttpTransport(),
+        additionalAgentInstructions: String? = null,
+        enableTeachingExperience: Boolean = true
     ): AgentRuntime {
         val appContext = context.applicationContext
         val config = ApiProviderSettingsStore(appContext).activeConfig()
@@ -84,6 +93,19 @@ internal object DemoAgentRuntimeFactory {
         } else {
             null
         }
+        val automationDecorator = if (!isBackgroundRun) screenOverlayDecorator(
+            delegateDecorator = toolDecorator,
+            prepare = {
+                withContext(Dispatchers.Main.immediate) {
+                    DemoProcessScope.get(appContext).overlayController.window.prepareScreenOperation()
+                }
+            },
+            finish = {
+                withContext(Dispatchers.Main.immediate) {
+                    DemoProcessScope.get(appContext).overlayController.window.finishScreenOperation()
+                }
+            }
+        ) else toolDecorator
         val automationPlugin = AndroidAutomationAgentPlugin(
             context = appContext,
             confirmationPresenter = confirmationPresenter,
@@ -99,7 +121,7 @@ internal object DemoAgentRuntimeFactory {
                 },
                 ownPackageName = appContext.packageName
             ),
-            toolDecorator = toolDecorator
+            toolDecorator = automationDecorator
         )
         val terminalPlugin = TerminalAgentPlugin(
             context = appContext,
@@ -138,6 +160,13 @@ internal object DemoAgentRuntimeFactory {
             )
             .register(importedFilePlugin)
             .register(attentionPlugin)
+        if (enableTeachingExperience && !isBackgroundRun) {
+            builder.register(DemoTeachingExperiencePlugin(DemoProcessScope.get(appContext).teachingStore) { request ->
+                val presenter = confirmationPresenter as? ActivityUserConfirmationDialogPresenter
+                    ?: error("当前界面无法确认使用教学经验")
+                presenter.showExplicitConfirmationDialog(request)
+            })
+        }
         if (delayPlugin != null) {
             builder.register(delayPlugin)
         } else if (schedulePlugin != null) {
@@ -157,6 +186,7 @@ internal object DemoAgentRuntimeFactory {
         if (isBackgroundRun) {
             builder.agentInstructions(BACKGROUND_AGENT_INSTRUCTIONS)
         }
+        additionalAgentInstructions?.takeIf { it.isNotBlank() }?.let(builder::agentInstructions)
         return builder
             .skillResolver(LoadPolicySkillResolver(skillRepository))
             .build()
@@ -175,4 +205,30 @@ internal object DemoAgentRuntimeFactory {
     """.trimIndent()
 
     private const val DEFAULT_DEMO_MAX_ITERATIONS = 500
+}
+
+/** One overlay lifecycle encloses ordinary tools and teaching before/after evidence alike. */
+internal fun screenOverlayDecorator(
+    delegateDecorator: AgentToolDecorator,
+    prepare: suspend () -> Unit,
+    finish: suspend () -> Unit
+): AgentToolDecorator = AgentToolDecorator { tool ->
+    val decorated = delegateDecorator.decorate(tool)
+    object : AgentTool by decorated {
+        override suspend fun execute(call: ToolCall, context: ToolExecutionContext): ToolResult {
+            // Launching from the background requires the existing visible overlay on some OEMs.
+            // Launch is not coordinate input/capture: detaching its window can silently block startActivity.
+            if (!DemoScreenAutomationPolicy.isScreenWorkflowTool(call.name) ||
+                call.name == "launch_android_app" || call.name == "launch_android_app_intent") {
+                return decorated.execute(call, context)
+            }
+            try {
+                prepare()
+                return decorated.execute(call, context)
+            } finally {
+                // Preparation may have partially detached the surface before throwing/cancellation.
+                withContext(NonCancellable) { finish() }
+            }
+        }
+    }
 }

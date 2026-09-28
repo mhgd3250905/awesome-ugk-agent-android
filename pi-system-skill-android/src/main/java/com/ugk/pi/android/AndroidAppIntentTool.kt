@@ -104,6 +104,9 @@ class AndroidAppIntentTool(
                 content = buildJsonObject {
                     put("target", target)
                     put("launched", true)
+                    put("launchRequested", true)
+                    put("launchVerified", false)
+                    put("message", "Launch request submitted; the foreground result is not verified. Android may silently block background starts, and an unchanged screen alone does not prove the launch was blocked. Check the foreground app before reporting the result; do not repeatedly relaunch without new evidence.")
                     put("action", intent.action.orEmpty())
                     resolvedPackage?.let { put("resolvedPackage", it) }
                 }.toString()

@@ -104,9 +104,16 @@ internal class DemoOperationDraftStore(private val root: File) {
     }
 
     private fun encode(d: DemoOperationDraft) = buildJsonObject {
-        put("schemaVersion", 1); put("id", d.id); put("title", d.title); put("startedAt", d.startedAt)
+        put("schemaVersion", 2); put("id", d.id); put("title", d.title); put("startedAt", d.startedAt)
         d.endedAt?.let { put("endedAt", it) }; put("status", d.status)
+        put("guided", d.guided)
         put("gaps", JsonArray(d.gaps.map(::JsonPrimitive)))
+        put("steps", JsonArray(d.steps.map { step -> buildJsonObject {
+            put("id", step.id); put("eventIds", JsonArray(step.eventIds.map(::JsonPrimitive)))
+            step.preFrameId?.let { put("preFrameId", it) }; step.postFrameId?.let { put("postFrameId", it) }
+            put("localSummary", step.localSummary); step.aiSummary?.let { put("aiSummary", it) }
+            put("userCorrection", step.userCorrection); put("confirmed", step.confirmed); put("preparation", step.preparation); put("discarded", step.discarded)
+        } }))
         put("events", JsonArray(d.events.map { e -> buildJsonObject {
             put("id", e.id); put("at", e.at); put("type", e.type); put("packageName", e.packageName)
             e.className?.let { put("className", it) }; e.viewId?.let { put("viewId", it) }
@@ -133,7 +140,7 @@ internal class DemoOperationDraftStore(private val root: File) {
     private fun decode(o: JsonObject): DemoOperationDraft {
         fun JsonObject.s(k: String) = get(k)?.jsonPrimitive?.contentOrNull
         fun JsonObject.n(k: String) = getValue(k).jsonPrimitive.long
-        require(o.n("schemaVersion") == 1L)
+        require(o.n("schemaVersion") in 1L..2L)
         return DemoOperationDraft(o.s("id")!!, o.s("title")!!, o.n("startedAt"),
             o["endedAt"]?.jsonPrimitive?.long, o.s("status")!!,
             o.getValue("events").jsonArray.map { item -> item.jsonObject.let { e ->
@@ -153,6 +160,13 @@ internal class DemoOperationDraftStore(private val root: File) {
                             n.getValue("clickable").jsonPrimitive.boolean, n.getValue("scrollable").jsonPrimitive.boolean,
                             n.getValue("checked").jsonPrimitive.boolean, n["checkable"]?.jsonPrimitive?.booleanOrNull)
                     } }.orEmpty(), f["treeTruncated"]?.jsonPrimitive?.booleanOrNull ?: false)
-            } }, o.getValue("gaps").jsonArray.map { it.jsonPrimitive.content })
+            } }, o.getValue("gaps").jsonArray.map { it.jsonPrimitive.content },
+            o["steps"]?.jsonArray?.map { item -> item.jsonObject.let { step ->
+                DemoOperationStep(step.n("id").toInt(), step["eventIds"]?.jsonArray?.map { it.jsonPrimitive.int }.orEmpty(),
+                    step.s("preFrameId"), step.s("postFrameId"), step.s("localSummary").orEmpty(), step.s("aiSummary"),
+                    step.s("userCorrection").orEmpty(), step["confirmed"]?.jsonPrimitive?.booleanOrNull ?: false,
+                    step["preparation"]?.jsonPrimitive?.booleanOrNull ?: false,
+                    step["discarded"]?.jsonPrimitive?.booleanOrNull ?: false)
+            } }.orEmpty(), o["guided"]?.jsonPrimitive?.booleanOrNull ?: false)
     }
 }

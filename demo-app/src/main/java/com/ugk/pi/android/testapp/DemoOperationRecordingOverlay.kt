@@ -27,7 +27,9 @@ internal class DemoOperationRecordingOverlay(
     private val context: Context,
     private val onPauseResume: () -> Unit,
     private val onFinish: () -> Unit,
-    private val onOpen: () -> Unit
+    private val onOpen: () -> Unit,
+    private val onCompleteStep: () -> Unit = {},
+    private val onFailure: (String) -> Unit = {}
 ) {
     private val manager = context.getSystemService(Context.WINDOW_SERVICE) as WindowManager
     private var root: LinearLayout? = null
@@ -36,11 +38,12 @@ internal class DemoOperationRecordingOverlay(
     private var indicator: RecordingIndicator? = null
     private var pause: ImageButton? = null
     private var finish: ImageButton? = null
+    private var complete: TextView? = null
     private var captureHidden = false
     private var hostVisible = false
     private var snapshot = DemoOperationSnapshot()
     private val params = WindowManager.LayoutParams(
-        context.dp(208), WindowManager.LayoutParams.WRAP_CONTENT,
+        context.dp(300), WindowManager.LayoutParams.WRAP_CONTENT,
         if (Build.VERSION.SDK_INT >= 26) WindowManager.LayoutParams.TYPE_APPLICATION_OVERLAY
         else @Suppress("DEPRECATION") WindowManager.LayoutParams.TYPE_PHONE,
         WindowManager.LayoutParams.FLAG_NOT_FOCUSABLE or WindowManager.LayoutParams.FLAG_NOT_TOUCH_MODAL,
@@ -50,7 +53,8 @@ internal class DemoOperationRecordingOverlay(
     fun bind(value: DemoOperationSnapshot) {
         snapshot = value
         if (value.phase == DemoOperationPhase.IDLE || hostVisible) { hide(); return }
-        if (!Settings.canDrawOverlays(context)) { hide(); return }
+        if (!Settings.canDrawOverlays(context)) { hide(); onFailure("悬浮窗权限已关闭，录制已停止"); return }
+        if (value.phase != DemoOperationPhase.PAUSED && value.guidePhase != DemoOperationGuidePhase.ACTING) { hide(); return }
         if (root == null) show()
         bindControls(value)
         root?.post { keepOnScreen() }
@@ -59,7 +63,8 @@ internal class DemoOperationRecordingOverlay(
     /** State-only seam: never adds a WindowManager window. */
     internal fun bindControls(value: DemoOperationSnapshot) {
         snapshot = value
-        status?.text = operationDuration(value.elapsedMillis)
+        status?.text = if (value.phase == DemoOperationPhase.PAUSED) "已暂停" else "第 ${value.stepNumber} 步"
+        complete?.isEnabled = value.phase == DemoOperationPhase.RECORDING && value.guidePhase == DemoOperationGuidePhase.ACTING
         val phase = when (value.phase) {
             DemoOperationPhase.PAUSED -> "已暂停"
             DemoOperationPhase.SAVING -> "正在保存草稿"
@@ -83,10 +88,11 @@ internal class DemoOperationRecordingOverlay(
     }
 
     private fun show() {
-        params.width = minOf(context.dp(208), context.resources.displayMetrics.widthPixels - context.dp(16))
+        params.width = minOf(context.dp(300), context.resources.displayMetrics.widthPixels - context.dp(16))
         val card = createControls()
         card.visibility = if (captureHidden) View.INVISIBLE else View.VISIBLE
         runCatching { manager.addView(card, params) }.onSuccess { root = card }
+            .onFailure { onFailure("无法显示录制悬浮条，已停止录制") }
     }
 
     /** Native layout seam for narrow-window checks without granting overlay permission. */
@@ -127,6 +133,8 @@ internal class DemoOperationRecordingOverlay(
         finish = iconButton("operation_overlay_finish", "结束并保存草稿", onFinish).apply {
             setImageDrawable(RecordingActionDrawable(play = false, color = TaskNoteUi.Ink))
         }
+        complete = TaskNoteUi.button(context, "已完成", true, onCompleteStep).apply { tag = "operation_overlay_complete" }
+        card.addView(complete, LinearLayout.LayoutParams(context.dp(88), context.dp(48)))
         card.addView(pause, LinearLayout.LayoutParams(context.dp(48), context.dp(48)))
         card.addView(finish, LinearLayout.LayoutParams(context.dp(48), context.dp(48)))
         card.addOnLayoutChangeListener { _, _, _, _, _, _, _, _, _ -> keepOnScreen() }
@@ -146,7 +154,7 @@ internal class DemoOperationRecordingOverlay(
     private fun keepOnScreen() {
         val view = root ?: return
         val display = context.resources.displayMetrics
-        val width = minOf(context.dp(208), (display.widthPixels - context.dp(16)).coerceAtLeast(context.dp(48)))
+        val width = minOf(context.dp(300), (display.widthPixels - context.dp(16)).coerceAtLeast(context.dp(48)))
         val x = params.x.coerceIn(0, (display.widthPixels - width).coerceAtLeast(0))
         val y = params.y.coerceIn(context.dp(24),
             (display.heightPixels - view.height - context.dp(32)).coerceAtLeast(context.dp(24)))
@@ -203,6 +211,7 @@ internal class DemoOperationRecordingOverlay(
         root = null; status = null; pause = null; finish = null; handle = null; indicator = null
     }
 
+    /** Lifecycle test seam and host-facing alias for removing the recording window. */
     fun release() = hide()
 }
 

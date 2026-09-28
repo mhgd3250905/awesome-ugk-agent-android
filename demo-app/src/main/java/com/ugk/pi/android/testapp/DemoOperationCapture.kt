@@ -31,8 +31,46 @@ internal fun demoOperationWindowSignature(activeWindowId: Int, externalWindows: 
 internal object DemoOperationCapture {
     private val imageWorker = Executors.newSingleThreadExecutor { r -> Thread(r, "operation-image-encoder").apply { isDaemon = true } }
     private val main = Handler(Looper.getMainLooper())
+    fun foregroundPackage(service: AccessibilityService, ownPackage: String): String? {
+        val root = service.rootInActiveWindow
+        val active = try { root?.packageName?.toString() } finally { root?.recycle() }
+        if (!active.isNullOrBlank() && active != ownPackage) return active
+        val windows = service.windows
+        return try {
+            windows.sortedByDescending { it.layer }.firstNotNullOfOrNull { window ->
+                if (window.type != AccessibilityWindowInfo.TYPE_APPLICATION) null
+                else window.root?.let { node ->
+                    try { node.packageName?.toString()?.takeUnless { it == ownPackage } }
+                    finally { node.recycle() }
+                }
+            } ?: ownPackage.takeIf {
+                // Host overlay focus alone does not prove that the host app is foreground.
+                windows.any { window ->
+                    if (window.type != AccessibilityWindowInfo.TYPE_APPLICATION) false
+                    else window.root?.let { node ->
+                        try { node.packageName?.toString() == ownPackage } finally { node.recycle() }
+                    } == true
+                }
+            }
+        } finally { windows.forEach { it.recycle() } }
+    }
+
     fun page(service: AccessibilityService, ownPackage: String, excludedPackages: Set<String> = emptySet()): DemoOperationPage? {
-        val root = service.rootInActiveWindow ?: return null
+        val activeRoot = service.rootInActiveWindow
+        val root = if (activeRoot == null || activeRoot.packageName?.toString() == ownPackage) {
+            activeRoot?.recycle()
+            // A focusable guided overlay owns the active root; select the top external app.
+            val available = service.windows
+            try {
+                available.sortedByDescending { it.layer }.firstNotNullOfOrNull { window ->
+                    if (window.type != AccessibilityWindowInfo.TYPE_APPLICATION) null
+                    else window.root?.let { candidate ->
+                        if (candidate.packageName?.toString() == ownPackage) { candidate.recycle(); null } else candidate
+                    }
+                }
+            } finally { available.forEach { it.recycle() } }
+        } else activeRoot
+        if (root == null) return null
         return try {
             val pkg = root.packageName?.toString().orEmpty()
             if (pkg.isBlank() || pkg == ownPackage || pkg in excludedPackages) null

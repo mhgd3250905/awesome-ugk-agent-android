@@ -83,14 +83,22 @@ touchable overlay over a coordinate target when using coordinate gestures;
 semantic node actions are preferred because they do not depend on overlay
 coverage.
 
-## Screen workflow recovery and passive overlay
+## Demo overlay behavior during screen work
 
-The demo host enters a passive overlay mode when an Android launch or screen
-automation tool starts. The expanded overlay is collapsed and its expanded
-window is marked `FLAG_NOT_FOCUSABLE`, so the target app keeps input focus.
-Confirmation cards may temporarily restore focusability so the user can press
-their buttons; the overlay is collapsed again before the protected action
-continues.
+In normal chat and guided teaching, a busy Agent collapses the shared expanded
+conversation window to its visible edge bubble. Before other `screen_*`
+operations, the host waits for that transition and removes the overlay; a
+`finally` path restores it after success, failure, or cancellation.
+This keeps the touch target unobstructed while preserving the same interaction
+for ordinary chat and teaching.
+
+App launch tools are the exception: the visible overlay stays attached while
+`launch_android_app` or `launch_android_app_intent` calls `startActivity()`. On
+some devices, detaching the only visible host window can cause Android to
+silently block a background launch. A successful call means the launch request
+was submitted, not that the target app reached the foreground; the Agent must
+check the foreground screen before reporting success. An unchanged screen alone
+does not prove Android blocked the request.
 
 When a semantic screen operation returns `success=false`, the result includes its
 structured error code and a recovery hint; the next recovery step is a fresh
@@ -103,11 +111,11 @@ replacing screen recovery.
 
 ## 按需观察协议
 
-1. 选择足以回答当前问题的新鲜证据。结构树能唯一确定目标或验证本次结果时，使用 `screen_find_ui_element` / `screen_read_ui_tree`；未知界面、纯视觉内容、树信息不足、目标仍有歧义或需要视觉理解时调用 `screen_capture_visual`，不反复盲查树，也不强制每步同时读树和发图。
+1. 视觉优先：理解界面、判断点击/长按/滑动目标和验证可见结果时，优先 `screen_capture_visual` 与 `screen_visual_gesture`，熟悉的应用也不先读 View 树。已有仍有效的截图可直接使用。结构树仅辅助语义文字输入、用户明确要求的结构检查、视觉歧义或截图不可用时的回退；一次空树、仅根节点或无有效目标即可返回视觉，不反复更换选择器。
 2. 截图成功后，模型会收到图片和 `observationId`、包名、屏幕尺寸、旋转角度等元数据；图片不会写入 `AgentSession` 的持久化消息，只附加到紧邻的下一次模型请求。截图会发送给配置的模型，默认确认模式下必须按完整输入确认流程授权。
 3. 已知 selector 时优先使用 `screen_find_ui_element`，需要层级和更广上下文时使用 `screen_read_ui_tree`。每次读取都会生成新的 `snapshotId`，节点操作只能使用同一结果中的最新 `snapshotId` 和 `nodeId`。动作后的新观察若已提供下一步所需证据且页面未变化，可同时用于下一步，不额外再读一遍或截一张。
 4. 对视觉识别出的坐标目标，模型返回截图对应的 `left/top/right/bottom` 归一化区域（每个值在 `0..1`），再调用 `screen_visual_gesture` 并原样提交最新 `observationId`。语义文字输入和节点操作继续通过结构树与 `screen_perform_action` 完成。
-5. 后端会校验观察 ID、15 秒有效期、前台包名、屏幕尺寸、旋转和目标区域；点击/长按使用区域中心，方向滑动从区域中心开始。执行成功只表示 Android 接受了触摸流，仍必须获取新观察验证。树能展示完成条件时可以用新鲜 read/find；完成条件需要视觉判断时必须用新截图。没有证据则报告无法验证。
+5. 后端会校验观察 ID、前台包名、屏幕尺寸、旋转和目标区域，不再在点击前通过两帧像素差异拦截手势，也不因模型思考超过15秒而拒绝；动画和移动内容不会触发像素门禁；点击/长按使用区域中心，方向滑动从区域中心开始。执行成功只表示 Android 接受了触摸流，仍必须获取新观察验证。树能展示完成条件时可以用新鲜 read/find；完成条件需要视觉判断时必须用新截图。没有证据则报告无法验证。
 6. 截图不支持时直接使用结构树工作流；截图失败或超时最多重试一次，之后改用结构树。不要在截图失败时反复重试。
 
 视觉流程不是所有场景的通用突破：Android 30 以下不支持该截图 API；`FLAG_SECURE`、DRM、黑屏/受保护内容可能无法捕获；动画、弹窗或页面切换可能使观察过期；模型也必须支持图片输入。视觉坐标不能替代无障碍节点提供的可靠文本输入。涉及支付、认证、删除等不可逆操作时仍必须让用户确认具体目标。
@@ -154,8 +162,12 @@ Tool 返回 `success=false` 时，Agent 必须依据错误码恢复，不能仅�
 - snapshot 只在当前进程内按 session 保留最新值，最多保留 16 个 session；没有跨进程 Coordinator、ticket store、
   `runId` 或屏幕录制。
 - 视觉观察只在当前进程内按 session 保留最新元数据，最多保留 16 个 session，图片本身不在后端缓存；默认图片长边
-  限制为 1280、JPEG quality 为 80，观察有效期为 15 秒。
+  限制为 1280、JPEG quality 为 80，观察不再按固定 15 秒失效，点击前不比较像素；动作后的本地诊断截图不会额外发送给模型。
 - `screen_press_key` 在 Android API 30 以下不使用未经验证的坐标 fallback，而是返回 `KEY_UNSUPPORTED`。
 - 无障碍服务、宿主 overlay 过滤和生命周期由宿主负责；SDK 只通过 `AccessibilityServiceProvider` 访问当前实例。
 
 2026-09-28 的按需观察调整只改变 Skill、全局指令和工具说明，不改变工具执行、授权、snapshot / observation 校验或截图失败上限。普通 Agent 仍执行模型与工具循环，不等同于已学路径的本地执行器；减少多少截图及耗时需真实任务对照，不能由协议单测推算。
+
+### 手势诊断与无响应
+
+视觉手势返回dispatched、effectVerified和screenChange。回调完成仅说明派发完成；画面变化也不证明目标达成。画面未变时禁止无依据重复坐标，最多一个新证据支持的替代操作，之后请求用户手动协助。动作后的本地截图只用于诊断，不额外发给模型。UGKScreenAction日志包含关联ID、包名、坐标、时长、尺寸、旋转和派发结果，不包含图片或页面文字。Android16受保护的敏感视图可能忽略普通自动化服务的注入；不把所有无变化都归因于该机制。

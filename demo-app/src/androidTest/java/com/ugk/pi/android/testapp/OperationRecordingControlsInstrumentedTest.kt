@@ -1,83 +1,45 @@
 package com.ugk.pi.android.testapp
 
-import android.content.res.Configuration
 import android.view.View
+import android.widget.EditText
 import android.widget.TextView
-import android.widget.ImageButton
 import androidx.test.ext.junit.runners.AndroidJUnit4
 import androidx.test.platform.app.InstrumentationRegistry
-import org.junit.Assert.assertEquals
-import org.junit.Assert.assertTrue
-import org.junit.Assert.assertFalse
+import org.junit.Assert.*
 import org.junit.Test
 import org.junit.runner.RunWith
 
-/** Measures the real native controls without installing an overlay or starting recording. */
 @RunWith(AndroidJUnit4::class)
 class OperationRecordingControlsInstrumentedTest {
-    @Test
-    fun compactLargeTextControlsKeepTimerAndBothActionsReachableAcrossStates() {
+    @Test fun guidedControlsCompleteOneStepAndReviewRequiresAiSummary() {
         val instrumentation = InstrumentationRegistry.getInstrumentation()
         instrumentation.runOnMainSync {
-            val base = instrumentation.targetContext
-            val previous = ThemeStore(base).getThemeMode()
-            try {
-                for (mode in listOf(AppThemeMode.LIGHT, AppThemeMode.DARK)) {
-                    ThemeManager.setMode(base, mode)
-                    val configuration = Configuration(base.resources.configuration).apply { fontScale = 1.5f }
-                    val context = base.createConfigurationContext(configuration)
-                    var pauses = 0
-                    var finishes = 0
-                    var opens = 0
-                    val overlay = DemoOperationRecordingOverlay(context, { pauses++ }, { finishes++ }, { opens++ })
-                    val view = overlay.createControls()
-                    val recording = DemoOperationSnapshot(phase = DemoOperationPhase.RECORDING, elapsedMillis = 599000)
-                    overlay.bindControls(recording)
-                    val width = context.dp(208)
-                    view.measure(View.MeasureSpec.makeMeasureSpec(width, View.MeasureSpec.EXACTLY),
-                        View.MeasureSpec.makeMeasureSpec(context.dp(300), View.MeasureSpec.AT_MOST))
-                    view.layout(0, 0, width, view.measuredHeight)
-                    assertTrue("52dp capsule height, allowing density rounding", kotlin.math.abs(context.dp(52) - view.height) <= 2)
-                    val timer = view.findViewWithTag<TextView>("operation_overlay_timer")
-                    assertEquals("09:59", timer.text.toString())
-                    assertEquals(1, timer.lineCount)
-                    assertEquals(0, timer.layout.getEllipsisCount(0))
-                    assertTrue(timer.paint.measureText(timer.text.toString()) <= timer.width)
-                    val handle = view.findViewWithTag<View>("operation_overlay_handle")
-                    val pause = view.findViewWithTag<ImageButton>("operation_overlay_pause")
-                    val finish = view.findViewWithTag<ImageButton>("operation_overlay_finish")
-                    for (button in listOf(pause, finish)) {
-                        assertEquals(context.dp(48), button.width)
-                        assertEquals(context.dp(48), button.height)
-                        assertTrue(button.left >= 0 && button.right <= width)
-                        assertTrue(button.contentDescription.isNotBlank())
-                    }
-                    assertEquals(pause.top, finish.top)
-                    assertEquals(0, pauses + finishes + opens)
-                    assertEquals("暂停录制", pause.contentDescription)
-                    pause.performClick()
-                    overlay.bindControls(recording.copy(phase = DemoOperationPhase.PAUSED, message = "输入页面已暂停录制"))
-                    assertEquals("继续录制", pause.contentDescription)
-                    assertEquals("09:59", timer.text.toString())
-                    assertTrue(handle.contentDescription.contains("输入页面已暂停录制"))
-                    pause.performClick()
-                    finish.performClick()
-                    handle.performClick()
-                    assertEquals(2, pauses)
-                    assertEquals(1, finishes)
-                    assertEquals(1, opens)
-                    overlay.bindControls(recording.copy(phase = DemoOperationPhase.SAVING))
-                    assertFalse(pause.isEnabled)
-                    assertFalse(finish.isEnabled)
-                    pause.performClick()
-                    finish.performClick()
-                    assertEquals(2, pauses)
-                    assertEquals(1, finishes)
-                    overlay.release()
-                }
-            } finally {
-                ThemeManager.setMode(base, previous)
-            }
+            val context = instrumentation.targetContext
+            var completed = 0
+            val overlay = DemoOperationRecordingOverlay(context, {}, {}, {}, { completed++ })
+            val view = overlay.createControls()
+            overlay.bindControls(DemoOperationSnapshot(phase = DemoOperationPhase.RECORDING,
+                guidePhase = DemoOperationGuidePhase.ACTING, stepNumber = 3))
+            assertEquals("第 3 步", view.findViewWithTag<TextView>("operation_overlay_timer").text.toString())
+            view.findViewWithTag<View>("operation_overlay_complete").performClick()
+            assertEquals(1, completed)
+            overlay.bindControls(DemoOperationSnapshot(phase = DemoOperationPhase.PAUSED))
+            assertFalse(view.findViewWithTag<View>("operation_overlay_complete").isEnabled)
+            assertEquals("已暂停", view.findViewWithTag<TextView>("operation_overlay_timer").text.toString())
+            val review = DemoOperationStepReviewOverlay(context, {}, { _, _ -> }, {}, {}, {}, {}, { _, _ -> null })
+            val state = DemoOperationSnapshot(phase = DemoOperationPhase.RECORDING,
+                guidePhase = DemoOperationGuidePhase.REVIEW, guidedAiEnabled = true,
+                reviewStep = DemoOperationStep(id = 1, localSummary = "点击设置"))
+            val pending = review.createContent(state)
+            fun labels(root: android.view.ViewGroup): List<String> = (0 until root.childCount)
+                .map { root.getChildAt(it) }.filterIsInstance<TextView>().map { it.text.toString() }
+            assertFalse(labels(pending).contains("确认并进行下一步"))
+            assertTrue(labels(pending).contains("重新整理这一步"))
+            assertTrue(labels(review.createContent(state.copy(guidePhase = DemoOperationGuidePhase.READY))).contains("先调整页面"))
+            val ready = review.createContent(state.copy(reviewStep = state.reviewStep!!.copy(aiSummary = "打开设置页面")))
+            assertTrue(labels(ready).contains("确认并进行下一步"))
+            assertNotNull(ready.findViewWithTag<EditText>("operation_step_correction"))
+            overlay.release()
         }
     }
 }

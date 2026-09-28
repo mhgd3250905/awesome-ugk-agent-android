@@ -46,16 +46,16 @@ class ScreenAutomationSkillTest {
     }
 
     @Test
-    fun visualBackendChoosesSufficientEvidenceAndKeepsBoundedGestureWorkflow() {
+    fun visualBackendPrefersScreenshotsAndKeepsBoundedGestureWorkflow() {
         val skill = ScreenAutomationSkills.accessibilityScreenControl(
             requireUserConfirmation = true,
             includeVisualFallback = true
         )
 
-        assertTrue(skill.instructions.contains("without a mandatory screenshot"))
-        assertTrue(skill.instructions.contains("unknown interface"))
-        assertTrue(skill.instructions.contains("unresolved ambiguity"))
-        assertTrue(skill.instructions.contains("do not keep probing the tree blindly"))
+        assertTrue(skill.instructions.contains("Visual-first observation workflow"))
+        assertTrue(skill.instructions.contains("Do not read/find the View tree as a prerequisite"))
+        assertTrue(skill.instructions.contains("For semantic text entry, make at most one fresh targeted query"))
+        assertTrue(skill.instructions.contains("Do not keep probing the tree blindly"))
         assertTrue(skill.instructions.contains("One fresh post-action observation may also supply the next step"))
         assertTrue(skill.instructions.contains("Do not require both a tree and a screenshot"))
         assertFalse(skill.instructions.contains("At the start of each screen observation cycle"))

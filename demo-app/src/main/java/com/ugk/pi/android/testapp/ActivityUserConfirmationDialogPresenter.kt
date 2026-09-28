@@ -73,11 +73,19 @@ class ActivityUserConfirmationDialogPresenter(
 
     override suspend fun showConfirmationDialog(
         request: UserConfirmationDialogRequest
+    ): UserConfirmationDialogResult = presentConfirmation(request, allowAutoApproval = true)
+
+    /** Product choices are never inferred from the tool full-authorization setting. */
+    suspend fun showExplicitConfirmationDialog(request: UserConfirmationDialogRequest): UserConfirmationDialogResult =
+        presentConfirmation(request, allowAutoApproval = false)
+
+    private suspend fun presentConfirmation(
+        request: UserConfirmationDialogRequest, allowAutoApproval: Boolean
     ): UserConfirmationDialogResult = withContext(Dispatchers.Main.immediate) {
         val buttons = request.buttons.ifEmpty {
             listOf(UserConfirmationDialogButton(CANCEL_BUTTON_ID, "Cancel"))
         }
-        if (isFullAuthorizationEnabled()) {
+        if (allowAutoApproval && isFullAuthorizationEnabled()) {
             return@withContext UserConfirmationDialogResult(
                 AgentAuthorizationPolicy.autoApproveButtonId(buttons)
             )
@@ -90,6 +98,7 @@ class ActivityUserConfirmationDialogPresenter(
                 request = request.copy(buttons = buttons),
                 buttons = buttons,
                 continuation = continuation,
+                allowAutoApproval = allowAutoApproval,
                 fallbackResult = UserConfirmationDialogResult(fallbackId)
             )
             active = pending
@@ -238,15 +247,16 @@ class ActivityUserConfirmationDialogPresenter(
         private val request: UserConfirmationDialogRequest,
         private val buttons: List<UserConfirmationDialogButton>,
         private val continuation: CancellableContinuation<UserConfirmationDialogResult>,
+        private val allowAutoApproval: Boolean,
         private val fallbackResult: UserConfirmationDialogResult
     ) {
-        private var dialog: AlertDialog? = null
+        private var dialog: android.app.Dialog? = null
         private var overlayVisible = false
         private var suppressDialogDismiss = false
         private var completed = false
 
         fun presentInitial() {
-            if (isFullAuthorizationEnabled()) {
+            if (allowAutoApproval && isFullAuthorizationEnabled()) {
                 finish(
                     UserConfirmationDialogResult(AgentAuthorizationPolicy.autoApproveButtonId(buttons)),
                     dismiss = true
@@ -260,7 +270,7 @@ class ActivityUserConfirmationDialogPresenter(
 
         fun moveToOverlay() {
             if (completed) return
-            if (isFullAuthorizationEnabled()) {
+            if (allowAutoApproval && isFullAuthorizationEnabled()) {
                 finish(
                     UserConfirmationDialogResult(AgentAuthorizationPolicy.autoApproveButtonId(buttons)),
                     dismiss = true
@@ -326,7 +336,8 @@ class ActivityUserConfirmationDialogPresenter(
                 overlayVisible = false
             }
 
-            val nextDialog = AlertDialog.Builder(hostActivity, Ui.dialogTheme())
+            val nextDialog = if (!allowAutoApproval) teachingExperienceChoiceDialog(hostActivity, request) { select(it) }
+            else AlertDialog.Builder(hostActivity, Ui.dialogTheme())
                 .setTitle(request.title)
                 .setMessage(
                     request.target?.let { target ->

@@ -101,11 +101,14 @@ internal class DemoCapabilityInterlock(
         private var owner: Any? = null
         private var recordingOwner: Any? = null
         private var workflowOwner: Any? = null
+        private var teachingOwner: Any? = null
+        private var teachingRun: DemoCapabilityInterlock? = null
         private val activeRuns = mutableSetOf<DemoCapabilityInterlock>()
         private var blockingCapability: String? = null
 
         fun startRun(by: DemoCapabilityInterlock) = synchronized(lock) {
-            check(recordingOwner == null && workflowOwner == null) { "请先结束当前录制或操作运行。" }
+            check(recordingOwner == null && workflowOwner == null &&
+                (teachingOwner == null || teachingRun === by)) { "请先结束当前录制或操作运行。" }
             releaseLocked(by)
             activeRuns.add(by)
         }
@@ -143,7 +146,29 @@ internal class DemoCapabilityInterlock(
         }
 
         fun isScreenOperationOwned(): Boolean = synchronized(lock) {
-            recordingOwner != null || workflowOwner != null
+            recordingOwner != null || workflowOwner != null || teachingOwner != null
+        }
+
+        fun canStartRun(lifecycle: DemoAgentRunLifecycle?): Boolean = synchronized(lock) {
+            recordingOwner == null && workflowOwner == null &&
+                (teachingOwner == null || teachingRun === lifecycle)
+        }
+
+        fun acquireTeaching(by: Any, permittedRun: DemoCapabilityInterlock): Boolean = synchronized(lock) {
+            if (owner != null || activeRuns.isNotEmpty()) return false
+            owner = by
+            teachingOwner = by
+            teachingRun = permittedRun
+            blockingCapability = SCREEN_CAPABILITY
+            true
+        }
+
+        fun releaseTeaching(by: Any) = synchronized(lock) {
+            if (teachingOwner === by && teachingRun !in activeRuns) {
+                teachingOwner = null
+                teachingRun = null
+                releaseLocked(by)
+            }
         }
 
         fun isWorkflowOwnedBy(by: Any): Boolean = synchronized(lock) {
@@ -168,6 +193,8 @@ internal class DemoCapabilityInterlock(
             val capability = blockingCapability ?: return null
             val requesterIsOwner = owner === requester
             val blocked = when {
+                teachingOwner != null -> toolName in TERMINAL_TOOL_NAMES ||
+                    (workflowToolMatcher(toolName) && teachingRun !== requester)
                 recordingOwner != null || workflowOwner != null -> workflowToolMatcher(toolName) || toolName in TERMINAL_TOOL_NAMES
                 toolName in TERMINAL_TOOL_NAMES -> requesterIsOwner
                 workflowToolMatcher(toolName) -> !requesterIsOwner
@@ -220,6 +247,10 @@ internal class DemoCapabilityInterlock(
         fun tryAcquireWorkflow(owner: Any): Boolean = ProcessState.acquireWorkflow(owner)
         fun releaseWorkflow(owner: Any) = ProcessState.releaseWorkflow(owner)
         fun isScreenOperationOwned(): Boolean = ProcessState.isScreenOperationOwned()
+        fun canStartRun(lifecycle: DemoAgentRunLifecycle?): Boolean = ProcessState.canStartRun(lifecycle)
+        fun tryAcquireTeaching(owner: Any, permittedRun: DemoCapabilityInterlock): Boolean =
+            ProcessState.acquireTeaching(owner, permittedRun)
+        fun releaseTeaching(owner: Any) = ProcessState.releaseTeaching(owner)
         fun isWorkflowOwnedBy(owner: Any): Boolean = ProcessState.isWorkflowOwnedBy(owner)
 
         private const val SCREEN_CAPABILITY = "android-screen-automation"

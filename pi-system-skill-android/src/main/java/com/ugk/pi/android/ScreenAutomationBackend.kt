@@ -171,6 +171,7 @@ object ScreenAutomationLimits {
     const val MAX_MAX_DEPTH = 30
     const val DEFAULT_MAX_NODES = 200
     const val MAX_MAX_NODES = 500
+    @Deprecated("Visual observations have no age-based expiry.")
     const val MAX_VISUAL_OBSERVATION_AGE_MILLIS = 15_000L
     const val MAX_VISUAL_IMAGE_DIMENSION = 1_280
     const val VISUAL_JPEG_QUALITY = 80

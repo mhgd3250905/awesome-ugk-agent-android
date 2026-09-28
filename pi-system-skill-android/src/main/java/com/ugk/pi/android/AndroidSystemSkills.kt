@@ -41,7 +41,7 @@ object AndroidSystemSkills {
                 If the service is disabled, call open_android_accessibility_settings, explain that the user must enable the host service manually, and wait for the user to return before checking status again. Android does not allow the Agent to grant this permission silently.
                 Once ready, follow the observation workflow provided by the host's screen automation Skill. Use a fresh screenshot as primary evidence when the host exposes visual screen tools; otherwise use the structure tree. Use screen_perform_action for exact semantic node actions when a fresh snapshot provides the target. After every launch, click, text entry, scroll, or gesture, observe the screen again and verify the result.
 
-                A successful launch or gesture only means Android accepted the request. It does not prove that the target screen or action completed.
+                launchRequested=true confirms only that Android accepted the launch request; it does not prove the target app became foreground. An unchanged screen alone does not prove Android blocked the request. A completed gesture callback likewise does not prove the target app handled the touch.
             """.trimIndent(),
             methods = listOf(
                 AndroidSkillMethod(
@@ -54,7 +54,7 @@ object AndroidSystemSkills {
                     toolName = "launch_android_app",
                     purpose = "Launches an installed app by exact package name through its launcher Activity.",
                     whenToUse = "Use after find_android_app returns a selected packageName.",
-                    resultSemantics = "launched=true means Android accepted the launch request; read the screen to verify the target app."
+                    resultSemantics = "launchRequested=true means Android accepted the request; launchVerified=false means foreground is unconfirmed. launched=true is a compatibility alias, not proof that the target app opened. Read the screen before continuing."
                 ),
                 AndroidSkillMethod(
                     toolName = "get_android_accessibility_status",
@@ -345,7 +345,7 @@ object AndroidSystemSkills {
                 Supported targets include camera_capture, video_capture, pick_image, record_audio, dial_phone, send_sms, send_email, open_url, open_map, share_text, web_search, and open_app_market.
                 $confirmationInstruction
                 In confirmation mode, the confirmation target object is separate from any protected Tool input's own target field. In full authorization mode, never create a confirmation ToolCall.
-                launched=true means Android accepted and dispatched the Intent; it does not prove that the target app completed its UI action. If the tool returns no_handler or launch_failed, report that exact limitation and do not claim the action happened.
+                launchRequested=true means Android accepted the request for dispatch; it does not prove the app became foreground or completed its UI action. An unchanged screen alone does not prove a blocked launch. If the tool returns no_handler or launch_failed, report that exact limitation and do not claim the action happened.
             """.trimIndent(),
             methods = buildList {
                 if (requireUserConfirmation) {
@@ -363,7 +363,7 @@ object AndroidSystemSkills {
                         toolName = "launch_android_app_intent",
                         purpose = "Dispatches a whitelisted Android app-facing Intent such as open_url, camera_capture, dial_phone, open_map, or share_text.",
                         whenToUse = "Use instead of terminal commands whenever the user asks to open or hand data to an Android application.",
-                        resultSemantics = "launched=true means the Intent was dispatched; resolvedPackage identifies the selected Android handler when available."
+                        resultSemantics = "launchRequested=true means Android accepted the request; launchVerified=false means foreground is unconfirmed. launched=true is a compatibility alias, not proof that the target app opened. resolvedPackage identifies a selected handler when available."
                     )
                 )
             }

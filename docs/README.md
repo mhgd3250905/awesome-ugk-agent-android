@@ -1,6 +1,6 @@
 # 项目文档入口
 
-更新时间：2026-09-28
+更新时间：2026-09-29
 适用项目：`awesome-ugk-agent-android`
 源码目录：`E:\AII\ugk-android-new`
 
@@ -45,7 +45,7 @@
 | [android-scheduled-tasks.md](android-scheduled-tasks.md) | Android Agent 定时任务控制面、持久化调度运行时、能力开关和验收边界 |
 | [android-agent-attention.md](android-agent-attention.md) | 可选通知 AAR、重要悬浮提醒的宿主接口、权限与外部接入 |
 | [demo-delayed-conversation.md](demo-delayed-conversation.md) | Demo 当前的单对话延时任务：用户确认、独占等待、到点同会话续跑和进程边界 |
-| [demo-operation-learning-design.md](demo-operation-learning-design.md) | 演示学习：本地录制与完成标准、手动整理/审阅/试跑/再次运行的当前实现、授权与素材边界；1.12.0 内置设置流程已通过本机真实 GLM 验收，聊天召回和定时复用未接入 |
+| [demo-operation-learning-design.md](demo-operation-learning-design.md) | 对话教学：1.13.0通过原悬浮聊天逐段执行与纠正，结束保存本地记录，明确整理后生成可复制经验；已完成快速定向验证，开始前需模型及全授权，旧草稿及1.12.0历史验收保留，不自动重放或安装skill |
 | [android-agent-skills.md](android-agent-skills.md) | 文件型 SKILL.md 运行时、动态加载策略、命名根嵌入和 agent-memory |
 | [sdk-optimization-ledger.md](sdk-optimization-ledger.md) | SDK 架构优化步骤、验证结果和版本影响台账 |
 | [sdk-confirmation-ticket-contract.md](sdk-confirmation-ticket-contract.md) | SDK 确认票据契约：票据生成、绑定与消费的单一事实源 |
@@ -70,7 +70,7 @@
 需要理解实现时，再读 `terminal-runtime-architecture.md`；需要改变方向时，先读并更新 `terminal-runtime-decisions.md`。
 
 涉及 `demo-app` 的聊天或悬浮窗 UI 时，补读 `demo-app-ui-redesign.md` 和
-`demo-app-version-ledger.md`；涉及权限或后台设置引导再读 `demo-app-permission-guide.md`，涉及延时任务再读 `demo-delayed-conversation.md`，涉及演示录制、模型整理或操作复用再读 `demo-operation-learning-design.md`。当前 Demo 源码为 `1.12.0 / 125`，本轮设备和真实 API 验收范围以版本台账为准。这些文档记录宿主 Demo 的产品行为，不改变 Terminal Runtime 的 Gate 结论。
+`demo-app-version-ledger.md`；涉及权限或后台设置引导再读 `demo-app-permission-guide.md`，涉及延时任务再读 `demo-delayed-conversation.md`，涉及演示录制、模型整理或操作复用再读 `demo-operation-learning-design.md`。当前 Demo 源码为 `1.13.0 / 126`，本轮设备和真实 API 验收范围以版本台账为准。这些文档记录宿主 Demo 的产品行为，不改变 Terminal Runtime 的 Gate 结论。
 
 ## 状态标签
 

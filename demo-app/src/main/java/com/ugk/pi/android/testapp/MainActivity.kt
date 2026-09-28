@@ -330,10 +330,7 @@ class MainActivity : ComponentActivity() {
 
     private fun showAttachmentMenu() {
         if (runState.isBusy || importingFile || processingImages || DemoCapabilityInterlock.isScreenOperationOwned()) return
-        val options = arrayOf("拍照", "从相册选择图片", "导入文档/文件", "教我操作")
-        AlertDialog.Builder(this, Ui.dialogTheme())
-            .setTitle("添加与工具")
-            .setItems(options) { _, which ->
+        showAttachmentMenuSheet(this) { which ->
                 when (which) {
                     0 -> openCamera()
                     1 -> openGalleryPicker()
@@ -341,7 +338,6 @@ class MainActivity : ComponentActivity() {
                     3 -> openOperationLearning()
                 }
             }
-            .show()
     }
 
     private fun openGalleryPicker() {
@@ -580,7 +576,7 @@ class MainActivity : ComponentActivity() {
     }
 
     private fun showFloatingWindowIfNeeded() {
-        if (DemoCapabilityInterlock.isScreenOperationOwned()) return
+        if (DemoCapabilityInterlock.isScreenOperationOwned() && !processScope.teachingController.snapshot().active) return
         // The overlay is a background entry point even when no Agent run is
         // active. Without permission, the Activity remains the safe fallback.
         if (AgentOverlayPolicy.shouldShowOnPause(
