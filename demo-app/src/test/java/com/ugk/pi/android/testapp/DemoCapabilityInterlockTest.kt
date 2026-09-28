@@ -17,6 +17,70 @@ import org.junit.Test
 
 class DemoCapabilityInterlockTest {
     @Test
+    fun recordingCannotStartDuringAgentThinkingAndCanStartAfterRunFinishes() {
+        val interlock = DemoCapabilityInterlock(DemoScreenAutomationPolicy::isScreenWorkflowTool)
+        val recorder = Any()
+        try {
+            interlock.onRunStarted()
+            assertFalse(DemoCapabilityInterlock.tryAcquireRecording(recorder))
+            interlock.onRunFinished()
+            assertTrue(DemoCapabilityInterlock.tryAcquireRecording(recorder))
+        } finally {
+            interlock.onRunFinished()
+            DemoCapabilityInterlock.releaseRecording(recorder)
+        }
+    }
+
+    @Test
+    fun recordingCannotBeReleasedOrStolenByAnotherOwner() {
+        val recorder = Any()
+        val interlock = DemoCapabilityInterlock(DemoScreenAutomationPolicy::isScreenWorkflowTool)
+        try {
+            assertTrue(DemoCapabilityInterlock.tryAcquireRecording(recorder))
+            assertFalse(DemoCapabilityInterlock.tryAcquireRecording(Any()))
+            DemoCapabilityInterlock.releaseRecording(Any())
+            interlock.onRunFinished()
+            assertTrue(DemoCapabilityInterlock.isRecordingOwned())
+            assertTrue(runCatching { interlock.onRunStarted() }.isFailure)
+        } finally {
+            DemoCapabilityInterlock.releaseRecording(recorder)
+        }
+        interlock.onRunStarted()
+        interlock.onRunFinished()
+    }
+
+    @Test
+    fun recordingBlocksScreenAndTerminalToolsUntilReleased() = runBlocking {
+        val recorder = Any()
+        val interlock = DemoCapabilityInterlock(DemoScreenAutomationPolicy::isScreenWorkflowTool)
+        val screen = RecordingTool("screen_read_ui_tree")
+        val terminal = RecordingTool("terminal_bash_execute")
+        try {
+            assertTrue(DemoCapabilityInterlock.tryAcquireRecording(recorder))
+            listOf(screen, terminal).forEach { delegate ->
+                val guarded = AgentToolInterlock(delegate, interlock.toolInterlockPolicy())
+                assertTrue(guarded.execute(
+                    ToolCall("blocked", delegate.name, JsonObject(emptyMap())),
+                    ToolExecutionContext(sessionId = "session")
+                ).isError)
+                assertEquals(0, delegate.calls)
+            }
+        } finally {
+            DemoCapabilityInterlock.releaseRecording(recorder)
+        }
+        interlock.onRunStarted()
+        try {
+            assertFalse(AgentToolInterlock(screen, interlock.toolInterlockPolicy()).execute(
+                ToolCall("allowed", screen.name, JsonObject(emptyMap())),
+                ToolExecutionContext(sessionId = "session")
+            ).isError)
+            assertEquals(1, screen.calls)
+        } finally {
+            interlock.onRunFinished()
+        }
+    }
+
+    @Test
     fun workflowToolFinishedDoesNotReleaseOwnershipBeforeRunCompletion() = runBlocking {
         val interlock = DemoCapabilityInterlock(DemoScreenAutomationPolicy::isScreenWorkflowTool)
         val delegate = RecordingTool()

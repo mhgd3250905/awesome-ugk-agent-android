@@ -46,19 +46,28 @@ class ScreenAutomationSkillTest {
     }
 
     @Test
-    fun visualBackendUsesScreenshotFirstAndKeepsBoundedGestureWorkflow() {
+    fun visualBackendChoosesSufficientEvidenceAndKeepsBoundedGestureWorkflow() {
         val skill = ScreenAutomationSkills.accessibilityScreenControl(
             requireUserConfirmation = true,
             includeVisualFallback = true
         )
 
-        assertTrue(skill.instructions.contains("Visual-first workflow"))
-        assertTrue(skill.instructions.contains("At the start of each screen observation cycle"))
-        assertTrue(skill.instructions.contains("Use the View structure tree as supporting evidence"))
+        assertTrue(skill.instructions.contains("without a mandatory screenshot"))
+        assertTrue(skill.instructions.contains("unknown interface"))
+        assertTrue(skill.instructions.contains("unresolved ambiguity"))
+        assertTrue(skill.instructions.contains("do not keep probing the tree blindly"))
+        assertTrue(skill.instructions.contains("One fresh post-action observation may also supply the next step"))
+        assertTrue(skill.instructions.contains("Do not require both a tree and a screenshot"))
+        assertFalse(skill.instructions.contains("At the start of each screen observation cycle"))
         assertTrue(skill.instructions.contains("observationId"))
         assertTrue(skill.instructions.contains("normalized 0..1"))
-        assertTrue(skill.instructions.indexOf("At the start of each screen observation cycle") <
-            skill.instructions.indexOf("Use screen_find_ui_element"))
+        assertTrue(skill.instructions.contains("exact snapshotId and nodeId"))
+        assertTrue(skill.instructions.contains("exact observationId"))
+        assertTrue(skill.instructions.contains("make at most one fresh capture attempt"))
+        assertTrue(skill.instructions.contains("exact next Tool name"))
+        val captureMethod = skill.methods.single { it.toolName == "screen_capture_visual" }
+        assertTrue(captureMethod.whenToUse.contains("unknown interface"))
+        assertFalse(captureMethod.whenToUse.contains("At the start of each"))
         assertEquals(
             setOf(
                 "get_android_accessibility_status",

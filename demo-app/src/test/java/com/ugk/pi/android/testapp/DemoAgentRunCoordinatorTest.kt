@@ -24,6 +24,24 @@ import org.junit.Test
 class DemoAgentRunCoordinatorTest {
 
     @Test
+    fun recordingRejectsNewAgentTurnBeforePublishingBusyOrCallingProvider() {
+        val owner = Any()
+        val coordinator = DemoAgentRunCoordinator(Dispatchers.Unconfined)
+        val initial = coordinator.snapshot()
+        try {
+            assertTrue(DemoCapabilityInterlock.tryAcquireRecording(owner))
+            val result = runCatching {
+                coordinator.start(runtimeReturning("must not run"), AgentSession("recording"), "chat", "hello")
+            }
+            assertTrue(result.isFailure)
+            assertEquals(initial, coordinator.snapshot())
+            assertFalse(coordinator.isRunning())
+        } finally {
+            DemoCapabilityInterlock.releaseRecording(owner)
+        }
+    }
+
+    @Test
     fun overlayQueueIsBounded() {
         val coordinator = DemoAgentRunCoordinator(Dispatchers.Unconfined)
 

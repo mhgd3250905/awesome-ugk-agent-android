@@ -206,6 +206,8 @@ class AgentFloatingWindow(private val context: Context) : ConfirmationOverlayHos
 
     fun isShowing(): Boolean = expandedView != null || collapsedView != null || takeoverView != null
 
+    internal fun hasBlockingPresentation(): Boolean = takeoverView != null || pendingConfirmation != null
+
     /** Temporarily replaces the ordinary bubble/chat surface with an app-owned screen. */
     fun showUrgentMessage(message: UrgentMessage, conversationId: String? = null): UrgentPresentationStatus {
         if (!Settings.canDrawOverlays(context)) return UrgentPresentationStatus.PERMISSION_DENIED

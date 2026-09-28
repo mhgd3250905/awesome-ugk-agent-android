@@ -44,11 +44,11 @@ internal class DemoCapabilityInterlock(
 
     @Synchronized
     override fun onRunStarted() {
-        runActive = true
         // A new run on this instance retires a previous run of the same
         // instance that never reached a terminal boundary. Ownership held
         // by another active instance is never touched.
-        ProcessState.release(this)
+        ProcessState.startRun(this)
+        runActive = true
     }
 
     @Synchronized
@@ -98,8 +98,33 @@ internal class DemoCapabilityInterlock(
      */
     private object ProcessState {
         private val lock = Any()
-        private var owner: DemoCapabilityInterlock? = null
+        private var owner: Any? = null
+        private var recordingOwner: Any? = null
+        private val activeRuns = mutableSetOf<DemoCapabilityInterlock>()
         private var blockingCapability: String? = null
+
+        fun startRun(by: DemoCapabilityInterlock) = synchronized(lock) {
+            check(recordingOwner == null) { "请先结束当前演示录制。" }
+            releaseLocked(by)
+            activeRuns.add(by)
+        }
+
+        fun acquireRecording(by: Any): Boolean = synchronized(lock) {
+            if (owner != null || activeRuns.isNotEmpty()) return false
+            owner = by
+            recordingOwner = by
+            blockingCapability = SCREEN_CAPABILITY
+            true
+        }
+
+        fun releaseRecording(by: Any) = synchronized(lock) {
+            if (recordingOwner === by) {
+                recordingOwner = null
+                releaseLocked(by)
+            }
+        }
+
+        fun isRecordingOwned(): Boolean = synchronized(lock) { recordingOwner != null }
 
         fun interlockDecisionFor(
             requester: DemoCapabilityInterlock,
@@ -119,6 +144,7 @@ internal class DemoCapabilityInterlock(
             val capability = blockingCapability ?: return null
             val requesterIsOwner = owner === requester
             val blocked = when {
+                recordingOwner != null -> workflowToolMatcher(toolName) || toolName in TERMINAL_TOOL_NAMES
                 toolName in TERMINAL_TOOL_NAMES -> requesterIsOwner
                 workflowToolMatcher(toolName) -> !requesterIsOwner
                 else -> false
@@ -126,7 +152,8 @@ internal class DemoCapabilityInterlock(
             if (blocked) {
                 AgentToolInterlockDecision(
                     blockingCapability = capability,
-                    message = "该 Tool 当前不可用，因为 capability '$capability' 正被一个进行中的 Agent Run 持有。"
+                    message = if (recordingOwner != null) "演示录制正在使用屏幕，请先结束录制。"
+                        else "该 Tool 当前不可用，因为 capability '$capability' 正被一个进行中的 Agent Run 持有。"
                 )
             } else {
                 null
@@ -145,6 +172,11 @@ internal class DemoCapabilityInterlock(
         }
 
         fun release(by: DemoCapabilityInterlock) = synchronized(lock) {
+            activeRuns.remove(by)
+            releaseLocked(by)
+        }
+
+        private fun releaseLocked(by: Any) {
             if (owner === by) {
                 owner = null
                 blockingCapability = null
@@ -156,14 +188,19 @@ internal class DemoCapabilityInterlock(
         }
     }
 
-    private companion object {
-        const val SCREEN_CAPABILITY = "android-screen-automation"
+    companion object {
+        /** The recorder shares the exact process lock used by Agent screen tools. */
+        fun tryAcquireRecording(owner: Any): Boolean = ProcessState.acquireRecording(owner)
+        fun releaseRecording(owner: Any) = ProcessState.releaseRecording(owner)
+        fun isRecordingOwned(): Boolean = ProcessState.isRecordingOwned()
+
+        private const val SCREEN_CAPABILITY = "android-screen-automation"
 
         /**
          * Terminal capability tools as exposed by TerminalAgentPlugin (the
          * single source of truth for the names). The owning run's calls to
          * these stay blocked for the whole screen workflow.
          */
-        val TERMINAL_TOOL_NAMES = com.ugk.pi.terminal.skill.TerminalAgentPlugin.TOOL_NAMES
+        private val TERMINAL_TOOL_NAMES = com.ugk.pi.terminal.skill.TerminalAgentPlugin.TOOL_NAMES
     }
 }

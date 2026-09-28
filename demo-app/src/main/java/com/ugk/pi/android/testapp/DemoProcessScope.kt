@@ -19,6 +19,68 @@ class DemoProcessScope private constructor(context: Context) {
     val confirmationPresenter: ActivityUserConfirmationDialogPresenter =
         ActivityUserConfirmationDialogPresenter()
     val overlayController: DemoOverlayController = DemoOverlayController(appContext)
+    private val recordingOwner = Any()
+    private var openDraftAfterFinish: String? = null
+    private val recordingUiOwners = mutableSetOf<Any>()
+    private val recordingOverlay by lazy {
+        DemoOperationRecordingOverlay(
+            appContext,
+            onPauseResume = {
+                if (operationRecorder.snapshot().phase == DemoOperationPhase.RECORDING) operationRecorder.pause()
+                else operationRecorder.resume().onFailure {
+                    android.widget.Toast.makeText(appContext, it.message, android.widget.Toast.LENGTH_LONG).show()
+                }
+            },
+            onFinish = {
+                openDraftAfterFinish = operationRecorder.snapshot().draftId
+                operationRecorder.finish()
+            },
+            onOpen = { openOperationLearning() }
+        )
+    }
+    internal val operationRecorder: DemoOperationRecorder by lazy {
+        DemoOperationRecorder(
+            context = appContext,
+            startBlockReason = {
+                when {
+                    conversationRuntime.runCoordinator.isRunning() -> "请先停止当前任务，再开始演示。"
+                    conversationRuntime.runCoordinator.snapshot().queuedMessages > 0 -> "请先处理或停止排队消息。"
+                    delayedTasks.snapshot() !is DemoDelayedTaskState.Idle -> "请先停止待确认、等待中或执行中的定时任务。"
+                    urgentInteractionDispatcher.hasPending() -> "请先处理悬浮提醒中的操作。"
+                    overlayController.window.hasBlockingPresentation() -> "请先关闭当前提醒或确认窗口。"
+                    else -> null
+                }
+            },
+            acquireScreen = { DemoCapabilityInterlock.tryAcquireRecording(recordingOwner) },
+            releaseScreen = { DemoCapabilityInterlock.releaseRecording(recordingOwner) }
+        ).apply {
+            onCaptureVisibilityChanged = { hidden -> recordingOverlay.setCaptureHidden(hidden) }
+            attach(recordingOwner) { state ->
+                if (state.phase != DemoOperationPhase.IDLE) overlayController.window.hide()
+                overlayController.window.setExternalAutomationMode(
+                    state.phase != DemoOperationPhase.IDLE || conversationRuntime.capabilityInterlock.isCapabilityOwned()
+                )
+                recordingOverlay.bind(state)
+                if (state.phase == DemoOperationPhase.IDLE) {
+                    val id = openDraftAfterFinish
+                    openDraftAfterFinish = null
+                    if (id != null) openOperationLearning(id)
+                }
+            }
+        }
+    }
+
+    internal fun openOperationLearning(draftId: String? = null) {
+        appContext.startActivity(Intent(appContext, DemoOperationLearningActivity::class.java).apply {
+            addFlags(Intent.FLAG_ACTIVITY_NEW_TASK or Intent.FLAG_ACTIVITY_REORDER_TO_FRONT)
+            draftId?.let { putExtra(DemoOperationLearningActivity.EXTRA_DRAFT_ID, it) }
+        })
+    }
+
+    internal fun setOperationUiVisible(owner: Any, visible: Boolean) {
+        if (visible) recordingUiOwners.add(owner) else recordingUiOwners.remove(owner)
+        recordingOverlay.setHostVisible(recordingUiOwners.isNotEmpty())
+    }
     internal val urgentMessagePresenter = DemoUrgentMessagePresenter(overlayController) { sessionId ->
         conversationRuntime.activeConversationId?.takeIf { id ->
             conversationRuntime.sessionFor(id)?.id == sessionId
@@ -44,6 +106,7 @@ class DemoProcessScope private constructor(context: Context) {
                 false
             },
             onStop = {
+                if (DemoCapabilityInterlock.isRecordingOwned()) operationRecorder.finish("用户停止录制")
                 urgentInteractionDispatcher.cancelPending()
                 conversationRuntime.runCoordinator.clearQueue()
                 delayedTasks.stop()

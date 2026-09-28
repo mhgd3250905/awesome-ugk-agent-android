@@ -8,8 +8,8 @@
 - 按 `text`、`content_desc`、`view_id`、`type` 查找可见控件；
 - 识别控件能力、可用 action、状态和屏幕位置；
 - 对节点执行 click、long click、scroll、focus、clear focus、set text；
-- 在视觉后端可用时以当前屏幕截图作为主要观察，并执行有界 tap、long press、swipe；
-- 按需读取 UI 结构树，补充文本、节点能力、输入状态、滚动容器和目标消歧信息；
+- 在视觉后端可用且判断需要图像时观察当前屏幕截图，并执行有界 tap、long press、swipe；
+- 按需读取 UI 结构树，用于可唯一定位和验证的语义动作，以及文本、节点能力、输入状态、滚动容器和目标消歧；
 - 对没有视觉后端的宿主继续使用 UI 结构树工作流；
 - 触发 focused input 的 IME `enter` action；
 - 执行 back、home、recents、notifications、quick settings 等全局动作。
@@ -101,21 +101,21 @@ and capture a fresh observation when required. In the demo host,
 immediately without starting Bash, preventing terminal exploration from
 replacing screen recovery.
 
-## 视觉优先协议
+## 按需观察协议
 
-1. 对支持视觉截图的后端，每个新的屏幕观察周期先调用 `screen_capture_visual`；操作后再获取新截图验证界面状态。模型从截图判断当前界面和可见目标。
+1. 选择足以回答当前问题的新鲜证据。结构树能唯一确定目标或验证本次结果时，使用 `screen_find_ui_element` / `screen_read_ui_tree`；未知界面、纯视觉内容、树信息不足、目标仍有歧义或需要视觉理解时调用 `screen_capture_visual`，不反复盲查树，也不强制每步同时读树和发图。
 2. 截图成功后，模型会收到图片和 `observationId`、包名、屏幕尺寸、旋转角度等元数据；图片不会写入 `AgentSession` 的持久化消息，只附加到紧邻的下一次模型请求。截图会发送给配置的模型，默认确认模式下必须按完整输入确认流程授权。
-3. 按需调用 `screen_find_ui_element` 或 `screen_read_ui_tree` 提供辅助证据，例如精确文字、可编辑状态、支持的节点操作、可滚动容器或目标消歧。每次读取都会生成新的 `snapshotId`，节点操作只能使用同一结果中的最新 `snapshotId` 和 `nodeId`。
+3. 已知 selector 时优先使用 `screen_find_ui_element`，需要层级和更广上下文时使用 `screen_read_ui_tree`。每次读取都会生成新的 `snapshotId`，节点操作只能使用同一结果中的最新 `snapshotId` 和 `nodeId`。动作后的新观察若已提供下一步所需证据且页面未变化，可同时用于下一步，不额外再读一遍或截一张。
 4. 对视觉识别出的坐标目标，模型返回截图对应的 `left/top/right/bottom` 归一化区域（每个值在 `0..1`），再调用 `screen_visual_gesture` 并原样提交最新 `observationId`。语义文字输入和节点操作继续通过结构树与 `screen_perform_action` 完成。
-5. 后端会校验观察 ID、15 秒有效期、前台包名、屏幕尺寸、旋转和目标区域；点击/长按使用区域中心，方向滑动从区域中心开始。执行成功只表示 Android 接受了触摸流，仍必须获取新截图验证。
+5. 后端会校验观察 ID、15 秒有效期、前台包名、屏幕尺寸、旋转和目标区域；点击/长按使用区域中心，方向滑动从区域中心开始。执行成功只表示 Android 接受了触摸流，仍必须获取新观察验证。树能展示完成条件时可以用新鲜 read/find；完成条件需要视觉判断时必须用新截图。没有证据则报告无法验证。
 6. 截图不支持时直接使用结构树工作流；截图失败或超时最多重试一次，之后改用结构树。不要在截图失败时反复重试。
 
 视觉流程不是所有场景的通用突破：Android 30 以下不支持该截图 API；`FLAG_SECURE`、DRM、黑屏/受保护内容可能无法捕获；动画、弹窗或页面切换可能使观察过期；模型也必须支持图片输入。视觉坐标不能替代无障碍节点提供的可靠文本输入。涉及支付、认证、删除等不可逆操作时仍必须让用户确认具体目标。
 
-## 结构树辅助与节点操作协议
+## 结构树与节点操作协议
 
 1. 调用 `get_android_accessibility_status`，只在 `readyForScreenAutomation=true` 时继续。
-2. 视觉后端可用时先观察截图；只有需要语义/节点证据时再读取结构树。纯结构树后端使用 `screen_find_ui_element` 或 `screen_read_ui_tree` 观察界面。
+2. 视觉后端可用时按当前问题选择结构树或截图；后端具备截图能力本身不意味着每步必须发图。纯结构树后端使用 `screen_find_ui_element` 或 `screen_read_ui_tree` 观察界面。
 3. 已知 selector 时使用 `screen_find_ui_element`，需要完整层级时使用 `screen_read_ui_tree`。从同一次结果中选择唯一的 `snapshotId` 和 `nodeId`，并检查 `enabled`、`visibleToUser`、`actions`、
    `clickable`、`scrollable`、`editable`、文本和 bounds。
 4. `screen_perform_action` 必须同时提交该次结果中的原样 `snapshotId` 和 `nodeId`，不得猜路径或复用旧节点。
@@ -129,7 +129,7 @@ content description，避免界面变化后误操作其他节点。
 
 ## 辅助定位和滚动策略
 
-- 视觉后端优先根据截图识别目标。需要消歧时，用唯一 `viewId`、文本/内容描述或 type 与邻近上下文补充判断；多个候选时不得猜测。
+- 用唯一 `viewId`、文本/内容描述或 type 与邻近上下文定位语义目标；树证据不足或需要识别视觉目标时看截图。多个候选时不得猜测。
 - 需要滚动时，可从结构树获取最近的 `scrollable=true` 容器并使用 `scroll_forward` / `scroll_backward`；若树未暴露可靠滚动节点，可依据新截图执行视觉 swipe。
   每次滚动后都获取新观察，再决定下一步。
 - `truncated=true` 不是“目标不存在”的证明；可以缩小 selector、在上限内提高 `max_nodes`，或继续滚动。
@@ -157,3 +157,5 @@ Tool 返回 `success=false` 时，Agent 必须依据错误码恢复，不能仅�
   限制为 1280、JPEG quality 为 80，观察有效期为 15 秒。
 - `screen_press_key` 在 Android API 30 以下不使用未经验证的坐标 fallback，而是返回 `KEY_UNSUPPORTED`。
 - 无障碍服务、宿主 overlay 过滤和生命周期由宿主负责；SDK 只通过 `AccessibilityServiceProvider` 访问当前实例。
+
+2026-09-28 的按需观察调整只改变 Skill、全局指令和工具说明，不改变工具执行、授权、snapshot / observation 校验或截图失败上限。普通 Agent 仍执行模型与工具循环，不等同于已学路径的本地执行器；减少多少截图及耗时需真实任务对照，不能由协议单测推算。

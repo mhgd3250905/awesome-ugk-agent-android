@@ -200,7 +200,7 @@ class ScreenCaptureVisualTool(
     private val failedCapturesBySession = LinkedHashMap<String, Int>()
 
     override val description: String =
-        "Captures the current external screen as the primary visual observation for screen automation and attaches the image to the immediately following model request. The image is sent to the configured model; capture only task-relevant screens."
+        "Captures the current external screen for an unknown interface, visual-only content, insufficient or ambiguous tree evidence, or a judgment requiring visual understanding, and attaches the image to the immediately following model request. Do not add a screenshot when fresh tree evidence already answers the current question. The image is sent to the configured model; capture only task-relevant screens."
 
     override val inputSchema: JsonObject = buildJsonObject {
         put("type", "object")
@@ -220,7 +220,7 @@ class ScreenCaptureVisualTool(
                 metadata = payload,
                 images = listOf(observation.image),
                 imageContext =
-                    "已附带当前屏幕截图。请只根据截图中实际可见内容判断目标；如需操作，必须使用该 observationId，并返回目标区域的 0..1 归一化 left/top/right/bottom。"
+                    "已附带当前屏幕截图。请只根据截图中实际可见内容判断目标；若执行视觉坐标手势，必须使用该 observationId，并返回目标区域的 0..1 归一化 left/top/right/bottom。语义节点操作仍需使用最新结构树中的 snapshotId 和 nodeId。"
             )
         } else {
             val failureCount = if (

@@ -1,11 +1,88 @@
 # demo-app 版本与变更台账
 
 更新时间：2026-09-28
-当前本地测试版本：`1.10.0`（`versionCode 123`）
+当前本地测试版本：`1.11.0`（`versionCode 124`）
 版本范围：仅 `:demo-app`；SDK/AAR 模块版本继续独立维护。
-当前阶段：2026-09-27 的悬浮窗紧凑排版、权限引导与关闭后恢复、可选后台运行建议已获用户验收；2026-09-27/28 第五、六轮 P0 审查修复合并进主干（见下方条目），APK 元数据保持 `1.10.0 / 123` 不变。原 `demo-app-v1.10.0` 标签是本阶段基线，未移动标签或创建新版本标签。
+当前阶段：以 `d7a7bad` 为源码基线保存 `1.11.0 / 124`：视觉调用开销优化、演示录制 Slice A、紧凑浮条与草稿详情布局。相关构建、单测及 API 35 AVD 定向验证通过；用户认可两项 UI 调整并要求本地版本保存。AI 整理、试跑和自动复用尚未实现。既有已合并修复与 UI/权限基线保持原状，原 `demo-app-v1.10.0` 标签未移动，未创建新标签或发布。
 
 发布边界：`1.0.3`、`1.0.4` 已发布到 Play 内部测试轨道；`1.0.5` 的 Play 轨道发布状态无外部观察证据，`1.1.0` 及之后的本地测试版本尚未提交 Play。本地提交或标签不代表 Play 发布，已存在的 `demo-app-v1.0.5@11d764a` 版本边界保持不变。
+
+## 1.11.0 · 2026-09-28 · 本地版本保存
+
+基线为 `main@d7a7bad8162e5d29302cdfafe40011498b5c7fee`。用户在浮条验收后认可详情布局并要求“版本保存”。本条随本地 checkpoint 提交保存，提交主题为 `feat(demo): save v1.11.0 operation recording and draft UI`；版本仍为 `1.11.0 / 124`。没有 push、新 tag、Release 或 Play 发布。
+
+| 范围 | 本次处置与事实来源 |
+| --- | --- |
+| `demo-app` 录制器、采集、存储、界面、服务桥及宿主互斥/派发/测试 | 保存已验证的 Slice A 与两轮 UI 改动；实际采集及恢复边界见演示学习规范 |
+| Demo 计时意图路由、`pi-system-skill-android` 屏幕观察指令与测试 | 保存纯文字路由与按需截图协议；执行授权、目标时效及失败重试上限沿用既有校验 |
+| `README.md`、文档入口、UI/版本/演示/计时/自动化规范 | 对齐 1.11.0、用户反馈和本地保存边界；修正根 README 的 1.10.0 与视觉优先过期描述 |
+| 历史台账、`HANDOVER.md`、Terminal Runtime 文档与 SDK runtime `AGENTS.md` | 保留既有历史与契约；本次未改变终端功能、Core 公共 API 或发布 Gate |
+| `.verify-shots/`、`.playwright-mcp/`、根目录截图、`playstore/`、构建产物和本机配置 | 保留本机内容，排除提交；不清理或覆盖 |
+
+收束前核对了三轮实际验证记录的 **30 个源码/配置/测试文件** SHA-256，全部一致；随后仅更新文档，并移除 Activity 一处空行的多余回车字符，确认其余字符相同，没有逻辑变更。已运行命令与结果为：
+
+```powershell
+# Slice A 最终功能验证
+.\gradlew.bat :demo-app:testDebugUnitTest :pi-system-skill-android:testDebugUnitTest :demo-app:assembleDebug :demo-app:assembleDebugAndroidTest --max-workers=1 --console=plain
+# 紧凑浮条更新后
+.\gradlew.bat :demo-app:assembleDebug :demo-app:assembleDebugAndroidTest --max-workers=1 --console=plain
+adb -s emulator-5554 shell am instrument -w -r -e class com.ugk.pi.android.testapp.OperationRecordingControlsInstrumentedTest com.ugk.pi.agent.test/androidx.test.runner.AndroidJUnitRunner
+# 草稿详情最终更新后
+.\gradlew.bat :demo-app:assembleDebug --max-workers=1 --console=plain
+```
+
+各次构建均通过；现有 JVM XML 重算 Demo **206** + System skill **44** = **250**，0 failure/error/skipped，更新后的控件仪器测试 **1/1**。UI 与采集实测范围见下方三轮记录。最新 APK SHA-256 仍为 `F05E01B51BC7093D52AFAE7A57D0922EF6DF7996D673970D6BE7535CC20CDD0A`；详情验证后原有 7 份草稿哈希一致，临时设备设置已恢复。保存时检查差异、文档链接和显式暂存范围；本机收束证据位于 `.verify-shots/operation-learning-closeout-20260928/`。
+
+没有重跑其他未改动模块的 JVM、Terminal 双宿主/打包 Gate、完整设备/ABI 矩阵或 Release：本阶段只涉及 Demo 与 System skill 观察文案，没有 Core/Terminal 接口或二进制改动，已有相关结果和文件校验足以支撑本地 checkpoint。没有重做模型付费实验或宣称节省比例；模型整理/执行尚未实现，不能作为验收通过项。
+
+下一步先读 `demo-operation-learning-design.md` 与本台账，再推进 Slice B 模型整理、审阅和试跑。保留本机配置、既有用户数据、历史截图与 Play 材料。以下各轮的“未提交”“最终 APK”等表述仅指各自验证时点，当前保存边界以本条为准。
+
+## 1.11.0 · 2026-09-28 · 草稿详情布局补充
+
+草稿详情从文字堆叠改为暖纸摘要卡、双列计数及中性内容卡。空草稿提供小猫头鹰状态与“重新录制”；已有事件用单块时间线呈现。说明和关键画面按需展开，删除移到右上角更多菜单并保留确认；菜单读取失败给出提示，操作前重核草稿与录制状态。仅修改 `DemoOperationLearningActivity.kt`，沿用 `1.11.0 / 124`。
+
+`:demo-app:assembleDebug --max-workers=1 --console=plain` 通过。API 35 AVD 验证浅色正常字号、深色 320dp/1.5 倍字号的空草稿及 7 事件/3 帧草稿，完成导航、说明折叠、关键画面展开、重新录制打开/取消、删除确认后保留的检查。原有 7 份草稿 JSON 哈希均未变化，临时字体、屏幕尺寸、主题及无障碍设置已恢复。此布局调整没有新增或重跑单元/仪器测试，没有调用模型 API。
+
+最新 Debug APK 已保留数据安装至 `emulator-5554`，SHA-256：`F05E01B51BC7093D52AFAE7A57D0922EF6DF7996D673970D6BE7535CC20CDD0A`。截图与验证记录见[草稿详情报告](../.verify-shots/operation-draft-layout-20260928/REPORT.md)。用户随后回复“OK”并要求版本保存，设备未注明；认可及保存边界见上节。以下浮条和初版 Slice A 条目保留各阶段证据。
+
+## 1.11.0 · 2026-09-28 · 紧凑录制浮条补充
+
+根据用户反馈，录制浮条改为约 208×52dp 单行胶囊：左侧呼吸录制点与计时，右侧暂停/继续、结束两个图标，各保留 48dp 点击区域。暂停时指示点静止、时间冻结；动画遵循系统开关并随隐藏/移除停止，保留拖动和截图隐藏。沿用本轮 `1.11.0 / 124`，下节初版记录保留。
+
+`:demo-app:assembleDebug :demo-app:assembleDebugAndroidTest --max-workers=1 --console=plain` 通过；更新后的录制控件仪器测试 1 项通过，覆盖浅深色、1.5 倍字号、208×52dp 尺寸及按钮状态/回调。API 35 AVD 实测呼吸动画、暂停冻结、继续、拖动和结束保存；用户反馈“可以测试通过”，记为浮条调整验收，未指定设备。此 UI 调整未重跑下节 250 项 JVM 测试，也未调用模型 API。
+
+最新 Debug APK 保留数据覆盖安装至 `emulator-5554`，SHA-256：`E30A1ED27979C0EDDA736446FF5A7EEC49344CFEA22BCDCB4D865B31237CCCD6`。证据见[紧凑浮条报告](../.verify-shots/operation-recording-compact-20260928/REPORT.md)。模拟器临时无障碍设置已恢复，既有草稿及新测试草稿保留；未提交、打标签或发布。
+
+## 1.11.0 · 2026-09-28 · 演示录制 Slice A（初版记录）
+
+新增主聊天附件菜单“添加与工具 → 教我操作”：原生暖纸开始卡、API 30+/无障碍/悬浮窗准备入口、可拖动录制条、暂停/继续/结束、本地草稿列表及事件/关键帧回看、明确确认后的删除。名称输入限 120 字符，键盘完成不自动开始。记录说明默认折叠，保留完整证据；从列表打开草稿时从标题开始显示。当前产物是原始事件、页面结构与画面，不称为已学习步骤，不提供 AI 整理或执行按钮。
+
+进程级录制与普通 Agent 共用屏幕 owner；思考中任务、非 Idle 计时、排队消息和交互提醒阻止开始，录制期间禁止另起 Agent/SDK_EVENT、切会话/新建及设置。暂停冻结实际录制时长，失效在途采集；串行检查点和活动标记支持下次启动标为中断，不自动恢复。具体限制与当前代码见[演示学习规范](demo-operation-learning-design.md)。没有启用旧调度器或把 skill 保存当成本地执行。
+
+阶段证据见[本机报告](../.verify-shots/operation-learning-integration-20260928/REPORT.md)：API 35 AVD `SettingsDemo` 草稿为 7 事件、3 帧、85 节点；暂停期间操作 Settings，草稿字节不变；完成自动打开真实草稿。输入页自动暂停且测试输入不入草稿；强制结束进程后保留 3 事件/1 帧并标为中断；关闭无障碍或熄屏会停止并保存。原生控件浅深色、280dp、1.5 倍字号检查通过；1080×1600 短屏下控制可达；App 内隐藏浮条、桌面恢复显示已实测。
+
+部分 Settings 子页由系统隐藏普通 overlay，需回桌面或本 App 暂停/结束，不绕过系统限制。UIAutomator dump 会干扰该 AVD 的录制服务，采集中采用 screencap/自有草稿观察。尚无本版用户真机验收或 Play 发布。本轮 Slice A 未调用外部 API；模拟器临时字号、主题、屏幕尺寸、输入法标记和无障碍状态已恢复，安装和本轮草稿保留。
+
+最终构建命令为 `:demo-app:testDebugUnitTest :pi-system-skill-android:testDebugUnitTest :demo-app:assembleDebug :demo-app:assembleDebugAndroidTest --max-workers=1 --console=plain`，`BUILD SUCCESSFUL`。JVM 测试 Demo **206** + System skill **44** = **250**，0 failure/error/skipped；另有 `OperationRecordingControlsInstrumentedTest` **1 项通过**。新增录制存储/证据关联测试覆盖恢复竞争、缺失/陈旧活动标记、损坏文件保留、受限临时图片回收及跨段/跨包拒绝关联；互斥测试覆盖普通 Agent 思考期及录制期间工具/运行拒绝。
+
+最终 Debug APK 已保留数据覆盖安装到 `emulator-5554`，SHA-256：`CF3A755E19F20F5374187D6290D60D4E95A2766123CE97BF12987A9B74BD5A4C`。代码与测试清单校验值保存在本机报告旁的 `verification.json`；本阶段未提交、推送、打标签或修改真机安装。
+
+## 2026-09-28 · 视觉调用开销优化（先行阶段记录，当时无新版本）
+
+基于 `d7a7bad8162e5d29302cdfafe40011498b5c7fee` 的后续工作树。普通 Agent 改用按需观察协议：新鲜结构树足以定位或验证时可以不截图，未知/纯视觉内容和信息不足时仍使用视觉。结果验证、截图时效、目标校验、确认与失败重试上限保持原边界。截图附带的说明也明确区分视觉坐标手势与结构树语义动作，避免误导模型把所有动作都转为坐标点击。
+
+Demo 的计时意图判断只发文字和附件存在标记，消除分类阶段重复上传图片；主 Agent 的原始请求和图片保持不变。附件内容决定动作或时间时交主 Agent 理解，仍保留计时提案工具。新测试验证请求传递、同步/流式分支和原有重试上限，不代表真实模型的分类准确率已实测。
+
+验证命令（同一工作树，本机既有 Android Studio JBR）：
+
+```powershell
+.\gradlew.bat :demo-app:testDebugUnitTest :demo-app:assembleDebug --max-workers=1 --console=plain
+.\gradlew.bat :pi-system-skill-android:testDebugUnitTest :demo-app:assembleDebug --max-workers=1 --console=plain
+```
+
+均 `BUILD SUCCESSFUL`。最新 XML：Demo `191`、System skill `44`，合计 `235` tests，0 failure/error/skipped；其中新路由器测试 6 项。最终第二次构建包含截图说明的补充修正。`git diff --check` 与文档链接检查通过。没有新增 API 调用、安装、设备操作、提交、标签或发布；现有真机版本保持原状态。本次不修改 Core 公共接口，不宣称已实现本地路径 runner 或已测得时间/费用节省百分比。
+
+这次先行优化时演示页面尚未实现；后续 Slice A 已进入本版录制实现，见上节与[演示学习规范](demo-operation-learning-design.md)。本段测试数和未安装状态仅属于当时的优化阶段，不覆盖后续新增功能。
 
 ## 2026-09-28 · 第五/六轮 P0 审查修复合并（源码基线推进，无新版本）
 

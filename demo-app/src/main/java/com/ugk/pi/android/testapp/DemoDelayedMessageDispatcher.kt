@@ -12,6 +12,7 @@ internal class DemoDelayedMessageDispatcher(
     private val appContext = context.applicationContext
 
     fun dispatch(task: DemoDelayedTask) {
+        check(!DemoCapabilityInterlock.isRecordingOwned()) { "演示录制尚未结束。" }
         val conversationRuntime = processScope.conversationRuntime
         val conversationStore = conversationRuntime.conversationStore
         val coordinator = conversationRuntime.runCoordinator

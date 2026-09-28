@@ -16,16 +16,16 @@ object ScreenAutomationSkills {
         }
         val observationStrategyInstructions = if (includeVisualFallback) {
             """
-                Visual-first workflow (this backend supports screenshots):
-                - At the start of each screen observation cycle, call screen_capture_visual and use the attached current screenshot as the primary evidence for screen state and visible target selection. After a mutating screen action, capture a fresh screenshot to verify the result.
+                Evidence-driven observation workflow (this backend supports screenshots):
+                - When a fresh structure-tree result uniquely establishes the target and relevant success condition, use read/find, a semantic node action, and a fresh result check without a mandatory screenshot. For an unknown interface, visual-only content, insufficient tree evidence, unresolved ambiguity, or a judgment that needs visual understanding, call screen_capture_visual; do not keep probing the tree blindly.
                 - The image is sent to the configured model and is attached only to the immediately following model request. If you query the tree for supporting evidence, carry the visual target description or selector into that query and use its fresh snapshot for semantic actions. If a later decision requires seeing a changed screen, capture a new image. Screenshot capture is a protected cross-app read; follow the exact confirmation flow. Avoid capturing an unchanged frame repeatedly or capturing screens unrelated to the task.
-                - Use the View structure tree as supporting evidence when text, content descriptions, editability, supported actions, scrollable containers, or target disambiguation are useful. Use screen_find_ui_element for a known selector and screen_read_ui_tree when hierarchy or broader context is needed; do not make a full tree read mandatory for every screen.
+                - Choose the observation that answers the current question. Use screen_find_ui_element for a known selector and screen_read_ui_tree when hierarchy or broader context is needed. Do not require both a tree and a screenshot when one supplies sufficient evidence. One fresh post-action observation may also supply the next step's evidence, provided the screen has not changed and its snapshot/observation remains current; do not read or capture again just to begin that next step.
                 - For semantic text entry or a supported node action, obtain a fresh tree result and use its exact snapshotId and nodeId. Inspect enabled, visibleToUser, actions, clickable, scrollable, editable, text, contentDesc, viewId, and bounds. Any new read/find invalidates the previous node target. Never invent or reuse node IDs.
                 - If a node action returns STALE_SNAPSHOT, SNAPSHOT_REQUIRED, NODE_NOT_FOUND, WINDOW_UNAVAILABLE, TARGET_NOT_INTERACTABLE, or ACTION_NOT_SUPPORTED, read/find again and select a fresh target; never retry the same action input.
                 - Use screen_perform_action for supported click, long_click, scroll_forward, scroll_backward, focus, clear_focus, and set_text actions when the current tree confirms the intended node. Use set_text only when the value is explicitly known; an omitted text value never means clear the field. Press Enter only for an explicitly intended submit/search/send/go/done IME action.
                 - A truncated=true tree result does not prove that a visual target is absent. Narrow the selector or use a visible scrollable node; after scrolling, capture a new screenshot before making the next visual decision.
                 - For a visually identified target, return its normalized 0..1 rectangle (left, top, right, bottom) from the latest screenshot and call screen_visual_gesture with that exact observationId. Use the target center for tap/long_press and as the start point for directional swipes. Never convert coordinates from memory or assume a fixed resolution.
-                - The backend rejects missing or stale observations, changed packages, changed screen dimensions/rotation, and invalid bounds. Gesture success only means AccessibilityService accepted the touch stream; verify the visible result with a fresh screenshot.
+                - The backend rejects missing or stale observations, changed packages, changed screen dimensions/rotation, and invalid bounds. Gesture success only means AccessibilityService accepted the touch stream; verify the result with a fresh observation that exposes the success condition. Use a screenshot when that condition needs visual judgment.
                 - If a screenshot is unsupported, use the structure-tree workflow for the rest of the current task and do not capture again. For a transient screenshot failure or timeout, make at most one fresh capture attempt; after a second failure, use the tree for the rest of the current task. Secure/DRM surfaces may be blank; visual coordinates cannot replace semantic text entry when no editable node exists.
             """.trimIndent()
         } else {
@@ -44,7 +44,7 @@ object ScreenAutomationSkills {
         }
         return AndroidSkill(
             id = "android-accessibility-screen-automation",
-            description = "Use the host AccessibilityService to observe Android screens visually, use UI structure as supporting context, and perform verified screen actions.",
+            description = "Use the host AccessibilityService to choose sufficient fresh UI or visual evidence and perform verified screen actions.",
             triggers = listOf(
                 "screen",
                 "ui",
@@ -108,8 +108,8 @@ object ScreenAutomationSkills {
                 - screen_read_ui_tree and screen_find_ui_element are read-only and do not need confirmation.
                 - $confirmationInstruction Full authorization never bypasses target validation.
                 - After every accepted click, long click, text entry, scroll, gesture, key press, or global action, verify
-                  the visible state using a fresh screenshot when visual capture is available, or a fresh read/find
-                  result otherwise. A success=true result means Android accepted the request; it does not prove that
+                  the visible state using a fresh read/find result when it establishes the success condition, or a
+                  fresh screenshot when visual judgment is needed and available. A success=true result means Android accepted the request; it does not prove that
                   the user-visible operation completed. If neither screenshot nor structure tree exposes the result,
                   report that it could not be verified.
                 - If a screen tool returns success=false, follow its structured error and recovery hint. Refresh a stale
@@ -170,7 +170,7 @@ object ScreenAutomationSkills {
                     AndroidSkillMethod(
                         toolName = "screen_capture_visual",
                         purpose = "Captures the current external screen and attaches it to the next model request for visual target identification.",
-                        whenToUse = "At the start of each screen observation cycle and after mutating actions when visual verification is needed; it requires confirmation because screen content is sent to the configured model.",
+                        whenToUse = "For an unknown interface, visual-only content, insufficient or ambiguous tree evidence, or visual verification; skip an extra capture when fresh evidence already answers the question. It requires confirmation because screen content is sent to the configured model.",
                         resultSemantics = "Returns an observationId, screen metadata, and an image attachment. The observation is short-lived and must not be reused after a new capture."
                     )
                 } else {

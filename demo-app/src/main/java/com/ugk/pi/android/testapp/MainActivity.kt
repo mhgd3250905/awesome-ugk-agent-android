@@ -161,7 +161,7 @@ class MainActivity : ComponentActivity() {
     }
 
     private val permissionGuide: DemoPermissionGuideController = DemoPermissionGuideController(this,
-        busy = { runState.isBusy || runCoordinator.isRunning() ||
+        busy = { runState.isBusy || runCoordinator.isRunning() || DemoCapabilityInterlock.isRecordingOwned() ||
             delayedTasks.snapshot() !is DemoDelayedTaskState.Idle ||
             processScope.urgentInteractionDispatcher.hasPending() || importingFile || processingImages || backgroundGuidance.isActive },
         onFinished = { inAppUpdateController.checkOnResume() })
@@ -226,7 +226,10 @@ class MainActivity : ComponentActivity() {
                 // return the enqueue result synchronously so a full queue keeps
                 // the user's draft instead of clearing it optimistically.
                 onSend = { text -> enqueueOverlayMessage(text) },
-                onStop = { runOnUiThread { stopAgent(clearQueuedMessages = true) } },
+                onStop = { runOnUiThread {
+                    if (DemoCapabilityInterlock.isRecordingOwned()) processScope.operationRecorder.finish("用户停止录制")
+                    stopAgent(clearQueuedMessages = true)
+                } },
                 onOpenApp = {
                     runOnUiThread {
                         startActivity(
@@ -326,15 +329,16 @@ class MainActivity : ComponentActivity() {
     }
 
     private fun showAttachmentMenu() {
-        if (runState.isBusy || importingFile || processingImages) return
-        val options = arrayOf("拍照", "从相册选择图片", "导入文档/文件")
+        if (runState.isBusy || importingFile || processingImages || DemoCapabilityInterlock.isRecordingOwned()) return
+        val options = arrayOf("拍照", "从相册选择图片", "导入文档/文件", "教我操作")
         AlertDialog.Builder(this, Ui.dialogTheme())
-            .setTitle("附件与多模态识图")
+            .setTitle("添加与工具")
             .setItems(options) { _, which ->
                 when (which) {
                     0 -> openCamera()
                     1 -> openGalleryPicker()
                     2 -> openFilePicker()
+                    3 -> openOperationLearning()
                 }
             }
             .show()
@@ -489,6 +493,7 @@ class MainActivity : ComponentActivity() {
 
     override fun onResume() {
         super.onResume()
+        processScope.setOperationUiVisible(activityToken, true)
         activityResumed = true
         suppressOverlayForInAppNavigation = false
         applyTheme()
@@ -508,6 +513,10 @@ class MainActivity : ComponentActivity() {
         renderRunState()
         renderDelayedTaskState(delayedTasks.snapshot())
         // Hide the ordinary background-run surface while chat is visible.
+        processScope.operationRecorder.attach(activityToken) {
+            updateComposerState()
+            updateCapabilityBanner()
+        }
         // An urgent takeover remains visible until the user closes it.
         floatingWindow.hideOrdinaryForActivity()
         processScope.urgentInteractionDispatcher.resumePending()
@@ -517,6 +526,7 @@ class MainActivity : ComponentActivity() {
 
     override fun onPause() {
         activityResumed = false
+        processScope.setOperationUiVisible(activityToken, false)
         permissionGuide.onPause()
         backgroundGuidance.onPause()
         super.onPause()
@@ -527,6 +537,8 @@ class MainActivity : ComponentActivity() {
     }
 
     override fun onDestroy() {
+        processScope.setOperationUiVisible(activityToken, false)
+        processScope.operationRecorder.detach(activityToken)
         permissionGuide.release()
         backgroundGuidance.release()
         cancelPendingStreamingRender()
@@ -563,6 +575,7 @@ class MainActivity : ComponentActivity() {
     }
 
     private fun showFloatingWindowIfNeeded() {
+        if (DemoCapabilityInterlock.isRecordingOwned()) return
         // The overlay is a background entry point even when no Agent run is
         // active. Without permission, the Activity remains the safe fallback.
         if (AgentOverlayPolicy.shouldShowOnPause(
@@ -581,6 +594,7 @@ class MainActivity : ComponentActivity() {
         if (!::statusBanner.isInitialized) return
         val config = apiStore.activeConfig()
         val message = when {
+            DemoCapabilityInterlock.isRecordingOwned() -> "正在演示操作，点击查看录制；点击停止可保存草稿"
             config == null -> "还没有配置 API 源，点击这里打开设置"
             authorizationStore.isFullAuthorizationEnabled() ->
                 "全授权模式已开启：高影响操作不会弹出确认"
@@ -594,6 +608,7 @@ class MainActivity : ComponentActivity() {
         statusBanner.setTextColor(Ui.NoticeContent)
         statusBanner.setOnClickListener {
             when {
+                DemoCapabilityInterlock.isRecordingOwned() -> openOperationLearning()
                 config == null -> openSettings()
                 !isAccessibilityEnabled() -> startActivity(Intent(Settings.ACTION_ACCESSIBILITY_SETTINGS))
                 !Settings.canDrawOverlays(this) -> startActivity(
@@ -1095,6 +1110,10 @@ class MainActivity : ComponentActivity() {
     )
 
     private fun openSettings() {
+        if (DemoCapabilityInterlock.isRecordingOwned()) {
+            showInlineNotice("请先结束演示录制")
+            return
+        }
         if (delayedTasks.snapshot() !is DemoDelayedTaskState.Idle) {
             showInlineNotice("请先停止当前定时任务")
             return
@@ -1102,6 +1121,13 @@ class MainActivity : ComponentActivity() {
         hideFloatingWindow()
         suppressOverlayForInAppNavigation = true
         startActivity(Intent(this, SettingsActivity::class.java))
+    }
+
+    private fun openOperationLearning() {
+        if (importingFile || processingImages) return
+        hideFloatingWindow()
+        suppressOverlayForInAppNavigation = true
+        startActivity(Intent(this, DemoOperationLearningActivity::class.java))
     }
 
     private fun refreshRuntime() {
@@ -1151,6 +1177,10 @@ class MainActivity : ComponentActivity() {
     }
 
     private fun sendMessage() {
+        if (DemoCapabilityInterlock.isRecordingOwned()) {
+            processScope.operationRecorder.finish("用户停止录制")
+            return
+        }
         if (delayedTasks.snapshot() !is DemoDelayedTaskState.Idle) {
             stopAgent()
             return
@@ -1271,6 +1301,7 @@ class MainActivity : ComponentActivity() {
     }
 
     private fun enqueueOverlayMessage(text: String): Boolean {
+        if (DemoCapabilityInterlock.isRecordingOwned()) return false
         if (delayedTasks.snapshot() !is DemoDelayedTaskState.Idle) {
             floatingWindow.addLog("请先停止当前定时任务")
             return false
@@ -1292,6 +1323,7 @@ class MainActivity : ComponentActivity() {
     }
 
     private fun startNextQueuedOverlayMessage() {
+        if (DemoCapabilityInterlock.isRecordingOwned()) return
         if (delayedTasks.snapshot() !is DemoDelayedTaskState.Idle) return
         if (processScope.urgentInteractionDispatcher.hasPending()) return
         if (runState.isBusy || runCoordinator.isRunning()) return
@@ -1327,7 +1359,7 @@ class MainActivity : ComponentActivity() {
         attachments: List<DemoImportedFile> = emptyList(),
         images: List<ProcessedImage> = emptyList()
     ): Boolean {
-        if (delayedTasks.snapshot() !is DemoDelayedTaskState.Idle ||
+        if (DemoCapabilityInterlock.isRecordingOwned() || delayedTasks.snapshot() !is DemoDelayedTaskState.Idle ||
             runState.isBusy || runCoordinator.isRunning()
         ) return false
         val currentRuntime = conversationRuntime.agentRuntime ?: return false
@@ -1786,16 +1818,17 @@ class MainActivity : ComponentActivity() {
     private fun updateComposerState() {
         permissionGuide.reconsider()
         val delayOccupied = delayedTasks.snapshot() !is DemoDelayedTaskState.Idle
+        val recording = DemoCapabilityInterlock.isRecordingOwned()
         if (::historyButton.isInitialized) {
-            historyButton.isEnabled = !processingImages && !delayOccupied
-            historyButton.alpha = if (processingImages || delayOccupied) 0.45f else 1f
+            historyButton.isEnabled = !processingImages && !delayOccupied && !recording
+            historyButton.alpha = if (processingImages || delayOccupied || recording) 0.45f else 1f
         }
         if (::settingsButton.isInitialized) {
-            settingsButton.isEnabled = !delayOccupied
-            settingsButton.alpha = if (delayOccupied) 0.45f else 1f
+            settingsButton.isEnabled = !delayOccupied && !recording
+            settingsButton.alpha = if (delayOccupied || recording) 0.45f else 1f
         }
         if (!::sendButton.isInitialized) return
-        val busy = runState.isBusy || delayOccupied
+        val busy = runState.isBusy || delayOccupied || recording
         inputField.isEnabled = !busy && !processingImages
         val hasText = !inputField.text.isNullOrBlank()
         val hasAttachments = pendingImportedFiles.isNotEmpty()
@@ -2275,6 +2308,10 @@ class MainActivity : ComponentActivity() {
     }
 
     private fun selectConversation(id: String) {
+        if (DemoCapabilityInterlock.isRecordingOwned()) {
+            showInlineNotice("请先结束演示录制")
+            return
+        }
         if (delayedTasks.snapshot() !is DemoDelayedTaskState.Idle) {
             showInlineNotice("请先停止当前定时任务")
             return
@@ -2311,6 +2348,10 @@ class MainActivity : ComponentActivity() {
     }
 
     private fun createNewConversation() {
+        if (DemoCapabilityInterlock.isRecordingOwned()) {
+            showInlineNotice("请先结束演示录制")
+            return
+        }
         if (delayedTasks.snapshot() !is DemoDelayedTaskState.Idle) {
             showInlineNotice("请先停止当前定时任务")
             return
@@ -2337,6 +2378,10 @@ class MainActivity : ComponentActivity() {
     }
 
     private fun showConversationHistory() {
+        if (DemoCapabilityInterlock.isRecordingOwned()) {
+            showInlineNotice("请先结束演示录制")
+            return
+        }
         if (delayedTasks.snapshot() !is DemoDelayedTaskState.Idle) {
             showInlineNotice("请先停止当前定时任务")
             return

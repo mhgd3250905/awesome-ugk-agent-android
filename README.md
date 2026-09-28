@@ -13,7 +13,7 @@ Android Agent Runtime SDK：提供通用 Agent 工具循环、Android Skill，�
 - v1 不支持、不打包、不宣称 Node.js、Git、OpenSSH、jq。
 - Runtime 无 UI，不要求安装 Termux 或第二个 App；它与宿主共享 Android UID，不是安全沙箱。
 - `pi-system-skill-android` 提供白名单 Android 原生 Intent Tool；打开网页、相机、拨号、地图、分享等动作不通过终端执行。
-- `demo-app` 当前源码版本为本地测试 `1.10.0`（`versionCode 123`），包含视觉优先屏幕自动化、单对话单次/周期计时任务、重要提醒按钮与表单。计时提案从底部请求确认，等待倒计时从顶部显示；主聊天以一行进展及可展开的工具记录呈现过程，后台悬浮对话复用同一组件并采用紧凑字号和间距。进入 App 时按实际状态引导缺失权限，系统不再询问时提供设置入口；后台耗电、自启动另作可跳过的建议。周期任务每轮结果写回后才重新等待完整间隔。2026-09-27 补充阶段已获用户真机反馈“测试通过”；验证范围和原版本标签边界见 [`docs/demo-app-version-ledger.md`](docs/demo-app-version-ledger.md)。本版本尚未提交 Play。
+- `demo-app` 当前源码版本为本地测试 `1.11.0`（`versionCode 124`）。屏幕自动化按需要选择新鲜结构树或截图，计时意图路由只发送文字；单对话单次/周期计时、重要提醒及已有聊天/权限体验保持原有边界。新增“添加与工具 → 教我操作”：本地演示录制、单行悬浮控制条、草稿与事件/关键画面回看。AI 整理、试跑和自动复用尚未实现。浮条和草稿详情调整已获用户认可并要求本地保存；验证范围和历史版本边界见 [`docs/demo-app-version-ledger.md`](docs/demo-app-version-ledger.md)。本版本尚未提交 Play。
 - 2026-08-29 已完成快速迭代后的模块化架构收敛：生命周期、配置、Provider、会话、transcript、capability assembly 与 Terminal/Screen interlock 均有单一 owner；本机 JVM、Debug/Release 构建和 Terminal 包验收通过，设备/发布矩阵仍未关闭。
 
 ## 模块
@@ -46,7 +46,9 @@ Windows PowerShell：
 
 当前 Demo 真机验证使用用户授权的小米 `QSG6Q8IFDMDELVGQ`，操作前按序列号复核设备。2026-09-27 13:55（Asia/Shanghai）最新 `1.10.0 / 123` Debug APK 已在确认没有活动计时任务后以 `adb install -r` 保留数据覆盖安装，版本和进程已核对；用户随后反馈“可以了 测试通过”。最终构建、179 项 JVM 和 API 35 上 12 项定向仪器测试通过，具体范围与 APK 校验值见版本台账；该结论不代表长期后台常驻。[`HANDOVER.md`](HANDOVER.md) 是 2026-09-01 的历史快照，里面的设备、版本和权限描述不代表当前授权。
 
-2026-09-27/28 第五、六轮 P0 审查修复已合并进主干（PR #7 20 项、PR #8 5 项，见版本台账与 [`docs/terminal-runtime-validation.md`](docs/terminal-runtime-validation.md) §31）；`1.10.0 / 123` 的上述验收对应合并前的 `2f5a56c` 构建。合并后主干门禁为全模块 JVM `630` tests / `3` skipped / 0 failure、API 35 仪器测试 `62/62`；APK 元数据未变，尚未提交 Play。
+2026-09-27/28 第五、六轮 P0 审查修复已合并进主干（PR #7 20 项、PR #8 5 项，见版本台账与 [`docs/terminal-runtime-validation.md`](docs/terminal-runtime-validation.md) §31）；`1.10.0 / 123` 的上述验收对应合并前的 `2f5a56c` 构建。当时合并后门禁为全模块 JVM `630` tests / `3` skipped / 0 failure、API 35 仪器测试 `62/62`，当时 APK 元数据未变。该记录不替代后续阶段的验证。
+
+2026-09-28 的 `1.11.0 / 124` 在 API 35 AVD 验证本地录制、恢复、暂停、关键画面和草稿 UI；相关 JVM 测试 Demo 206 + System skill 44 = 250 项通过，录制控件仪器测试 1 项通过。最后两轮 UI 调整分别完成构建和实际布局检查，完整命令、源码校验值及范围见版本台账。本轮未操作上述真机，也未重跑无改动的 Terminal Runtime Gate；本地保存不代表 Play 发布。
 
 ## 文档入口
 
@@ -62,6 +64,7 @@ Windows PowerShell：
 - [`docs/demo-app-ui-redesign.md`](docs/demo-app-ui-redesign.md)：demo-app 聊天、过程、输入和悬浮窗的当前交互基线与验收记录；
 - [`docs/demo-app-permission-guide.md`](docs/demo-app-permission-guide.md)：权限申请、关闭后恢复、通知分类核对及可选后台运行建议；
 - [`docs/demo-app-version-ledger.md`](docs/demo-app-version-ledger.md)：demo-app 版本、变更和验收台账；
+- [`docs/demo-operation-learning-design.md`](docs/demo-operation-learning-design.md)：本地演示录制/草稿事实源，以及整理、试跑和复用的后续设计；
 - [`docs/android-accessibility-screen-automation.md`](docs/android-accessibility-screen-automation.md)：Android Accessibility 屏幕自动化 Tool/Skill、宿主接入和验证边界；
 - [`docs/android-clipboard.md`](docs/android-clipboard.md)：Android 文本剪贴板 Tool/Skill、确认策略、隐私和 API 限制。
 - [`docs/android-scheduled-tasks.md`](docs/android-scheduled-tasks.md)：定时任务控制面、Android 运行时适配、能力边界和验收方法。

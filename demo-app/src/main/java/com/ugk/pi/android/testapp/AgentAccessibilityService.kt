@@ -10,9 +10,12 @@ class AgentAccessibilityService : AccessibilityService() {
         trackedExternalAccessibilityPackage(event?.packageName, packageName)?.let {
             activePackageName = it
         }
+        DemoProcessScope.get(this).operationRecorder.onAccessibilityEvent(this, event)
     }
 
-    override fun onInterrupt() {}
+    override fun onInterrupt() {
+        DemoProcessScope.get(this).operationRecorder.onServiceUnavailable()
+    }
 
     companion object {
         @Volatile
@@ -40,6 +43,7 @@ class AgentAccessibilityService : AccessibilityService() {
     }
 
     override fun onDestroy() {
+        DemoProcessScope.get(this).operationRecorder.onServiceUnavailable()
         super.onDestroy()
         running = false
         instance = null
