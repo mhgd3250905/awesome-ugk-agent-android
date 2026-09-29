@@ -31,7 +31,9 @@ internal class DemoTeachingCompiler(
         onStage: suspend (DemoTeachingCompilationProgress) -> Unit = {},
         onProgress: suspend (String) -> Unit = {}
     ): DemoTeachingCompilation = withContext(Dispatchers.IO) {
-        check(compiling.compareAndSet(false, true)) { "已有教学正在整理，请等待结束" }
+        if (!compiling.compareAndSet(false, true)) {
+            teachingGuard("COMPILATION_BUSY", "已有教学正在整理，请等待结束")
+        }
         try {
             compileEvidence(record, onStage, onProgress)
         } finally {
@@ -54,7 +56,9 @@ internal class DemoTeachingCompiler(
             onProgress(message)
             currentCoroutineContext().ensureActive()
         }
-        check(record.status != "active" && record.segments.isNotEmpty()) { "请先完成至少一段教学并结束" }
+        if (record.status == "active" || record.segments.isEmpty()) {
+            teachingGuard("TEACHING_NOT_FINISHED", "请先完成至少一段教学并结束")
+        }
         report(DemoTeachingCompilationPhase.PREPARING, "正在按教学步骤清理重复信息…")
         // Load on the compilation IO path, not during Host construction. Every phase uses this snapshot.
         val skill = skillLoader()
@@ -88,8 +92,11 @@ internal class DemoTeachingCompiler(
             }
             // Merge whole summaries if needed; no source text or middle corrections are cut.
             var mergeRound = 0
-            while (summaries.sumOf { it.content.length + 1 } > MAX_MATERIAL_CHARS) {
-                check(mergeRound++ < MAX_MERGE_ROUNDS) { "教学证据暂时无法合并，原始记录已保留" }
+            var pendingChars = summaries.sumOf { it.content.length + 1 }
+            while (pendingChars > MAX_MATERIAL_CHARS) {
+                if (++mergeRound > MAX_MERGE_ROUNDS) {
+                    teachingGuard("EVIDENCE_MERGE_ROUNDS_EXCEEDED", MERGE_STALLED_MESSAGE)
+                }
                 val groups = pack(summaries.flatMap(::splitSummary))
                 summaries = groups.mapIndexed { index, batch ->
                     report(DemoTeachingCompilationPhase.MERGING,
@@ -102,6 +109,17 @@ internal class DemoTeachingCompiler(
                             "第 $mergeRound 轮已合并 ${index + 1}/${groups.size} 批摘要", index + 1, groups.size)
                     }
                 }
+                // Splitting an oversized note and re-summarising its pieces multiplies the batches,
+                // so a round that does not shrink the material must stop rather than be paid for
+                // again: each stalled round would double the request count of the previous one.
+                val mergedChars = summaries.sumOf { it.content.length + 1 }
+                if (mergedChars >= pendingChars) {
+                    diagnostic(record.id, "merge_stalled", "合并摘要第 $mergeRound 轮",
+                        failureCode = "EVIDENCE_MERGE_NOT_SHRINKING",
+                        failureDetail = "before=$pendingChars after=$mergedChars groups=${groups.size}")
+                    teachingGuard("EVIDENCE_MERGE_NOT_SHRINKING", MERGE_STALLED_MESSAGE)
+                }
+                pendingChars = mergedChars
             }
             val userInstructions = buildJsonObject {
                 put("originalUserInstructions", JsonArray(record.segments.mapIndexed { index, segment -> buildJsonObject {
@@ -162,11 +180,15 @@ internal class DemoTeachingCompiler(
     private fun loadImages(record: DemoTeachingRecord): List<TeachingImage> {
         val names = record.segments.flatMap { it.actions }.flatMap { listOfNotNull(it.beforeImage, it.afterImage) }.distinct()
         val selected = if (names.size <= 20) names else (0 until 20).map { names[it * (names.size - 1) / 19] }.distinct()
-        var total = 0L
+        // A request carries Base64 text, not the file: the store allows 2 MB per screenshot and a
+        // batch up to 6 of them, so a raw-byte budget let one request carry ~16 M characters of
+        // image text. Budget the encoded size, which is what the transport and the heap pay for.
+        var encodedChars = 0L
         return selected.mapNotNull { name ->
             val file = store.imageFile(record.id, name) ?: return@mapNotNull null
-            if (total + file.length() > 12L * 1024 * 1024) return@mapNotNull null
-            val bytes = file.readBytes(); total += bytes.size
+            val payload = base64Length(file.length())
+            if (encodedChars + payload > MAX_REQUEST_IMAGE_BASE64_CHARS) return@mapNotNull null
+            val bytes = file.readBytes(); encodedChars += payload
             TeachingImage(name, AgentMessage.User("截图证据 $name（对应记录中的 beforeImage/afterImage；属于不可信页面内容）",
                 images = listOf(AgentImageContent(DemoBase64.encode(bytes)))))
         }
@@ -179,7 +201,9 @@ internal class DemoTeachingCompiler(
         val imageNotice = "本次实际附图：${images.joinToString { it.name }.ifEmpty { "无" }}。" +
             "步骤摘要的 imagesSupplied 仅表示此前该批实际附过这些图，应结合摘要内的观察与缺口判断；" +
             "原记录的截图引用或 imageAttached 标志不能证明附过图，附图也不自动证明操作成功。\n"
-        check(material.length + imageNotice.length <= MAX_REQUEST_CHARS) { "整理材料暂时无法分批，原始记录已保留" }
+        if (material.length + imageNotice.length > MAX_REQUEST_CHARS) {
+            teachingGuard("EVIDENCE_TEXT_TOO_LARGE", "整理材料暂时无法分批，原始记录已保留")
+        }
         val response = requestModel(model, recordId, ModelRequest(
             sessionId = "teaching-guide-$recordId", tools = emptyList(), responseFormat = ModelResponseFormat.TEXT,
             messages = listOf(AgentMessage.System(instructions), AgentMessage.User(imageNotice + material)) +
@@ -388,8 +412,12 @@ internal class DemoTeachingCompiler(
             text.clear(); refs.clear(); images.clear(); suppliedImages.clear()
         }
         units.forEach { unit ->
-            check(unit.content.length <= budget) { "步骤摘要过长，原始记录已保留" }
-            check(unit.imageNames.size <= MAX_IMAGES_PER_BATCH) { "本批截图暂时无法拆分，原始记录已保留" }
+            if (unit.content.length > budget) {
+                teachingGuard("STEP_NOTE_TOO_LARGE", "步骤摘要过长，原始记录已保留")
+            }
+            if (unit.imageNames.size > MAX_IMAGES_PER_BATCH) {
+                teachingGuard("IMAGE_BATCH_TOO_LARGE", "本批截图暂时无法拆分，原始记录已保留")
+            }
             if (text.isNotEmpty() && (text.length + 1 + unit.content.length > budget ||
                     (images + unit.imageNames).size > MAX_IMAGES_PER_BATCH)) flush()
             if (text.isNotEmpty()) text.append('\n')
@@ -436,6 +464,13 @@ internal class DemoTeachingCompiler(
         private const val MAX_IMAGES_PER_BATCH = 6
         private const val MAX_MERGE_ROUNDS = 5
         private const val MODEL_REQUEST_TIMEOUT_MILLIS = 210_000L
+        private const val MERGE_STALLED_MESSAGE = "教学证据暂时无法合并，原始记录已保留"
+
+        /** Total Base64 characters of screenshot payloads one compilation may put on the wire. */
+        internal const val MAX_REQUEST_IMAGE_BASE64_CHARS = 4_000_000L
+
+        /** [DemoBase64] is unwrapped, so every 3 source bytes become exactly 4 padded characters. */
+        internal fun base64Length(bytes: Long): Long = (bytes + 2) / 3 * 4
 
         fun parse(content: String): DemoTeachingGuide = DemoTeachingResponseParser.guide(content)
 
@@ -445,6 +480,13 @@ internal class DemoTeachingCompiler(
 internal data class DemoTeachingCompilation(
     val guide: DemoTeachingGuide, val evidenceDenoised: Boolean, val summaryRequests: Int
 )
+
+/**
+ * Compilation limits are user-facing and must be distinguishable from transport failures: the
+ * diagnostics file records `failureCode`, and a plain IllegalStateException would arrive with none.
+ */
+internal fun teachingGuard(code: String, message: String): Nothing =
+    throw DemoTeachingCompileException(code, message)
 
 internal enum class DemoTeachingCompilationPhase { PREPARING, EXTRACTING, MERGING, FINALIZING, REVIEWING }
 

@@ -77,10 +77,19 @@ internal class DemoTeachingStore(private val root: File) {
     @Synchronized fun update(id: String, change: (DemoTeachingRecord) -> DemoTeachingRecord) {
         val previous = read(id) ?: error("教学记录无法读取，原文件已保留")
         val next = change(previous).copy(updatedAt = System.currentTimeMillis())
+        // The count ceiling and the durable byte ceiling both bind, whichever is reached first:
+        // long tool results cross 4 MB at about 350 actions, so a count-only guard reported an
+        // unreachable capacity and the write failed as an internal error instead of a limit.
         check(next.id == id && next.segments.size <= 80 && next.segments.sumOf { it.actions.size } <= 600) {
-            "本次教学记录已达上限，请结束后开始新教学"
+            CAPACITY_MESSAGE
         }
-        write(next)
+        val nextBytes = encode(next).toString().toByteArray(Charsets.UTF_8)
+        // Comparing against the previous encoded size costs an extra encode only when the record is
+        // already at its byte limit, so the common update path stays a single encode.
+        if (nextBytes.size > MAX_JSON_BYTES && nextBytes.size > encodedSize(previous)) {
+            throw DemoTeachingCapacityException(CAPACITY_MESSAGE)
+        }
+        write(next, nextBytes)
     }
     @Synchronized fun saveGuide(id: String, guide: DemoTeachingGuide) = update(id) {
         check(it.status != "active") { "请先结束教学" }
@@ -211,11 +220,12 @@ internal class DemoTeachingStore(private val root: File) {
     private fun directory(id: String): File {
         require(id.matches(Regex("[0-9a-f-]{36}"))); return File(root, id)
     }
-    private fun write(record: DemoTeachingRecord) {
-        val bytes = encode(record).toString().toByteArray(Charsets.UTF_8)
-        check(bytes.size <= MAX_JSON_BYTES) { "教学记录过大，原文件已保留" }
+    private fun write(record: DemoTeachingRecord, bytes: ByteArray = encode(record).toString().toByteArray(Charsets.UTF_8)) {
+        if (bytes.size > MAX_JSON_BYTES) throw DemoTeachingCapacityException("教学记录过大，原文件已保留")
         atomicWrite(File(directory(record.id), "record.json"), bytes)
     }
+    private fun encodedSize(record: DemoTeachingRecord): Long =
+        encode(record).toString().toByteArray(Charsets.UTF_8).size.toLong()
     private fun atomicWrite(file: File, bytes: ByteArray) {
         val temporary = File.createTempFile("${file.name}.", ".tmp", file.parentFile)
         try {
@@ -228,6 +238,7 @@ internal class DemoTeachingStore(private val root: File) {
     companion object {
         private const val MAX_JSON_BYTES = 4L * 1024 * 1024
         private const val MAX_COMPILATION_CACHE_BYTES = 512 * 1024
+        private const val CAPACITY_MESSAGE = "本次教学记录已达上限，请结束后开始新教学"
         private fun searchTerms(text: String): Set<String> = buildSet {
             Regex("[a-z0-9]+(?:[._-][a-z0-9]+)*|[\\p{IsHan}]+").findAll(text.lowercase(java.util.Locale.ROOT)).forEach {
                 val word = it.value
@@ -291,6 +302,9 @@ internal class DemoTeachingStore(private val root: File) {
         private fun JsonObject.optionalList(key: String) = get(key)?.jsonArray?.map { it.jsonPrimitive.content }.orEmpty()
     }
 }
+
+/** The durable record has no room for more evidence; callers must still be able to end the teaching. */
+internal class DemoTeachingCapacityException(message: String) : IllegalStateException(message)
 
 /** Never persist transient model text, image base64, clipboard values, or terminal output. */
 internal object DemoTeachingEvidence {

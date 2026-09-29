@@ -692,37 +692,23 @@ class DemoOperationLearningActivity : Activity() {
         loadContent()
         updateBusyControls()
         teachingCompilationJob = uiScope.launch {
-            var ownsCompilation = false
             var guideSaved = false
             try {
-                val current = withContext(Dispatchers.IO) {
-                    var claimed: DemoTeachingRecord? = null
-                    process.teachingStore.update(id) {
-                        check(it.status != "active" && it.compilationStatus != "compiling") { "教学记录正在使用，请稍后重试" }
-                        claimed = it
-                        it.copy(compilationStatus = "compiling")
+                DemoTeachingCompilationClaim.withClaim(process.teachingStore, id) { current ->
+                    val compilation = process.teachingCompiler.compileWithReport(current, onStage = { stage ->
+                        withContext(Dispatchers.Main.immediate) { processing.render(stage) }
+                    })
+                    currentCoroutineContext().ensureActive()
+                    processing.saving()
+                    // Once atomic saving starts, cancellation cannot relabel the saved guide as failed.
+                    withContext(kotlinx.coroutines.NonCancellable + Dispatchers.IO) {
+                        process.teachingStore.saveGuide(id, compilation.guide)
+                        guideSaved = true
                     }
-                    ownsCompilation = true
-                    checkNotNull(claimed)
-                }
-                val compilation = process.teachingCompiler.compileWithReport(current, onStage = { stage ->
-                    withContext(Dispatchers.Main.immediate) { processing.render(stage) }
-                })
-                currentCoroutineContext().ensureActive()
-                processing.saving()
-                // Once atomic saving starts, cancellation cannot relabel the saved guide as failed.
-                withContext(kotlinx.coroutines.NonCancellable + Dispatchers.IO) {
-                    process.teachingStore.saveGuide(id, compilation.guide)
-                    guideSaved = true
                 }
                 processing.dismiss()
                 if (!isDestroyed) notice("最佳实践已整理并保存")
             } catch (error: Exception) {
-                if (ownsCompilation && !guideSaved) withContext(kotlinx.coroutines.NonCancellable + Dispatchers.IO) {
-                    runCatching { process.teachingStore.update(id) {
-                        if (it.compilationStatus == "compiling") it.copy(compilationStatus = "failed") else it
-                    } }
-                }
                 if (!isDestroyed) when {
                     guideSaved -> { processing.dismiss(); notice("最佳实践已整理并保存") }
                     error is kotlinx.coroutines.CancellationException -> processing.dismiss()
