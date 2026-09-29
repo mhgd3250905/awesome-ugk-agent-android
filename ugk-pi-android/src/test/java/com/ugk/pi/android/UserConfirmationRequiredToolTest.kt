@@ -437,6 +437,45 @@ class UserConfirmationRequiredToolTest {
     }
 
     @Test
+    fun doesNotSuppressConfirmationForADifferentInputAfterAnUnansweredDialog() = runBlocking {
+        // A dialog shown for input A closed without a user decision. When the
+        // model then attempts the same tool with a different input B, the
+        // unanswered A dialog must not suppress the confirmation prompt for B:
+        // the model should be told to confirm B, not that "the user could not
+        // be reached".
+        val delegate = RecordingTool()
+        val inputA = buildJsonObject { put("target", "open_url_a") }
+        val inputB = buildJsonObject { put("target", "open_url_b") }
+        val tool = UserConfirmationRequiredTool(delegate, nowEpochMillis = { NOW })
+        val unansweredA = AgentMessage.Tool(
+            unresolvedResult(SESSION, tool.name, inputA)
+        )
+        val envelopeB = AgentMessage.Assistant(
+            content = "",
+            toolCalls = listOf(ToolCall("intent-b", tool.name, inputB))
+        )
+
+        val result = tool.execute(
+            ToolCall("intent-b", tool.name, inputB),
+            ToolExecutionContext(
+                sessionId = SESSION,
+                priorMessages = listOf(unansweredA, envelopeB)
+            )
+        )
+
+        assertTrue(result.isError)
+        assertFalse(delegate.executed)
+        assertFalse(
+            "an unanswered dialog for input A must not suppress confirmation for input B, got: ${result.content}",
+            result.content.contains("without a user decision")
+        )
+        assertTrue(
+            "the model should be told to confirm input B, got: ${result.content}",
+            result.content.contains("User confirmation required")
+        )
+    }
+
+    @Test
     fun confirmationResultCannotBeReusedAfterDelegateResultIsAppended() = runBlocking {
         val delegate = RecordingTool()
         val input = buildJsonObject { put("target", "open_url") }
@@ -478,6 +517,25 @@ class UserConfirmationRequiredToolTest {
             name = "show_user_confirmation_dialog",
             content = buildJsonObject {
                 put("selectedButtonId", selectedButtonId)
+                put("ticket", ticket.toJsonObject())
+            }.toString()
+        )
+    }
+
+    private fun unresolvedResult(
+        sessionId: String,
+        toolName: String,
+        input: JsonObject,
+        issuedAt: Long = NOW,
+        expiresAt: Long = NOW + UserConfirmationTicket.DEFAULT_TTL_MILLIS
+    ): ToolResult {
+        val ticket = confirmationTicket(sessionId, toolName, input, issuedAt, expiresAt)
+        return ToolResult(
+            toolCallId = "dialog-1",
+            name = "show_user_confirmation_dialog",
+            content = buildJsonObject {
+                put("selectedButtonId", "cancel")
+                put("withoutUserDecision", true)
                 put("ticket", ticket.toJsonObject())
             }.toString()
         )

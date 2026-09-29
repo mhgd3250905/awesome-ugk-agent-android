@@ -225,6 +225,54 @@ class LocalHttpServerManagerTest {
         }
     }
 
+    @Test
+    fun tokenAttributionCheckKeepsLegacyBehaviorForBlankToken() {
+        // Pre-existing contract: records written before token gating have no
+        // token, and attribution for them stays a bare connectivity check.
+        val server = FakeHttpServer { _ -> 404 }
+        try {
+            assertTrue(LocalHttpServerManager.isTokenServed(server.port, ""))
+            assertTrue(LocalHttpServerManager.isTokenServed(server.port, "   "))
+        } finally {
+            server.stop()
+        }
+    }
+
+    @Test
+    fun tokenAttributionCheckFailsClosedWhenANegativeProbeCannotConnect() {
+        // The token probe answers 200, then the responder vanishes before the
+        // decoy probe: a probe that cannot connect must fail closed, not be
+        // skipped or treated as "not 200".
+        val serverSocket = java.net.ServerSocket(0, 4, java.net.InetAddress.getByName("127.0.0.1"))
+        val port = serverSocket.localPort
+        val thread = Thread {
+            // Serve exactly one probe (the real-token probe), then disappear.
+            val client = runCatching { serverSocket.accept() }.getOrNull()
+            runCatching {
+                client?.let {
+                    val reader = it.getInputStream().bufferedReader()
+                    reader.readLine()
+                    var line: String?
+                    do { line = reader.readLine() } while (!line.isNullOrEmpty())
+                    it.getOutputStream().write(
+                        "HTTP/1.0 200 X\r\nContent-Length: 2\r\nConnection: close\r\n\r\nok".toByteArray()
+                    )
+                    it.close()
+                }
+            }
+            runCatching { serverSocket.close() }
+        }.apply { isDaemon = true; start() }
+        try {
+            assertFalse(
+                "a vanished responder must fail the attribution check",
+                LocalHttpServerManager.isTokenServed(port, "good-token")
+            )
+        } finally {
+            runCatching { serverSocket.close() }
+            thread.join(2000)
+        }
+    }
+
     /** Minimal single-thread HTTP responder for the attribution helper. */
     private class FakeHttpServer(private val statusFor: (String) -> Int) {
         val port: Int
