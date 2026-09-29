@@ -13,7 +13,8 @@ Android Agent Runtime SDK：提供通用 Agent 工具循环、Android Skill，�
 - v1 不支持、不打包、不宣称 Node.js、Git、OpenSSH、jq。
 - Runtime 无 UI，不要求安装 Termux 或第二个 App；它与宿主共享 Android UID，不是安全沙箱。
 - `pi-system-skill-android` 提供白名单 Android 原生 Intent Tool；打开网页、相机、拨号、地图、分享等动作不通过终端执行。
-- `demo-app` 当前源码版本为本地测试 `1.13.0`（`versionCode 126`）。“教我操作”要求已配置模型、用户开启全授权、无障碍服务连接和悬浮窗权限；分段对话由 Agent 执行，结束后用户可明确整理经验。普通对话可检索相近经验，读取前询问用户；不按旧坐标重放。旧录制草稿与工作流保留。当前行为和证据见[对话教学规范](docs/demo-operation-learning-design.md)与[版本台账](docs/demo-app-version-ledger.md)。`1.13.0 (126)` 已于 2026-09-29 发布到 Play 内部测试轨道，封闭测试轨道同日送审；轨道状态与发布边界以版本台账为准。
+- `demo-app` 当前源码版本保持 `1.13.0`（`versionCode 126`）。“教我操作”要求已配置模型、用户开启全授权、无障碍服务连接和悬浮窗权限；分段对话由 Agent 执行，结束后用户可明确整理经验。普通对话可检索相近经验，读取前询问用户；不按旧坐标重放。旧录制草稿与工作流保留。当前行为和证据见[对话教学规范](docs/demo-operation-learning-design.md)与[版本台账](docs/demo-app-version-ledger.md)。`1.13.0 (126)` 已于 2026-09-29 发布到 Play 内部测试轨道，封闭测试轨道同日送审；轨道状态与发布边界以版本台账为准。
+- 2026-09-29 至 09-30 的教学整理改进包含按步骤去噪、长记录分批与检查点、整理界面、自然语言 SOP 和独立 Agent 审核，以及内置 `teaching-sop-author` 整理 Skill。这些后续改动尚未发布到 Play；最新专用 Skill 流程的真实模型手测仍待完成，构建和安装结果不能替代模型验证。
 - 2026-08-29 已完成快速迭代后的模块化架构收敛：生命周期、配置、Provider、会话、transcript、capability assembly 与 Terminal/Screen interlock 均有单一 owner；本机 JVM、Debug/Release 构建和 Terminal 包验收通过，设备/发布矩阵仍未关闭。
 
 ## 模块

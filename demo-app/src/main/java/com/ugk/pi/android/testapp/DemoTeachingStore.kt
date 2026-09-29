@@ -11,16 +11,21 @@ internal data class DemoTeachingGuide(
     val title: String, val goal: String, val prerequisites: List<String>, val steps: List<String>,
     val corrections: List<String>, val completionChecks: List<String>, val uncertainties: List<String>,
     val intentAliases: List<String> = emptyList(), val targetApps: List<String> = emptyList(),
-    val notApplicable: List<String> = emptyList()
+    val notApplicable: List<String> = emptyList(),
+    val document: String = ""
 ) {
     fun readableText(): String = buildString {
-        appendLine(title); appendLine(); appendLine("目标：$goal")
-        fun section(title: String, items: List<String>) {
-            if (items.isNotEmpty()) { appendLine(); appendLine(title); items.forEachIndexed { i, s -> appendLine("${i + 1}. $s") } }
+        if (document.isNotBlank()) {
+            append(document)
+        } else {
+            appendLine(title); appendLine(); appendLine("目标：$goal")
+            fun section(title: String, items: List<String>) {
+                if (items.isNotEmpty()) { appendLine(); appendLine(title); items.forEachIndexed { i, s -> appendLine("${i + 1}. $s") } }
+            }
+            section("准备条件", prerequisites); section("操作步骤", steps); section("纠正与注意事项", corrections)
+            section("完成检查", completionChecks); section("待核实", uncertainties)
+            section("适用表达", intentAliases); section("目标应用", targetApps); section("不适用情况", notApplicable)
         }
-        section("准备条件", prerequisites); section("操作步骤", steps); section("纠正与注意事项", corrections)
-        section("完成检查", completionChecks); section("待核实", uncertainties)
-        section("适用表达", intentAliases); section("目标应用", targetApps); section("不适用情况", notApplicable)
         appendLine(); append("这是经过整理的操作参考；复用时仍需观察当前页面，并按当前指令确认操作。")
     }
 }
@@ -140,7 +145,7 @@ internal class DemoTeachingStore(private val root: File) {
             fun matches(text: String) = terms.intersect(searchTerms(text)).size
             val score = 4 * matches(g.title + " " + g.goal) +
                 6 * matches((g.intentAliases + g.targetApps).joinToString(" ")) +
-                matches(g.steps.joinToString(" "))
+                matches(if (g.document.isNotBlank()) g.document else g.steps.joinToString(" "))
             record to score
         }.filter { it.second >= 4 }.sortedWith(compareByDescending<Pair<DemoTeachingRecord, Int>> { it.second }
             .thenByDescending { it.first.updatedAt }.thenBy { it.first.id }).take(5).map { it.first }.toList()
@@ -157,6 +162,40 @@ internal class DemoTeachingStore(private val root: File) {
         require(name.matches(Regex("image-[0-9a-f-]{36}\\.jpg")))
         File(directory(id), name).takeIf { it.isFile && it.length() in 1..2L * 1024 * 1024 }
     }.getOrNull()
+
+    /** Complete text checkpoints; reusing a note or draft never substitutes for final Agent review. */
+    @Synchronized fun readCompilationSummary(id: String, key: String): JsonObject? = runCatching {
+        require(key.matches(Regex("[a-f0-9]{64}")))
+        val file = File(directory(id), "compilation-summaries.json")
+        if (!file.isFile || file.length() !in 1..MAX_COMPILATION_CACHE_BYTES) return@runCatching null
+        Json.parseToJsonElement(file.readText()).jsonObject[key]?.jsonObject
+    }.getOrNull()
+
+    @Synchronized fun saveCompilationSummary(id: String, key: String, summary: JsonObject) {
+        require(key.matches(Regex("[a-f0-9]{64}")))
+        val file = File(directory(id), "compilation-summaries.json")
+        val previous = runCatching {
+            if (file.isFile && file.length() in 1..MAX_COMPILATION_CACHE_BYTES)
+                Json.parseToJsonElement(file.readText()).jsonObject else JsonObject(emptyMap())
+        }.getOrDefault(JsonObject(emptyMap()))
+        val retained = LinkedHashMap(previous).apply { remove(key); put(key, summary) }
+        var bytes = JsonObject(retained).toString().toByteArray(Charsets.UTF_8)
+        while (bytes.size > MAX_COMPILATION_CACHE_BYTES && retained.size > 1) {
+            retained.remove(retained.keys.first())
+            bytes = JsonObject(retained).toString().toByteArray(Charsets.UTF_8)
+        }
+        check(bytes.size <= MAX_COMPILATION_CACHE_BYTES)
+        atomicWrite(file, bytes)
+    }
+
+    /** Bounded, app-private metadata only: never persist prompts, responses, reasoning or credentials here. */
+    @Synchronized fun appendCompilationDiagnostic(id: String, metadata: JsonObject) {
+        val file = File(directory(id), "compilation-diagnostics.jsonl")
+        val previous = if (file.isFile && file.length() <= 96_000) file.readLines().takeLast(79) else emptyList()
+        val line = JsonObject(metadata + ("timestamp" to JsonPrimitive(System.currentTimeMillis()))).toString()
+        require(line.length <= 2000)
+        atomicWrite(file, (previous + line).joinToString("\n", postfix = "\n").toByteArray(Charsets.UTF_8))
+    }
 
     private fun recover() {
         if (recovered) return
@@ -188,6 +227,7 @@ internal class DemoTeachingStore(private val root: File) {
     }
     companion object {
         private const val MAX_JSON_BYTES = 4L * 1024 * 1024
+        private const val MAX_COMPILATION_CACHE_BYTES = 512 * 1024
         private fun searchTerms(text: String): Set<String> = buildSet {
             Regex("[a-z0-9]+(?:[._-][a-z0-9]+)*|[\\p{IsHan}]+").findAll(text.lowercase(java.util.Locale.ROOT)).forEach {
                 val word = it.value
@@ -202,10 +242,12 @@ internal class DemoTeachingStore(private val root: File) {
             put("uncertainties", strings(g.uncertainties))
             put("intentAliases", strings(g.intentAliases)); put("targetApps", strings(g.targetApps))
             put("notApplicable", strings(g.notApplicable))
+            if (g.document.isNotEmpty()) put("document", g.document)
         }
         fun decodeGuide(j: JsonObject): DemoTeachingGuide = DemoTeachingGuide(j.text("title"), j.text("goal"),
             j.list("prerequisites"), j.list("steps"), j.list("corrections"), j.list("completionChecks"), j.list("uncertainties"),
-            j.optionalList("intentAliases"), j.optionalList("targetApps"), j.optionalList("notApplicable"))
+            j.optionalList("intentAliases"), j.optionalList("targetApps"), j.optionalList("notApplicable"),
+            document = j["document"]?.jsonPrimitive?.also { require(it.isString) }?.content.orEmpty())
         fun encode(r: DemoTeachingRecord): JsonObject = buildJsonObject {
             put("schemaVersion", 1); put("id", r.id); put("title", r.title); put("createdAt", r.createdAt)
             put("updatedAt", r.updatedAt); put("status", r.status)

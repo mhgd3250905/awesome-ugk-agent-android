@@ -28,8 +28,11 @@ import android.widget.TextView
 import android.widget.Toast
 import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.Dispatchers
+import kotlinx.coroutines.Job
 import kotlinx.coroutines.SupervisorJob
 import kotlinx.coroutines.cancel
+import kotlinx.coroutines.currentCoroutineContext
+import kotlinx.coroutines.ensureActive
 import kotlinx.coroutines.launch
 import kotlinx.coroutines.withContext
 import java.text.DateFormat
@@ -42,6 +45,11 @@ class DemoOperationLearningActivity : Activity() {
     private var teachingRecords = emptyList<DemoTeachingRecord>()
     private var selectedTeachingId: String? = null
     private var compilingTeaching = false
+    private var teachingCompilationJob: Job? = null
+    private var teachingCompilationId: String? = null
+    private var teachingCompilationCancellationRequested = false
+    private var teachingCompilationDialog: DemoTeachingCompilationDialog? = null
+    private var teachingConfirmationDialog: Dialog? = null
     private val recorder get() = DemoProcessScope.get(this).operationRecorder
     private val workflow get() = DemoProcessScope.get(this).workflowController
     private val uiScope = CoroutineScope(SupervisorJob() + Dispatchers.Main.immediate)
@@ -147,6 +155,8 @@ class DemoOperationLearningActivity : Activity() {
         DemoProcessScope.get(this).setOperationUiVisible(listenerOwner, false)
         startDialog?.dismiss()
         workflowDialog?.dismiss()
+        teachingConfirmationDialog?.dismiss()
+        teachingCompilationDialog?.dismiss()
         uiScope.cancel()
         super.onDestroy()
     }
@@ -207,7 +217,9 @@ class DemoOperationLearningActivity : Activity() {
         header.addView(headerTitle, LinearLayout.LayoutParams(0, -2, 1f))
         headerOwl = TaskNoteUi.owl(this, 40)
         header.addView(headerOwl, LinearLayout.LayoutParams(dp(40), dp(40)))
-        headerMore = detailIcon(R.drawable.ic_process_more_horiz, "草稿更多操作", "operation_draft_more", ::showDraftMenu)
+        headerMore = detailIcon(R.drawable.ic_process_more_horiz, "更多操作", "operation_draft_more") {
+            if (selectedTeachingId != null) showTeachingMenu() else showDraftMenu()
+        }
             .apply { visibility = View.GONE }
         header.addView(headerMore, LinearLayout.LayoutParams(dp(48), dp(48)))
         root.addView(header)
@@ -321,7 +333,7 @@ class DemoOperationLearningActivity : Activity() {
         }
     }
 
-    private fun isBusy() = compilingTeaching || teaching.snapshot().active || recorder.snapshot().phase != DemoOperationPhase.IDLE ||
+    private fun isBusy() = compilingTeaching || process.teachingCompiler.isCompiling || teaching.snapshot().active || recorder.snapshot().phase != DemoOperationPhase.IDLE ||
         workflow.snapshot().phase != DemoWorkflowPhase.IDLE
 
     private fun guard(view: View): View {
@@ -334,7 +346,7 @@ class DemoOperationLearningActivity : Activity() {
     private fun updateBusyControls() {
         val idle = !isBusy()
         guardedViews.forEach { it.isEnabled = idle; it.alpha = if (idle) 1f else .45f }
-        headerMore.isEnabled = idle && displayedDraftId != null
+        headerMore.isEnabled = idle && (displayedDraftId != null || selectedTeachingId != null)
         headerMore.alpha = if (headerMore.isEnabled) 1f else .4f
     }
 
@@ -444,7 +456,7 @@ class DemoOperationLearningActivity : Activity() {
             "available" -> "可用"
             "disabled" -> "已停用"
             "needs_revision" -> "需修订"
-            else -> "待验证"
+            else -> if (record.guide?.document?.isNotBlank() == true) "Agent 已核对" else "待验证"
         }
         return "$compiled · $availability · 版本 ${record.guideRevision}"
     }
@@ -453,54 +465,87 @@ class DemoOperationLearningActivity : Activity() {
         val record = teachingRecords.firstOrNull { it.id == id }
         headerTitle.text = "教学记录"
         if (record == null) { content.addView(text("教学记录暂不可用", 16f)); return }
-        content.addView(text(record.title, 23f, bold = true))
-        content.addView(text("${record.segments.size} 段对话 · ${teachingRecordStatus(record.status)}", 13f, Ui.TextSecondary), spaced())
-        content.addView(text(teachingExperienceStatus(record), 14f, Ui.TextSecondary), spaced())
-        content.addView(guard(TaskNoteUi.button(this, "接着上次继续教学", true) {
-            if (isBusy()) { notice("请先结束当前任务或整理"); return@button }
-            lateinit var resumeDialog: Dialog
-            resumeDialog = teachingExperienceChoiceDialog(this,
-                com.ugk.pi.android.UserConfirmationDialogRequest(
-                    "继续上次教学？",
-                    "将恢复“${record.title}”的对话和纠正记录，新增内容继续保存在这份记录中。\n\n" +
-                        (record.segments.lastOrNull()?.let { "上次指令：${it.instruction.take(240)}\n\n" } ?: "") +
-                        "不会自动重放。返回手机界面后，请在悬浮窗说明从哪里继续；执行前会重新读取当前页面。" +
-                        "已有整理经验会保留供查看，续教后需要重新整理才能再次推荐。",
-                    listOf(com.ugk.pi.android.UserConfirmationDialogButton("resume", "继续教学"),
-                        com.ugk.pi.android.UserConfirmationDialogButton("cancel", "暂不继续"))
-                )) { choice ->
-                resumeDialog.dismiss()
-                if (choice == "resume") process.resumeTeaching(id).fold(
-                    onSuccess = {
-                        notice("已恢复教学，请在悬浮窗描述下一步")
-                        moveTaskToBack(true)
-                    },
-                    onFailure = { notice(it.message ?: "暂时无法继续，原记录已保留") }
-                )
-            }
-            resumeDialog.show()
-        }).apply { isEnabled = !isBusy() && record.status != "active" && record.compilationStatus != "compiling" }, spaced())
+        headerOwl.visibility = View.GONE
+        headerMore.visibility = View.VISIBLE
+        headerMore.contentDescription = "教学记录更多操作"
+        val summary = detailSurface(TaskNoteUi.Paper).apply {
+            addView(TaskNoteUi.label(this@DemoOperationLearningActivity, "对话教学"), LinearLayout.LayoutParams(-2, -2))
+            addView(detailText(record.title, 24f, TaskNoteUi.Ink, true), spaced(18))
+            addView(detailText("${record.segments.size} 段对话  ·  ${record.segments.sumOf { it.actions.size }} 次操作",
+                13f, TaskNoteUi.Secondary), spaced(12))
+            addView(detailText(teachingRecordStatus(record.status), 12f, TaskNoteUi.Secondary), spaced(6))
+        }
+        content.addView(summary)
+        val compilingThis = compilingTeaching && teachingCompilationId == id
+        val status = when {
+            compilingThis && teachingCompilationCancellationRequested -> "正在取消"
+            compilingThis || record.compilationStatus == "compiling" -> "整理中"
+            record.compilationStatus == "failed" -> "待重新整理"
+            record.compilationStatus != "completed" -> "未整理"
+            record.availability == "disabled" -> "已停用"
+            record.availability == "needs_revision" -> "需修订"
+            record.availability == "available" -> "可用"
+            else -> if (record.guide?.document?.isNotBlank() == true) "Agent 已核对" else "待验证"
+        }
+        val practice = detailSurface()
+        val heading = LinearLayout(this).apply { gravity = Gravity.CENTER_VERTICAL }
+        heading.addView(detailText("最佳实践", 19f, bold = true), LinearLayout.LayoutParams(0, -2, 1f))
+        heading.addView(detailText(status, 12f, if (status == "待重新整理") Ui.Warning else Ui.Primary).apply {
+            background = Ui.rounded(this@DemoOperationLearningActivity,
+                if (status == "待重新整理") Ui.WarningSoft else Ui.PrimaryContainer, 8)
+            setPadding(dp(10), dp(5), dp(10), dp(5))
+        }, LinearLayout.LayoutParams(-2, -2))
+        practice.addView(heading)
+        practice.addView(detailText(when {
+            compilingThis && teachingCompilationCancellationRequested -> "已请求取消，等待当前连接结束后可重新整理。"
+            compilingThis -> "正在处理这份教学，原始记录会保留。"
+            record.compilationStatus == "failed" -> "上次整理未完成，教学内容已保留，可以重新整理。"
+            record.guide == null -> "把这次教学提炼成有效步骤、纠正经验和完成检查，方便下次使用。"
+            record.compilationStatus != "completed" -> "下方是此前整理的经验。新增教学内容需要重新整理后才能推荐。"
+            else -> "在普通对话中描述相近任务，即可查找并确认使用这份经验。"
+        }, 14f, Ui.TextSecondary), spaced(12))
         record.guide?.let { guide ->
-            val canChangeAvailability = record.status != "active" && record.compilationStatus != "compiling"
-            if (record.compilationStatus != "completed") content.addView(text("以下为此前整理的经验，续教内容尚未重新整理，暂不参与对话推荐。", 14f, Ui.TextSecondary), spaced())
-            content.addView(text("在普通对话里描述相近任务，助手会检索这份经验并询问是否使用。待验证经验可试用；停用或需修订的经验不会推荐。", 14f, Ui.TextSecondary), spaced())
-            content.addView(text(guide.readableText(), 15f).apply { setTextIsSelectable(true) }, spaced())
-            content.addView(quiet("复制经验") {
-                (getSystemService(CLIPBOARD_SERVICE) as android.content.ClipboardManager)
-                    .setPrimaryClip(android.content.ClipData.newPlainText(guide.title, guide.readableText()))
-                notice("已复制经验")
-            }, spaced())
-            content.addView(quiet(if (record.availability == "disabled") "恢复推荐（待验证）" else "停用这份经验") {
-                if (!canChangeAvailability) notice("教学或整理进行中，请结束后再修改经验状态")
-                else runCatching {
-                    process.teachingStore.setAvailability(id, if (record.availability == "disabled") "pending_validation" else "disabled")
-                }.onSuccess { loadContent() }.onFailure { notice(it.message ?: "经验状态更新失败") }
-            }.apply { isEnabled = canChangeAvailability }, spaced())
-            if (record.availability != "disabled") content.addView(quiet("标记为需修订") {
-                if (!canChangeAvailability) notice("教学或整理进行中，请结束后再修改经验状态")
-                else runCatching { process.teachingStore.setAvailability(id, "needs_revision") }
-                    .onSuccess { loadContent() }.onFailure { notice(it.message ?: "经验状态更新失败") }
-            }.apply { isEnabled = canChangeAvailability }, spaced())
+            val guideBody = column()
+            if (guide.document.isNotBlank()) {
+                guideBody.addView(text("", 15f).apply {
+                    DemoMarkdownFormatter.setMarkdown(this, guide.document)
+                    setTextIsSelectable(true)
+                }, spaced(10))
+            } else {
+                guideBody.addView(detailText("目标", 12f, Ui.TextMuted), spaced(10))
+                guideBody.addView(text(guide.goal, 16f, bold = true).apply { setTextIsSelectable(true) })
+                guide.steps.forEachIndexed { index, step ->
+                    guideBody.addView(text("${index + 1}. $step", 15f).apply { setTextIsSelectable(true) }, spaced(8))
+                }
+                fun section(title: String, items: List<String>) {
+                    if (items.isEmpty()) return
+                    guideBody.addView(detailText(title, 13f, Ui.Primary, true), spaced(18))
+                    items.forEach { guideBody.addView(text("· $it", 14f).apply { setTextIsSelectable(true) }) }
+                }
+                section("准备条件", guide.prerequisites)
+                section("纠正与注意事项", guide.corrections)
+                section("完成检查", guide.completionChecks)
+                section("待核实", guide.uncertainties)
+                section("适用表达", guide.intentAliases)
+                section("目标应用", guide.targetApps)
+                section("不适用情况", guide.notApplicable)
+            }
+            practice.addView(collapsible("查看整理后的经验 · 版本 ${record.guideRevision}", "teaching_guide", guideBody), spaced(12))
+        }
+        practice.addView(guard(TaskNoteUi.button(this, when {
+            compilingThis && teachingCompilationCancellationRequested -> "正在取消…"
+            compilingThis || record.compilationStatus == "compiling" -> "正在整理…"
+            record.guide == null -> "整理最佳实践"
+            else -> "重新整理经验"
+        }, true) {
+            confirmTeachingCompilation(record)
+        }), spaced(18))
+        content.addView(practice, spaced(16))
+        content.addView(guard(TaskNoteUi.button(this, "接着上次继续教学", false) {
+            confirmTeachingResume(record)
+        }), spaced(12))
+        if (record.usageHistory.isNotEmpty()) {
+            val history = column()
             record.usageHistory.takeLast(5).reversed().forEach { use ->
                 val result = when (use.outcome) {
                     "success" -> "报告完成"
@@ -509,65 +554,12 @@ class DemoOperationLearningActivity : Activity() {
                     "cancelled" -> "已取消"
                     else -> "未完成"
                 }
-                content.addView(text("版本 ${use.revision} · $result\n${use.summary}", 13f, Ui.TextSecondary), spaced())
+                history.addView(text("版本 ${use.revision} · $result\n${use.summary}", 13f, Ui.TextSecondary), spaced(8))
             }
+            content.addView(collapsible("最近使用记录", "teaching_usage", history), spaced(12))
         }
-        content.addView(guard(TaskNoteUi.button(this, if (record.guide == null) "整理最佳实践" else "重新整理经验", true) {
-            AlertDialog.Builder(this, Ui.dialogTheme())
-                .setTitle("整理这次教学？")
-                .setMessage("将把本次指令、执行结果、纠正内容及截图发送给已配置模型，提取有效步骤和完成条件。原始记录会保留。")
-                .setNegativeButton("取消", null)
-                .setPositiveButton("开始整理") { _, _ ->
-                    compilingTeaching = true
-                    updateBusyControls()
-                    uiScope.launch {
-                        runCatching {
-                            val current = withContext(Dispatchers.IO) { process.teachingStore.read(id) }
-                                ?: error("教学记录暂不可用")
-                            withContext(Dispatchers.IO) { process.teachingStore.update(id) { it.copy(compilationStatus = "compiling") } }
-                            val guide = process.teachingCompiler.compile(current)
-                            withContext(Dispatchers.IO) { process.teachingStore.saveGuide(id, guide) }
-                        }.onSuccess { notice("经验已整理") }
-                            .onFailure { error ->
-                                withContext(kotlinx.coroutines.NonCancellable + Dispatchers.IO) {
-                                    process.teachingStore.update(id) { it.copy(compilationStatus = "failed") }
-                                }
-                                if (error is kotlinx.coroutines.CancellationException) throw error
-                                notice(error.message ?: "整理失败，教学记录已保留")
-                            }
-                        compilingTeaching = false
-                        loadContent()
-                    }
-                }.show()
-        }), spaced())
-        content.addView(quiet("删除教学记录") {
-            if (isBusy() || process.conversationRuntime.runCoordinator.isRunning()) {
-                notice("请先停止正在进行的任务或等待整理结束")
-                return@quiet
-            }
-            lateinit var confirmation: Dialog
-            confirmation = teachingExperienceChoiceDialog(this,
-                com.ugk.pi.android.UserConfirmationDialogRequest(
-                    "删除这份教学记录？",
-                    "将删除“${record.title}”的教学对话、截图、整理经验和使用历史。删除后无法恢复，后续对话也不会再推荐这份经验。",
-                    listOf(com.ugk.pi.android.UserConfirmationDialogButton("delete", "删除记录"),
-                        com.ugk.pi.android.UserConfirmationDialogButton("cancel", "保留记录"))
-                )) { choice ->
-                confirmation.dismiss()
-                if (choice == "delete") uiScope.launch {
-                    if (isBusy() || process.conversationRuntime.runCoordinator.isRunning()) {
-                        notice("请先停止正在进行的任务或等待整理结束")
-                        return@launch
-                    }
-                    runCatching { withContext(Dispatchers.IO) { process.teachingStore.delete(id) } }
-                        .onSuccess { selectedTeachingId = null; notice("教学记录已删除"); loadContent() }
-                        .onFailure { notice(it.message ?: "删除失败，记录已保留") }
-                }
-            }
-            // The common sheet does not own navigation or dismissal for its caller.
-            confirmation.show()
-        }.apply { isEnabled = !isBusy() && record.status != "active" && record.compilationStatus != "compiling" }, spaced())
-        content.addView(text("教学过程", 17f, bold = true), spaced(24))
+        content.addView(detailText("教学过程 · ${record.segments.size} 段", 18f, bold = true), spaced(28))
+        content.addView(detailText("展开每一段，查看执行回复与画面证据。", 13f, Ui.TextSecondary), spaced(6))
         record.segments.forEachIndexed { index, segment ->
             val images = segment.actions.flatMap { listOfNotNull(it.beforeImage, it.afterImage) }.distinct()
             val state = when (segment.status) {
@@ -581,16 +573,26 @@ class DemoOperationLearningActivity : Activity() {
                 background = Ui.rounded(this@DemoOperationLearningActivity, Ui.Surface, 18)
                 setPadding(dp(16), dp(12), dp(16), dp(12))
                 addView(text("第 ${index + 1} 段 · $state", 16f, bold = true))
-                addView(text("你的指令：${segment.instruction}", 14f).apply { setTextIsSelectable(true) })
-                if (segment.reply.isNotBlank()) addView(text("Agent：${segment.reply}", 14f).apply { setTextIsSelectable(true) })
+                addView(text(segment.instruction, 15f).apply { maxLines = 2; ellipsize = android.text.TextUtils.TruncateAt.END }, spaced(6))
                 addView(text("${segment.actions.size} 次动作 · ${images.size} 张画面", 12f, Ui.TextSecondary))
+            }
+            val details = column().apply {
+                addView(detailText("你的指令", 12f, Ui.TextMuted), spaced(8))
+                addView(text(segment.instruction, 14f).apply { setTextIsSelectable(true) })
+                if (segment.reply.isNotBlank()) {
+                    addView(detailText("执行回复", 12f, Ui.TextMuted), spaced(12))
+                    addView(text(segment.reply, 14f).apply { setTextIsSelectable(true) })
+                }
                 val gaps = segment.actions.flatMap { it.gaps }.distinct()
-                if (gaps.isNotEmpty()) addView(text("证据说明：${gaps.joinToString("；")}", 12f, Ui.TextSecondary))
+                if (gaps.isNotEmpty()) {
+                    addView(detailText("画面与结果说明", 12f, Ui.Warning), spaced(12))
+                    addView(text(gaps.joinToString("；"), 12f, Ui.TextSecondary))
+                }
             }
             if (images.isNotEmpty()) {
                 val evidence = column().apply { visibility = View.GONE }
                 var loaded = false
-                card.addView(quiet("查看本段画面") {
+                details.addView(quiet("查看本段画面") {
                     evidence.visibility = if (evidence.visibility == View.VISIBLE) View.GONE else View.VISIBLE
                     if (!loaded) {
                         loaded = true
@@ -615,10 +617,195 @@ class DemoOperationLearningActivity : Activity() {
                         }
                     }
                 })
-                card.addView(evidence)
+                details.addView(evidence)
             }
-            content.addView(card, spaced())
+            card.addView(collapsible("展开本段详情", "teaching_segment_$index", details), spaced(4))
+            content.addView(card, spaced(12))
         }
+    }
+
+    private fun confirmTeachingResume(record: DemoTeachingRecord) {
+        if (isBusy() || record.status == "active" || record.compilationStatus == "compiling") {
+            notice("请先结束当前任务或整理"); return
+        }
+        val id = record.id
+        lateinit var resumeDialog: Dialog
+        resumeDialog = teachingExperienceChoiceDialog(this,
+            com.ugk.pi.android.UserConfirmationDialogRequest(
+                "继续上次教学？",
+                "将恢复“${record.title}”的对话和纠正记录，新增内容继续保存在这份记录中。\n\n" +
+                    (record.segments.lastOrNull()?.let { "上次指令：${it.instruction.take(240)}\n\n" } ?: "") +
+                    "不会自动重放。返回手机界面后，请在悬浮窗说明从哪里继续；执行前会重新读取当前页面。" +
+                    "已有整理经验会保留供查看，续教后需要重新整理才能再次推荐。",
+                listOf(com.ugk.pi.android.UserConfirmationDialogButton("resume", "继续教学"),
+                    com.ugk.pi.android.UserConfirmationDialogButton("cancel", "暂不继续"))
+            )) { choice ->
+            resumeDialog.dismiss()
+            if (choice == "resume") process.resumeTeaching(id).fold(
+                onSuccess = {
+                    notice("已恢复教学，请在悬浮窗描述下一步")
+                    moveTaskToBack(true)
+                },
+                onFailure = { notice(it.message ?: "暂时无法继续，原记录已保留") }
+            )
+        }
+        teachingConfirmationDialog = resumeDialog
+        resumeDialog.show()
+    }
+
+    private fun confirmTeachingCompilation(record: DemoTeachingRecord) {
+        if (isBusy() || record.status == "active" || record.compilationStatus == "compiling") {
+            notice("请先结束当前任务或等待整理结束"); return
+        }
+        lateinit var confirmation: Dialog
+        confirmation = teachingExperienceChoiceDialog(this, com.ugk.pi.android.UserConfirmationDialogRequest(
+            "整理成最佳实践？",
+            "由 Agent 把这 ${record.segments.size} 段教学写成分步骤 SOP，并核对证据、修订后交付。\n\n" +
+                "指令、执行结果和可用截图会发送给当前配置的模型。长教学会分批处理，可能需要多次请求和几分钟时间。\n\n" +
+                "原始记录会保留，整理过程中可随时取消。",
+            listOf(com.ugk.pi.android.UserConfirmationDialogButton("compile", "开始整理"),
+                com.ugk.pi.android.UserConfirmationDialogButton("cancel", "暂不整理"))
+        )) { choice ->
+            confirmation.dismiss()
+            if (choice == "compile") startTeachingCompilation(record)
+        }
+        teachingConfirmationDialog = confirmation
+        confirmation.show()
+    }
+
+    private fun startTeachingCompilation(record: DemoTeachingRecord) {
+        if (isBusy()) { notice("请先结束当前任务或等待整理结束"); return }
+        val id = record.id
+        compilingTeaching = true
+        teachingCompilationCancellationRequested = false
+        teachingCompilationId = id
+        teachingCompilationDialog?.dismiss()
+        val processing = DemoTeachingCompilationDialog(this, record.title) {
+            teachingCompilationCancellationRequested = true
+            teachingCompilationJob?.cancel()
+            teachingCompilationDialog?.dismiss()
+            loadContent()
+            notice("已请求取消，原始记录保留")
+        }
+        teachingCompilationDialog = processing
+        processing.show()
+        loadContent()
+        updateBusyControls()
+        teachingCompilationJob = uiScope.launch {
+            var ownsCompilation = false
+            var guideSaved = false
+            try {
+                val current = withContext(Dispatchers.IO) {
+                    var claimed: DemoTeachingRecord? = null
+                    process.teachingStore.update(id) {
+                        check(it.status != "active" && it.compilationStatus != "compiling") { "教学记录正在使用，请稍后重试" }
+                        claimed = it
+                        it.copy(compilationStatus = "compiling")
+                    }
+                    ownsCompilation = true
+                    checkNotNull(claimed)
+                }
+                val compilation = process.teachingCompiler.compileWithReport(current, onStage = { stage ->
+                    withContext(Dispatchers.Main.immediate) { processing.render(stage) }
+                })
+                currentCoroutineContext().ensureActive()
+                processing.saving()
+                // Once atomic saving starts, cancellation cannot relabel the saved guide as failed.
+                withContext(kotlinx.coroutines.NonCancellable + Dispatchers.IO) {
+                    process.teachingStore.saveGuide(id, compilation.guide)
+                    guideSaved = true
+                }
+                processing.dismiss()
+                if (!isDestroyed) notice("最佳实践已整理并保存")
+            } catch (error: Exception) {
+                if (ownsCompilation && !guideSaved) withContext(kotlinx.coroutines.NonCancellable + Dispatchers.IO) {
+                    runCatching { process.teachingStore.update(id) {
+                        if (it.compilationStatus == "compiling") it.copy(compilationStatus = "failed") else it
+                    } }
+                }
+                if (!isDestroyed) when {
+                    guideSaved -> { processing.dismiss(); notice("最佳实践已整理并保存") }
+                    error is kotlinx.coroutines.CancellationException -> processing.dismiss()
+                    else -> processing.failed(teachingCompilationFailure(error)) { startTeachingCompilation(record) }
+                }
+            } finally {
+                compilingTeaching = false
+                teachingCompilationJob = null
+                teachingCompilationId = null
+                teachingCompilationCancellationRequested = false
+                if (!isDestroyed) loadContent()
+            }
+        }
+    }
+
+    private fun teachingCompilationFailure(error: Exception): String {
+        if (error is DemoTeachingCompileException) return error.message
+        val message = error.message.orEmpty()
+        return when {
+            error is java.net.SocketTimeoutException || message.contains("超时") || message.contains("timeout", true) ->
+                "模型响应时间较长，本次等待已超时。\n请稍后重试，或在设置中切换响应更快的模型。"
+            error is java.io.IOException -> "网络连接中断，暂时无法完成整理。请检查网络后重试。"
+            else -> message.take(220).ifBlank { "暂时无法完成整理，请稍后重试。" }
+        }
+    }
+
+    private fun showTeachingMenu() {
+        val record = teachingRecords.firstOrNull { it.id == selectedTeachingId } ?: return
+        if (isBusy()) return
+        PopupMenu(this, headerMore).apply {
+            if (record.guide != null) {
+                menu.add(0, 1, 0, "复制最佳实践")
+                menu.add(0, 2, 1, if (record.availability == "disabled") "恢复推荐（待验证）" else "停用这份经验")
+                if (record.availability != "disabled") menu.add(0, 3, 2, "标记为需修订")
+            }
+            menu.add(0, 4, 3, "删除教学记录")
+            setOnMenuItemClickListener { item ->
+                if (!isBusy() && selectedTeachingId == record.id) when (item.itemId) {
+                    1 -> {
+                        (getSystemService(CLIPBOARD_SERVICE) as android.content.ClipboardManager)
+                            .setPrimaryClip(android.content.ClipData.newPlainText(record.title, record.guide!!.readableText()))
+                        notice("已复制经验")
+                    }
+                    2, 3 -> runCatching {
+                        check(record.status != "active" && record.compilationStatus != "compiling") { "请先结束教学或整理" }
+                        process.teachingStore.setAvailability(record.id, if (item.itemId == 3) "needs_revision"
+                            else if (record.availability == "disabled") "pending_validation" else "disabled")
+                    }.onSuccess { loadContent() }.onFailure { notice(it.message ?: "经验状态更新失败") }
+                    4 -> confirmTeachingDeletion(record)
+                }
+                true
+            }
+            show()
+        }
+    }
+
+    private fun confirmTeachingDeletion(record: DemoTeachingRecord) {
+        if (isBusy() || process.conversationRuntime.runCoordinator.isRunning()) {
+            notice("请先停止正在进行的任务或等待整理结束"); return
+        }
+        val id = record.id
+        lateinit var confirmation: Dialog
+        confirmation = teachingExperienceChoiceDialog(this,
+            com.ugk.pi.android.UserConfirmationDialogRequest(
+                "删除这份教学记录？",
+                "将删除“${record.title}”的教学对话、截图、整理经验和使用历史。删除后无法恢复，后续对话也不会再推荐这份经验。",
+                listOf(com.ugk.pi.android.UserConfirmationDialogButton("delete", "删除记录"),
+                    com.ugk.pi.android.UserConfirmationDialogButton("cancel", "保留记录"))
+            )) { choice ->
+            confirmation.dismiss()
+            if (choice == "delete") uiScope.launch {
+                if (isBusy() || process.conversationRuntime.runCoordinator.isRunning()) {
+                    notice("请先停止正在进行的任务或等待整理结束")
+                    return@launch
+                }
+                runCatching { withContext(Dispatchers.IO) { process.teachingStore.delete(id) } }
+                    .onSuccess { selectedTeachingId = null; notice("教学记录已删除"); loadContent() }
+                    .onFailure { notice(it.message ?: "删除失败，记录已保留") }
+            }
+        }
+        // The common sheet does not own navigation or dismissal for its caller.
+        teachingConfirmationDialog = confirmation
+        confirmation.show()
     }
 
     private fun updateHeader(draftId: String?) {

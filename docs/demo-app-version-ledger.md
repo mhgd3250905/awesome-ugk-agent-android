@@ -1,11 +1,88 @@
 # demo-app 版本与变更台账
 
-更新时间：2026-09-29
+更新时间：2026-09-30
 当前本地测试版本：`1.13.0`（`versionCode 126`）
 版本元数据范围：仅 `:demo-app`；本地收束也包含尚未发布的 `pi-system-skill-android` 源码调整，其模块/AAR 版本未改变。
-当前阶段：分段对话教学基础实现由 `efacf1b` 保存；2026-09-29 深度审查修复已提交为 `b8db716`，并随 `demo-app-v1.13.0` 标签保存推送。Play 发布已由 Agent 以浏览器自动化在 Play Console 执行：内部测试轨道 126 已发布，封闭测试轨道 126 已送审（审核中）；旧版本记录保留各自验收边界。
+当前阶段：2026-09-29—30 教学整理改进的源码与文档收束，比较基线为 `f3857e32b4e16b54c80393a01b84d46fe8643948`，当前版本号保持不变。本阶段包含长教学去噪/分批/检查点、整理界面、自然语言 SOP、独立 Agent 审核、请求诊断及专用整理 Skill，尚未发布到 Play。分段教学基础实现 `efacf1b`、深度审查修复 `b8db716` 与 `demo-app-v1.13.0` 标签属于较早边界，历史验证不能代表本阶段最新实现。
 
 发布边界：`1.0.3`、`1.0.4`、`1.0.5` 已发布到 Play 内部测试轨道（`1.0.5` 的发布证据为 2026-09-29 轨道页"发布时间：9月3日 00:19"，补齐此前缺失的外部观察）；封闭测试全球轨道此前停在 `1.0.2 (102)`；`1.1.0`–`1.12.0` 未提交 Play。`1.13.0 (126)` 已于 2026-09-29 10:25 发布到内部测试轨道，并提交封闭式测试轨道送审（Google 审核中，审核通过前封闭轨道用户仍见 1.0.2）。本地提交或标签不代表 Play 发布，已存在的 `demo-app-v1.0.5@11d764a` 版本边界保持不变。
+
+## 2026-09-30 · 阶段收束：教学整理与专用 Skill
+
+**基线与范围。** 在原目录 `E:\AII\ugk-android-new`、`main` 分支整理从 `f3857e32b4e16b54c80393a01b84d46fe8643948` 起的教学相关改动；收束前 fetch 确认该基线与 `origin/main` 一致。版本仍为 `1.13.0 / 126`，本次保存源码及文档检查点，不创建版本标签或远端发行版。既有 Terminal/SDK 确认票据改动在基线中，不纳入本阶段功能变更。
+
+| 处置范围 | 本次处理与事实来源 |
+|---|---|
+| 教学代码与 `teaching-sop-author` 资源 | 保存详情/进度弹窗、证据准备、分批与缓存、文字 SOP、审核交付、流式错误处理、专用 Skill；以当前源码和 APK 内资源为准 |
+| README、文档入口、教学设计、UI 基线、Skill 规范及本台账 | 对齐当前流程、阶段加载与发布边界；区分内置整理 Skill 与为每份经验安装 Skill；保留每轮历史错误、修复与验证，不另建台账 |
+| 代码注释与已有编译测试 | 注明缓存不代表最终审核、旧 JSON 解码仅供兼容；保持原有 8 个编译用例，将既有流程场景适配到自然语言笔记/草稿和工具交付，不新增用例。早期 8 个证据准备用例一并保存 |
+| 本地探针、Play 材料、运行产物和配置 | 保留原位置且不纳入提交：3 个未跟踪 AndroidTest 探针、根目录 Play 截图、`playstore/`、被忽略的 `.verify-shots/`、APK、`local.properties` 与本地凭据 |
+
+**检查结果。** `:demo-app:assembleDebug :demo-app:compileDebugUnitTestKotlin --console=plain` 成功，213 tasks、7 executed；日志 `.verify-shots/teaching-closeout-build.log`。这是 APK 构建和测试源码编译，没有执行测试用例。此前专用 Skill frontmatter 校验及四份 Markdown 打包字节核对通过，最新安装及五份教学 record/cache 哈希保留证据见下节。本轮 10 份 Markdown 的 102 个本地链接目标检查通过，阶段关键词已复核；首次暂存检查发现两个新增文件末尾有多余空行，移除后 `git diff --check` 和 `git diff --cached --check` 均通过。
+
+**验证范围与剩余工作。** 遵循用户此前“由我操作测试、不做全量验证”的要求，本次不运行单元测试、全模块回归、仪器测试或真实模型请求；较早的 16 项、355 项等通过数量仅属于各自历史快照。当前需要用户手测短/长教学、取消后重试、旧经验读取，以及新 Skill 下最终交付质量和耗时。Terminal Gate、Release/Play 验证不适用：本阶段没有改变 Terminal/SDK 源码、打包配置或发布目标。旧快速审核失败的精确服务原因仍因历史日志缺失而未知，新的错误分类不能倒推出旧原因；Play 菜单点击问题也未在本阶段解决。
+
+**接手入口。** 先读本节及 [教学设计](demo-operation-learning-design.md)，再按需读 [Skill 装配边界](android-agent-skills.md#demo-教学整理专用-skill) 和 `teaching-sop-author/SKILL.md`。下一步以用户手测反馈迭代整理方法或实际失败环节；保留原始教学、缓存和已整理经验，不重置用户改动，不把本地构建或 Agent 文字核对写成真机任务成功，也不触碰上述排除材料。
+
+以下各轮记录保留其发生时的提交/验证状态；其中早期“未提交”“旧检查点可复用”等描述按对应轮次理解，不替代本节与当前设计规范。
+
+## 2026-09-30 · 本地未发布：教学整理专用 Skill
+
+新增 `assets/teaching-skills/teaching-sop-author/SKILL.md` 和提炼/合并、编写、审核三份阶段参考，沉淀纠正优先、证据判断、去噪取舍、分步骤写作及定向回查交付方法。`DemoTeachingSopSkill` 在整理的 IO 路径一次读取 APK 资源快照；提炼、合并与编写通过 `AndroidSkillPromptBuilder` 注入对应阶段，审核 Runtime 注册专属 provider 和必选 resolver，后续工具回合与交付提醒继续携带同一 Skill。普通聊天的 Skill 仓库和种子机制不变。
+
+移除 Kotlin 中重复的业务提示，仅保留工具协议与运行边界。Agent 自主组织、修订并明确交付自然语言 SOP，不新增固定标题、字段或步骤数门槛。实际注入提示进入原有缓存指纹，Skill 更新后相关笔记和草稿重新生成，原始记录和已有经验保留；后续同内容重试仍可复用。现有六处测试构造调用仅机械补入同源资源 reader，未新增用例或执行自动化测试。
+
+已完成独立代码复核、Skill frontmatter 静态校验、`git diff --check` 及 `:demo-app:assembleDebug --console=plain`，构建成功（211 tasks，10 executed），日志 `.verify-shots/teaching-skill-build.log`。核对 APK 中四份 Markdown 与源文件字节一致，且不存在通用 `agent-skills/teaching-sop-author` 目录。未请求真实模型，整理质量与耗时由用户手测，不能将构建成功记作模型验收。
+
+安装前确认四份教学均未录制/整理中。`adb install -r` 至真机 `QSG6Q8IFDMDELVGQ` 返回 Success，更新时间 `2026-09-30 01:12:54`。设备与本地 APK SHA-256 均为 `9b614c9a041c5a32ed1bc02d0d3bd68d108f21ae0cbf6a00b403a4acbb418fe1`；安装前后五份 record/cache 文件哈希一致，清单为 `.verify-shots/teaching-skill-before-data.txt`、`.verify-shots/teaching-skill-after-data.txt`。版本仍为 `1.13.0 / 126`，未发布。
+
+## 2026-09-29 · 本地未发布：审核请求失败原因保留与流式回查
+
+用户报告点击重新整理后0秒显示“Agent 核对尚未完成”。设备检查确认8份步骤笔记与4,092字符的 SOP 草稿已经缓存；重试直接请求最后审核（37,424字符、无图），最近几次在约0.4～1.6秒出现 REQUEST_FAILED。原实现未保留 HTTP 状态/具体网络异常，无法事后确认这些请求是鉴权、限流、额度还是连接错误。更早的审核曾在167,134ms返回3次回查工具，下一请求累积121,731字符及4图后180秒 SOCKET_TIMEOUT；两类失败不能混为同一原因。
+
+修复普通异常经 Runtime 后被泛化吞掉的问题：教学 Provider、Compiler 和审核 Agent 使用 DemoTeachingRequestFailure，保留安全的 HTTP 状态、正文提供的服务错误码/请求编号及网络类别，不显示或记录原始错误正文。教学链路全程透传 SDK 流式响应，取消可主动断开连接。审核回查每页12k、每轮合计24k字符，返回 total/nextOffset；默认无图，显式取图每轮最多一批。原已完成检查点的键和正文不变，仍可直接复用。
+
+按用户要求未执行全量或自动化测试、未代发真实模型请求；本轮只做代码复核、Debug 构建和安装核对。`:demo-app:assembleDebug --console=plain` 成功，日志 `.verify-shots/teaching-review-request-build.log`。APK SHA-256 为 `0758369fc6d79ea546214d0c62c655eeaeb31ae51fc90c8313390ae58fd9e960`；`adb install -r` 至 `QSG6Q8IFDMDELVGQ` 返回 Success，更新时间 `2026-09-29 23:28:07`，设备 APK 哈希匹配。目标 record.json 和 compilation-summaries.json 安装前后分别保持 `1ad698a21aaadcfa79914518b52bb2ee19415f4b052e6fe530077bfa16d8c1ac`、`89b0b88a3ad234e63a37cb9cd871ac4c3ffe5b2ab0edbc6474067b9823bb6dce`。最终审核交付仍待用户手测，不能将本次构建结果记作真实模型验收通过。
+
+## 2026-09-29 · 本地未发布：Agent 编写、核对并交付 SOP
+
+用户再次手测后，设备诊断明确为首批输入34,468字符/3张图，68,325ms后收到2,286字符正文及9,689字符推理，stopReason=end_turn，随后 JSON_SYNTAX。该次失败发生在本地正文解析阶段，没有报告超时或输出截断。核对当前配置的路径后确认实际是 GLM 的 Anthropic 兼容接口；上一轮仅凭域名/模型推断为 OpenAI 接口有误，原 Anthropic SDK 已传 max_tokens，OpenAI 专用参数补丁没有覆盖实际路径。
+
+按用户最新要求，改为自然语言步骤笔记与 SOP 草稿；最终使用独立 AgentRuntime 审核会话，由 Agent 自主回查原批次/截图、修订并通过 submit_reviewed_sop 明确交付。内容质量由 Agent 核对，不再要求模型正文满足固定 JSON 字段或标题结构。保留请求完整性、取消及容量边界；审核最多12次请求，交付工具成功立即结束。已完成笔记及草稿持久复用，审核未交付不能标为整理完成。
+
+新 document 正文完整保存并用于 Markdown 展示、复制和获准复用，标题/目标等仅作可选检索信息；旧结构化经验继续读取。进度弹窗增加“Agent 审核交付”，已交付正文显示“Agent 已核对”。Agent 文字核对与后续真实设备使用验证保持各自含义。
+
+未新增或运行自动化测试，未调用真实模型代替用户手测。`:demo-app:assembleDebug --console=plain` 成功，日志 `.verify-shots/teaching-sop-agent-build.log`。APK SHA-256 `1a585b273db6059baa9ae2ff766a6b35bf0d18c4214881c46c38882de4869d81`；`adb install -r` 安装到 `QSG6Q8IFDMDELVGQ` 返回 Success，设备更新时间 `2026-09-29 22:20:46`，设备 base.apk 哈希匹配。目标原始 record.json 安装前后均为 `2e55875d0bbfd1e4118f2af8168146e3834f0250cf6beb3269d68c5cee40e661`。版本保持 `1.13.0 / 126`，本轮未发布。
+
+## 2026-09-29 · 本地未发布：整理响应兼容、分批复用与诊断
+
+用户在界面优化包中整理9段、62次操作的记录，约3分10秒后收到“模型返回的内容不完整”。旧包把格式/长度错误混为同一提示，且没有保存本次整理响应的诊断信息，现有日志不足以确认这次失败的具体触发条件。当时新增教学专用 OpenAI 协议适配，传 max_tokens、reasoning_effort=low、thinking=enabled，普通聊天及 SDK 不修改；当时误判用户配置走 OpenAI，后续核实为 Anthropic 兼容路径，纠正与最新诊断见上条。协议依据见[教学设计文档](demo-operation-learning-design.md)。
+
+响应解析改为先解开完整 JSON 围栏/单层字符串包装，再按规范化后的内容长度校验；兼容仅含 text 字段的文字数组项，截断、缺字段和类型不符仍拒绝。失败显示批次与明确原因，并在应用私有目录记录有界元数据；不保存模型正文、推理或凭据。成功且校验通过的步骤摘要按模型、提示、材料和图片指纹缓存，用户重试可复用；升级前未保存的批次不能恢复。
+
+按用户要求未新增或运行测试、未调用真实模型复测。`:demo-app:assembleDebug --console=plain` 成功（日志 `.verify-shots/teaching-response-build.log`）；当前 APK SHA-256 为 `4c8747341dcbfa21d1a01c3f9a23377d602d2cdebcb639d2a7f0caf636d7c599`。`adb install -r` 覆盖安装至 `QSG6Q8IFDMDELVGQ` 返回 `Success`，更新时间 `2026-09-29 22:00:33`，设备 base.apk 哈希与本地相同。目标教学 record.json 安装前后 SHA-256 均为 `e74f9d646306ddd790eb2e7b8555a1be8ad584aa6b4c8b6733c624220fc85bfa`。版本保持 `1.13.0 / 126`，真实长教学整理效果待用户手动验收。
+
+## 2026-09-29 · 本地未发布：教学详情与整理弹窗优化
+
+按用户真机反馈，教学详情改为记录概况、最佳实践与可展开的逐段过程；整理使用主按钮，继续教学为次按钮，删除/复制/经验状态操作移入右上角更多菜单。整理确认复用现有教学经验纸张弹窗。新增 `DemoTeachingCompilationDialog`，处理时阻塞页面交互，展示当前阶段、实际完成批次、用时及取消入口；跳过阶段不显示成已执行，失败后保留原因并可明确重试，成功后返回记录。
+
+针对长任务等待问题，提炼/合并材料从160,000降至48,000字符，每批最多6张实际附图；请求协程时限从90调整为210秒，底层读取180秒，不隐式重试。主动取消后关闭弹窗，尚未退出的阻塞请求由页面提示正在取消，收尾前不允许重新发起。
+
+按用户要求仅做必要构建及安装核对，未新增或运行自动化测试，长教学真实模型与界面交互交由用户手动操作。`:demo-app:assembleDebug --console=plain` 成功，日志 `.verify-shots/teaching-ui-build.log`。APK SHA-256：`f4a032d6080c84524205a6cee64bd52f67def40b0ab9a1be2a248c17ca716288`；通过 `adb install -r` 覆盖安装至 `QSG6Q8IFDMDELVGQ`，返回 `Success`，设备更新时间 `2026-09-29 21:38:02`。版本仍为 `1.13.0 / 126`，原有数据保留；此改动未发布到 Play。
+
+## 2026-09-29 · 本地未发布：长教学按步骤清理与分批整理
+
+当前工作树把“整理最佳实践”的整份记录长度拒绝改为“本地按步骤清理 → 长记录分批提炼 → 最终汇总”。已知工具只清理重复或非语义字段，保留用户指令、纠正、动作及错误、页面状态和完成证据；历史保存时已截断的结果标记为可能不完整。单段拆批保留段背景，超大单项分片不删除中间文字；截图跟随对应步骤提炼，摘要保留实际附图来源。原始记录和截图不修改。
+
+整理入口显示阶段与批次并可取消，确认说明长记录可能产生多次模型请求；进程内排他及原子记录状态领取阻止重复启动，原子保存完成后不会被取消分支改成失败。模型生成的摘要仍需最终全局核对，后段纠正可以撤销前段目标。
+
+实际检查及范围：
+
+- 2026-09-29 20:52（本地时间），`DemoTeachingCompilerTest` 8 项、`DemoTeachingEvidencePreparationTest` 8 项通过，失败/错误/跳过均为 0；使用模拟模型验证长记录分批、原始材料保留、后段纠正、层级汇总及失败/取消。报告为 `demo-app/build/test-results/testDebugUnitTest/TEST-com.ugk.pi.android.testapp.DemoTeachingCompilerTest.xml` 与对应的 `DemoTeachingEvidencePreparationTest.xml`。
+- 此后补齐跨批段背景、实际附图来源及取消保存竞态保护；这些收尾改动做了静态复核和 `:demo-app:assembleDebug --console=plain` 构建，未重新运行单元测试。最终构建成功，仅有现存 Android 弃用警告。
+- 首个分批整理 APK：`demo-app/build/outputs/apk/debug/demo-app-debug.apk`，SHA-256 `a47c237dca957e93d9c3633c0a5ca112072db2408162a7bdd9efb91d97fd58dc`。2026-09-29 按用户要求通过 `adb install -r` 覆盖安装至小米真机 `QSG6Q8IFDMDELVGQ`，返回 `Success`；设备安装更新时间为 `2026-09-29 21:14:00`，安装后的 `base.apk` SHA-256 与本地一致，应用数据目录 inode 及首次安装时间保持不变。未用真实模型验收长教学整理质量；后续 APK 见上方界面优化记录。
+
+源码版本仍为 `1.13.0 / 126`；此改动未提交、未打标签、未发布，不改变下方已发布版本的事实。
 
 ## 1.13.0 · 2026-09-28 · 分段对话教学与悬浮/视觉链路收敛
 

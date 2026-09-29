@@ -137,6 +137,12 @@ demo 通过 `DemoAgentRuntimeFactory` 把 `memory → <filesDir>/agent-memory` �
 空记忆以"文件不存在已跳过"注记呈现。注意：因种子绝不覆盖，从旧版（embed 指 skill 目录静态文件）
 升级的安装会保留旧 SKILL.md 与旧模板，需要清掉该 skill 目录才会切换到命名根语义。
 
+## Demo 教学整理专用 Skill
+
+Demo 的 [teaching-sop-author](../demo-app/src/main/assets/teaching-skills/teaching-sop-author/SKILL.md) 位于 `assets/teaching-skills/teaching-sop-author/`，由 [DemoTeachingSopSkill](../demo-app/src/main/java/com/ugk/pi/android/testapp/DemoTeachingSopSkill.kt) 在一次整理开始时加载为同一份 APK 资源快照。宿主组合公共正文与当前阶段参考：`step-notes.md` 用于提炼和合并，`write-sop.md` 用于编写，`review-sop.md` 用于审核。直接模型请求通过 `AndroidSkillPromptBuilder` 注入，独立审核 Runtime 必选此 Skill，无需 `skill_read`。
+
+这属于宿主限定会话的资源装配，不经过通用 `agent-skills/`、`AgentSkillSeeder` 或普通聊天的文件型 Skill 发现。它负责指导经验整理，与用于检索和获准复用已有经验的 `teaching-experience` Skill 不同，也不改变 `skill_save` 的单文件边界。阶段模板为建议，内容质量由 Agent 自主判断；请求、取消和明确交付仍由程序管理。步骤笔记及草稿的缓存指纹包含实际注入提示，资源内容变化会重新生成对应检查点，原始记录与已有经验保留。实现流程见[对话教学设计](demo-operation-learning-design.md#教学整理专用-skill)。
+
 ## 单文件 skill authoring MVP
 
 模块 assets 内置 `android-skill-creator`（`indexed`）作为 Android 专用 authoring SOP，说明
