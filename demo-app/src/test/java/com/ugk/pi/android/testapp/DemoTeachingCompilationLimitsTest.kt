@@ -116,13 +116,15 @@ class DemoTeachingCompilationLimitsTest {
             }
         }
         val guide = DemoTeachingCompiler({ provider }, store, ::skill).compile(store.read(id)!!)
-        assertTrue("expected more than one merge round", mergeCalls > 0)
+        assertTrue("the strict progress guard must not stop a converging multi-round merge: $mergeCalls",
+            mergeCalls >= 2)
         assertTrue(guide.document.contains("查看秒表"))
     }
 
     /** Screenshots reach the wire as Base64 text, so the request budget must count that. */
     @Test fun screenshotPayloadIsBoundedByEncodedSize() = runBlocking {
-        val store = DemoTeachingStore(temporary.newFolder())
+        val root = temporary.newFolder()
+        val store = DemoTeachingStore(root)
         val id = UUID.randomUUID().toString(); store.create(id, "大截图")
         val raw = ByteArray(2_000_000) { (it % 251).toByte() }
         val images = (1..6).map { store.saveImage(id, raw) }
@@ -141,9 +143,44 @@ class DemoTeachingCompilationLimitsTest {
         }
         runCatching { DemoTeachingCompiler({ provider }, store, ::skill).compile(store.read(id)!!) }
         // Stated as a literal, not read back from the constant under test: asserting against the code's
-        // own budget would pass even with the budget removed.
-        assertTrue("the evidence must reach the model at all: $imageChars", imageChars.isNotEmpty())
+        // own budget would pass even with the budget removed. A zero-length entry must not count as
+        // evidence that images were sent.
+        assertTrue("the draft request must have carried at least one screenshot: $imageChars",
+            imageChars.any { chars -> chars > 0 })
         imageChars.forEach { chars -> assertTrue("one request carried $chars characters of image text", chars <= 4_000_000) }
+        // A screenshot dropped for budget must leave a trace, not vanish silently.
+        val diagnostics = java.io.File(root, "$id/compilation-diagnostics.jsonl").readText(Charsets.UTF_8)
+        assertTrue("the dropped screenshots must be recorded: $diagnostics",
+            diagnostics.contains("\"event\":\"images_budget_dropped\""))
+    }
+
+    /** No-regression guard: a long tail of screenshots still reaches the later batches. */
+    @Test fun longTailOfScreenshotsStillReachesLaterRequests() = runBlocking {
+        val store = DemoTeachingStore(temporary.newFolder())
+        val id = UUID.randomUUID().toString(); store.create(id, "很多截图")
+        val raw = ByteArray(300_000) { (it % 251).toByte() }
+        val images = (1..20).map { store.saveImage(id, raw) }
+        store.update(id) { record -> record.copy(status = "finished", segments = images.mapIndexed { index, name ->
+            DemoTeachingSegment("s$index", "第${index}段指令内容较长以便分批".repeat(300), "completed", "回答",
+                listOf(DemoTeachingAction("a$index", "custom_observation", buildJsonObject { put("step", index) },
+                    "结果$index", isError = false, afterImage = name)))
+        }) }
+        val imageCharsPerRequest = mutableListOf<List<Int>>()
+        val provider = object : LLMProvider {
+            override suspend fun generate(request: ModelRequest): ModelResponse {
+                imageCharsPerRequest += request.messages.filterIsInstance<AgentMessage.User>()
+                    .flatMap { message -> message.images.map { it.base64Data.length } }
+                return respond(request, "## 步骤笔记\n\n" + "x".repeat(3_000))
+            }
+        }
+        runCatching { DemoTeachingCompiler({ provider }, store, ::skill).compile(store.read(id)!!) }
+        val sent = imageCharsPerRequest.filter { it.isNotEmpty() }
+        assertTrue("images must arrive across several requests, not one capped batch: $sent",
+            sent.size >= 2)
+        sent.forEach { request ->
+            assertTrue("one request carried ${request.sum()} characters of image text",
+                request.sum() <= 4_000_000)
+        }
     }
 
     /** Counter-example: legitimate screenshots still all ride one request, unchanged. */
@@ -216,9 +253,18 @@ class DemoTeachingCompilationLimitsTest {
         assertTrue("expected a capacity refusal while growing evidence, got $refusal",
             refusal is DemoTeachingCapacityException)
         assertEquals("本次教学记录已达上限，请结束后开始新教学", refusal?.message)
-        // Everything a stuck session needs must still work after the refusal.
+        // Everything a stuck session needs must still work after the refusal, including the real
+        // terminal transition (active -> finished), which lengthens the JSON by a few bytes.
+        store.update(id) { it.copy(status = "active") }
         store.update(id) { it.copy(status = "finished") }
         assertEquals("finished", store.read(id)!!.status)
+        // Saving the guide onto a full record must say what is full, not send the user to end a
+        // teaching that has already ended.
+        val guideFailure = runCatching {
+            store.saveGuide(id, DemoTeachingGuide("标题", "目标", emptyList(), List(60) { "步骤" + "y".repeat(1_000) },
+                emptyList(), emptyList(), emptyList()))
+        }.exceptionOrNull()
+        assertEquals("这份教学记录的证据已达容量上限，整理结果放不下；请新建一份教学", guideFailure?.message)
         store.delete(id)
     }
 
@@ -228,13 +274,31 @@ class DemoTeachingCompilationLimitsTest {
         val id = UUID.randomUUID().toString(); store.create(id, "计数上限")
         assertNull(record(id, store, 60, 10, 20))
         val failure = record(id, store, 61, 10, 20)
-        assertTrue("count ceiling must report capacity, got $failure",
-            failure?.message == "本次教学记录已达上限，请结束后开始新教学")
+        assertTrue("the count ceiling must report capacity too, got $failure",
+            failure is DemoTeachingCapacityException &&
+                failure.message == "本次教学记录已达上限，请结束后开始新教学")
+    }
+
+    /** A released claim must not rewrite a record that no longer carries it. */
+    @Test fun releaseDoesNotRewriteACompletedRecord() = runBlocking {
+        val store = DemoTeachingStore(temporary.newFolder())
+        val id = UUID.randomUUID().toString(); store.create(id, "保存")
+        assertNull(record(id, store, 1, 1, 10))
+        store.update(id) { it.copy(status = "finished") }
+        DemoTeachingCompilationClaim.withClaim(store, id) { }
+        assertEquals("failed", store.read(id)!!.compilationStatus)
+        store.update(id) { it.copy(compilationStatus = "completed") }
+        val saved = store.read(id)!!
+        DemoTeachingCompilationClaim.release(store, id)
+        val after = store.read(id)!!
+        assertEquals("release must not touch a record that is not claimed", saved.updatedAt, after.updatedAt)
+        assertEquals("completed", after.compilationStatus)
     }
 
     /** Preconditions report their own codes so a failed compilation is diagnosable. */
     @Test fun compilationPreconditionsCarryFailureCodes() = runBlocking {
-        val store = DemoTeachingStore(temporary.newFolder())
+        val root = temporary.newFolder()
+        val store = DemoTeachingStore(root)
         val id = UUID.randomUUID().toString(); store.create(id, "未结束")
         store.update(id) { it.copy(status = "active", segments = listOf(segment(1, 1, 10))) }
         val provider = object : LLMProvider {
@@ -244,6 +308,11 @@ class DemoTeachingCompilationLimitsTest {
         val active = runCatching { compiler.compile(store.read(id)!!) }.exceptionOrNull()
         assertEquals("TEACHING_NOT_FINISHED", (active as? DemoTeachingCompileException)?.code)
         assertEquals("请先完成至少一段教学并结束", active?.message)
+        // A guard that fires outside a model request must still leave a coded trace behind.
+        val diagnostics = java.io.File(root, "$id/compilation-diagnostics.jsonl").readText(Charsets.UTF_8)
+        assertTrue("guard failures must be diagnosable: $diagnostics",
+            diagnostics.contains("\"event\":\"compile_failed\"") &&
+                diagnostics.contains("\"failureCode\":\"TEACHING_NOT_FINISHED\""))
     }
 
     /** A stream that ends before the completed response reports an incomplete stream. */

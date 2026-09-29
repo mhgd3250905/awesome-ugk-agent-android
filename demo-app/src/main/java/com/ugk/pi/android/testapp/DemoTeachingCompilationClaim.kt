@@ -45,6 +45,9 @@ internal object DemoTeachingCompilationClaim {
      * compilation is never stolen (callers only release after [claim] returned).
      */
     fun release(store: DemoTeachingStore, id: String) {
+        // Success already moved the record to "completed"; rewriting it there would re-encode and
+        // fsync up to 4 MB and would bump updatedAt, which searchGuides ranks results by.
+        if (store.read(id)?.compilationStatus != "compiling") return
         runCatching {
             store.update(id) {
                 if (it.compilationStatus == "compiling") it.copy(compilationStatus = "failed") else it
