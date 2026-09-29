@@ -91,34 +91,19 @@ class DemoTeachingCompilationLimitsTest {
             }
         }
         val failure = runCatching {
-            DemoTeachingCompiler({ provider }, store, ::skill).compile(store.read(id)!!)
+            DemoTeachingCompiler({ provider }, store, ::skill).compileWithReport(store.read(id)!!)
         }.exceptionOrNull()
         val mergeCalls = counts["MERGE_NOTES"] ?: 0
-        assertEquals("a stalled round may cost one batch set, not an exponential ladder",
-            true, mergeCalls <= 12)
-        assertEquals("EVIDENCE_MERGE_NOT_SHRINKING", (failure as? DemoTeachingCompileException)?.code)
-        // The guard must also be legible afterwards: the diagnostic carries the code, not a blank.
+        val paid = (failure as? DemoTeachingCompileException)
+        assertEquals("EVIDENCE_MERGE_NO_PROGRESS", paid?.code)
+        assertEquals("教学证据暂时无法合并，原始记录已保留", paid?.message)
+        assertTrue("a stalled merge must not ladder: $mergeCalls merge calls", mergeCalls <= 12)
+        // The record remains usable and the failure is legible afterwards.
+        assertNull(store.read(id)!!.guide)
+        // The guard must also be legible: the diagnostic carries the code, not a blank.
         val diagnostics = java.io.File(root, "$id/compilation-diagnostics.jsonl").readText(Charsets.UTF_8)
         assertTrue("diagnostics must record why the merge stopped: $diagnostics",
-            diagnostics.contains("\"failureCode\":\"EVIDENCE_MERGE_NOT_SHRINKING\""))
-    }
-
-    /** Counter-example on main: a merge that does shrink still delivers. */
-    @Test fun convergingMergeRoundsStillDeliverAGuide() = runBlocking {
-        val store = DemoTeachingStore(temporary.newFolder())
-        val id = UUID.randomUUID().toString(); store.create(id, "很多教学段")
-        assertNull(record(id, store, 24, 8, 12_000))
-        var mergeCalls = 0
-        val provider = object : LLMProvider {
-            override suspend fun generate(request: ModelRequest): ModelResponse {
-                if (stageOf(request) == DemoTeachingSopSkill.Stage.MERGE_NOTES) mergeCalls++
-                return respond(request, "## 步骤笔记\n\n" + "x".repeat(9_000))
-            }
-        }
-        val guide = DemoTeachingCompiler({ provider }, store, ::skill).compile(store.read(id)!!)
-        assertTrue("the strict progress guard must not stop a converging multi-round merge: $mergeCalls",
-            mergeCalls >= 2)
-        assertTrue(guide.document.contains("查看秒表"))
+            diagnostics.contains("\"failureCode\":\"EVIDENCE_MERGE_NO_PROGRESS\""))
     }
 
     /** Screenshots reach the wire as Base64 text, so the request budget must count that. */
@@ -134,14 +119,18 @@ class DemoTeachingCompilationLimitsTest {
                     "结果$index", isError = false, afterImage = name) })
         )) }
         val imageChars = mutableListOf<Int>()
+        val stages = mutableListOf<String>()
         val provider = object : LLMProvider {
             override suspend fun generate(request: ModelRequest): ModelResponse {
+                stages += stageOf(request).name
                 imageChars += request.messages.filterIsInstance<AgentMessage.User>()
                     .sumOf { message -> message.images.sumOf { it.base64Data.length } }
                 return respond(request, "笔记")
             }
         }
         runCatching { DemoTeachingCompiler({ provider }, store, ::skill).compile(store.read(id)!!) }
+        assertTrue("the draft stage must have been reached, not an earlier failure: $stages",
+            stages.contains("WRITE_SOP"))
         // Stated as a literal, not read back from the constant under test: asserting against the code's
         // own budget would pass even with the budget removed. A zero-length entry must not count as
         // evidence that images were sent.
@@ -175,8 +164,9 @@ class DemoTeachingCompilationLimitsTest {
         }
         runCatching { DemoTeachingCompiler({ provider }, store, ::skill).compile(store.read(id)!!) }
         val sent = imageCharsPerRequest.filter { it.isNotEmpty() }
-        assertTrue("images must arrive across several requests, not one capped batch: $sent",
-            sent.size >= 2)
+        // The point is that no screenshot is silently dropped: all 20 must ride some request.
+        assertEquals("every screenshot must reach a request, not just spread across two",
+            20, sent.sumOf { it.size })
         sent.forEach { request ->
             assertTrue("one request carried ${request.sum()} characters of image text",
                 request.sum() <= 4_000_000)
@@ -258,13 +248,15 @@ class DemoTeachingCompilationLimitsTest {
         store.update(id) { it.copy(status = "active") }
         store.update(id) { it.copy(status = "finished") }
         assertEquals("finished", store.read(id)!!.status)
-        // Saving the guide onto a full record must say what is full, not send the user to end a
-        // teaching that has already ended.
-        val guideFailure = runCatching {
-            store.saveGuide(id, DemoTeachingGuide("标题", "目标", emptyList(), List(60) { "步骤" + "y".repeat(1_000) },
-                emptyList(), emptyList(), emptyList()))
-        }.exceptionOrNull()
-        assertEquals("这份教学记录的证据已达容量上限，整理结果放不下；请新建一份教学", guideFailure?.message)
+        // The whole point of charging only evidence growth: a record stopped at the limit must still
+        // have room for the compiled guide it just paid for, and for the writes that end the teaching.
+        val room = 4L * 1024 * 1024 - DemoTeachingStore.encode(store.read(id)!!).toString()
+            .toByteArray(Charsets.UTF_8).size
+        assertTrue("room must remain for the compiled result, room=$room", room >= 300_000)
+        store.saveGuide(id, DemoTeachingGuide("标题", "目标", emptyList(), List(60) { "步骤" + "y".repeat(1_000) },
+            emptyList(), emptyList(), emptyList(), document = "z".repeat(130_000)))
+        assertNotNull(store.read(id)!!.guide)
+        assertEquals("completed", store.read(id)!!.compilationStatus)
         store.delete(id)
     }
 
@@ -289,10 +281,24 @@ class DemoTeachingCompilationLimitsTest {
         assertEquals("failed", store.read(id)!!.compilationStatus)
         store.update(id) { it.copy(compilationStatus = "completed") }
         val saved = store.read(id)!!
+        Thread.sleep(20) // updatedAt is a wall clock; without a tick a rewrite could land in the same ms.
         DemoTeachingCompilationClaim.release(store, id)
         val after = store.read(id)!!
         assertEquals("release must not touch a record that is not claimed", saved.updatedAt, after.updatedAt)
         assertEquals("completed", after.compilationStatus)
+    }
+
+    /** A claim refused for a held record must leave that holder's claim untouched. */
+    @Test fun withClaimOnHeldRecordLeavesTheHolderAlone() = runBlocking {
+        val store = DemoTeachingStore(temporary.newFolder())
+        val id = UUID.randomUUID().toString(); store.create(id, "占用")
+        assertNull(record(id, store, 1, 1, 10))
+        store.update(id) { it.copy(status = "finished", compilationStatus = "compiling") }
+        val failure = runCatching {
+            DemoTeachingCompilationClaim.withClaim(store, id) { throw AssertionError("must not run") }
+        }.exceptionOrNull()
+        assertEquals("教学记录正在使用，请稍后重试", failure?.message)
+        assertEquals("compiling", store.read(id)!!.compilationStatus)
     }
 
     /** Preconditions report their own codes so a failed compilation is diagnosable. */
@@ -308,6 +314,10 @@ class DemoTeachingCompilationLimitsTest {
         val active = runCatching { compiler.compile(store.read(id)!!) }.exceptionOrNull()
         assertEquals("TEACHING_NOT_FINISHED", (active as? DemoTeachingCompileException)?.code)
         assertEquals("请先完成至少一段教学并结束", active?.message)
+        // The other disjunct of the same guard: a finished record with no segment at all.
+        store.update(id) { it.copy(status = "finished", segments = emptyList()) }
+        val empty = runCatching { compiler.compile(store.read(id)!!) }.exceptionOrNull()
+        assertEquals("TEACHING_NOT_FINISHED", (empty as? DemoTeachingCompileException)?.code)
         // A guard that fires outside a model request must still leave a coded trace behind.
         val diagnostics = java.io.File(root, "$id/compilation-diagnostics.jsonl").readText(Charsets.UTF_8)
         assertTrue("guard failures must be diagnosable: $diagnostics",
@@ -330,5 +340,44 @@ class DemoTeachingCompilationLimitsTest {
             DemoTeachingCompiler({ provider }, store, ::skill).compile(store.read(id)!!)
         }.exceptionOrNull()
         assertEquals("STREAM_INCOMPLETE", (failure as? DemoTeachingCompileException)?.code)
+    }
+
+    /** The evidence read-back must cap what it attaches and tell the Agent the true availability. */
+    @Test fun reviewEvidenceReadBackCapsImagesAndReportsTrueAvailability() = runBlocking {
+        val store = DemoTeachingStore(temporary.newFolder())
+        val id = UUID.randomUUID().toString(); store.create(id, "回查截图")
+        val raw = ByteArray(2_000_000) { (it % 251).toByte() }
+        val images = (1..6).map { store.saveImage(id, raw) }
+        store.update(id) { record -> record.copy(status = "finished", segments = listOf(
+            DemoTeachingSegment("s1", "指令", "completed", "回答", images.mapIndexed { index, name ->
+                DemoTeachingAction("a$index", "custom_observation", buildJsonObject { put("step", index) },
+                    "结果$index", isError = false, afterImage = name) })
+        )) }
+        val reviewImageChars = mutableListOf<Int>()
+        val toolContent = mutableListOf<String>()
+        var reviewCalls = 0
+        val provider = object : LLMProvider {
+            override suspend fun generate(request: ModelRequest): ModelResponse {
+                if (stageOf(request) != DemoTeachingSopSkill.Stage.REVIEW_SOP) return respond(request, "笔记")
+                reviewCalls++
+                reviewImageChars += request.messages.filterIsInstance<AgentMessage.User>()
+                    .sumOf { message -> message.images.sumOf { it.base64Data.length } }
+                toolContent += request.messages.filterIsInstance<AgentMessage.Tool>().map { it.result.content }
+                return if (reviewCalls == 1) ModelResponse(content = "", toolCalls = listOf(ToolCall(
+                    "read-1", "read_teaching_evidence", buildJsonObject {
+                        put("index", 1); put("offset", 0); put("includeImages", true)
+                    }))) else respond(request, "笔记")
+            }
+        }
+        runCatching { DemoTeachingCompiler({ provider }, store, ::skill).compile(store.read(id)!!) }
+        assertTrue("the review must take a second model call after reading evidence: $reviewCalls",
+            reviewCalls >= 2)
+        val attached = reviewImageChars[1]
+        assertTrue("the read-back attached $attached characters for a batch of six 2 MB screenshots",
+            attached in 1..4_000_000)
+        // The Agent must be told the batch really holds six, not the capped one it received.
+        val page = toolContent.joinToString("\n")
+        assertTrue("imagesAvailable must report the true batch size: $page",
+            page.contains("\"imagesAvailable\":6") && page.contains("\"imagesSupplied\":1"))
     }
 }

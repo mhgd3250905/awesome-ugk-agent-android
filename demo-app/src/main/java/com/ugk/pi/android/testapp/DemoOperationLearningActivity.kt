@@ -712,6 +712,12 @@ class DemoOperationLearningActivity : Activity() {
                 if (!isDestroyed) when {
                     guideSaved -> { processing.dismiss(); notice("最佳实践已整理并保存") }
                     error is kotlinx.coroutines.CancellationException -> processing.dismiss()
+                    // Never invite a paid retry into the same limit: a capacity refusal means the
+                    // record cannot hold another result, not that the model hiccuped.
+                    error is DemoTeachingCapacityException -> {
+                        processing.dismiss()
+                        notice(error.message ?: "教学记录已达容量上限，整理结果放不下")
+                    }
                     else -> processing.failed(teachingCompilationFailure(error)) { startTeachingCompilation(record) }
                 }
             } finally {
