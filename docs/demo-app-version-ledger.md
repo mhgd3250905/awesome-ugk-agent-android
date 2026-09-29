@@ -3,9 +3,9 @@
 更新时间：2026-09-29
 当前本地测试版本：`1.13.0`（`versionCode 126`）
 版本元数据范围：仅 `:demo-app`；本地收束也包含尚未发布的 `pi-system-skill-android` 源码调整，其模块/AAR 版本未改变。
-当前阶段：在 `main@311776c` 的既有学习能力上改为分段对话教学，完成本机快速定向验证和版本前收束，并由本地 checkpoint 保存。未打标签、推送或发布；旧版本记录保留各自验收边界。
+当前阶段：分段对话教学基础实现由 `efacf1b` 保存；2026-09-29 深度审查修复已提交为 `b8db716`，并随 `demo-app-v1.13.0` 标签保存推送。Play 发布推进中：release AAB 已构建并交由用户上传内部测试与封闭测试轨道，上传结果以 Play Console 实测为准；旧版本记录保留各自验收边界。
 
-发布边界：`1.0.3`、`1.0.4` 已发布到 Play 内部测试轨道；`1.0.5` 的 Play 轨道发布状态无外部观察证据，`1.1.0` 及之后的本地测试版本尚未提交 Play。本地提交或标签不代表 Play 发布，已存在的 `demo-app-v1.0.5@11d764a` 版本边界保持不变。
+发布边界：`1.0.3`、`1.0.4` 已发布到 Play 内部测试轨道；`1.0.5` 的 Play 轨道发布状态无外部观察证据，`1.1.0`–`1.12.0` 未提交 Play；`1.13.0 (126)` 为首个推进 Play 上传的大版本（AAB 已构建、待用户上传，见 1.13.0 条目发布记录）。本地提交或标签不代表 Play 发布，已存在的 `demo-app-v1.0.5@11d764a` 版本边界保持不变。
 
 ## 1.13.0 · 2026-09-28 · 分段对话教学与悬浮/视觉链路收敛
 
@@ -33,7 +33,28 @@
 .\gradlew.bat :demo-app:testDebugUnitTest :pi-system-skill-android:testDebugUnitTest :demo-app:assembleDebug :demo-app:assembleDebugAndroidTest --console=plain
 ```
 
-**353 项 JVM 测试通过**（Demo 303、System skill 50；零失败、错误或跳过），Debug APK 和 AndroidTest APK 均构建成功。本次没有运行仪器测试或全模块/Terminal Gate，也没有把清理后的 APK 安装到设备；上方设备结果是先前的定向验证。`.verify-shots/` 内容仅为本机诊断证据，不作为唯一源码或版本事实源。本轮源码与规范文档已由本地 checkpoint 保存；未打标签、推送或发布。
+**审查前基线复验：353 项 JVM 测试通过**（Demo 303、System skill 50；零失败、错误或跳过），Debug APK 和 AndroidTest APK 均构建成功。本次没有运行仪器测试或全模块/Terminal Gate，也没有把该基线 APK 安装到设备；上方设备结果是先前的定向验证。`.verify-shots/` 内容仅为本机诊断证据，不作为唯一源码或版本事实源。该时点的基础源码由本地 checkpoint 保存；未打标签、推送或发布。
+
+### 2026-09-29 深度审查与修复
+
+- 教学经验回执存在已复现的数据一致性竞态：用户在“验证经验可用”确认框打开期间把经验改为“需修订”，旧实现先写入成功使用记录，再因状态已变化拒绝第二次状态更新，留下工具报错但历史记为成功的部分提交。回归测试 `stateChangeDuringValidationDoesNotLeaveAPartialUsageWrite` 在修复前失败、修复后通过；现在使用一次原子存储更新重验版本/状态并同时写入使用记录与可用状态。
+- API 24/25 兼容性经 `:demo-app:lintDebug` 复核：此前直接调用 API 26 的 `java.nio.file` 与 `java.util.Base64`，而应用 `minSdk=24`，涉及草稿/教学/工作流原子文件写入和带图模型请求。已统一通过 API 21 的 Android `Os.rename` 原子移动，桌面 JVM 测试用隔离反射 NIO 路径；Base64 改为 Kotlin 标准库并新增 RFC 4648 编码用例。悬浮窗 API 30 Insets 调用补上调用边界标注。API 24/25 真机未连接，未做旧系统设备运行复现。
+- 同轮修正 Lint 指出的可分发/主题问题：相机硬件声明改为可选、导航栏明暗属性限定在 `values-v27`，自定义进度图标改用 AppCompat ImageView。
+- 修复后 `:demo-app:testDebugUnitTest` 与 `:pi-system-skill-android:testDebugUnitTest` 结果合计 **355 项通过**（Demo 305、System 50；零失败、错误或跳过）。随后用 `:demo-app:assembleDebug :demo-app:assembleDebugAndroidTest --rerun-tasks` 强制重建两个 APK；Debug 与 AndroidTest 产物时间均晚于最终修复源码。`:demo-app:lintDebug` 成功，Lint XML 为 104 warnings、1 hint、0 errors；警告仍含依赖版本、弃用 API、方向建议等非阻断项。设备清单为空，未运行 connected AndroidTest 或安装 APK。
+- 交叉核对发现原设计文档将 `efacf1b` 基线写成“尚未提交”，与实际已提交 HEAD 不符；现已改为准确区分已提交基础实现和本次未提交审查修复。版本号仍为 `1.13.0 / 126`，此次未升版本或创建新 checkpoint。
+- 独立只读审查最终结论为 **PASS**，需求完整性、逻辑、边界、代码质量、测试覆盖和实际运行结果六维均通过；其唯一阻塞为 AndroidTest APK 时间戳过旧，已强制重建并复核时间后关闭。保留一项未证实的 P1 风险：长模型等待期间若同一应用内部页面变化但包名、屏幕尺寸和旋转不变，视觉坐标手势如何处理尚无设备探针覆盖；不得把该场景描述成已验证安全。
+
+交付边界：本次审查修改尚在本地工作树；未触碰现有未跟踪设备探针与 Play 材料，未清理用户文件、推送、打标签、发布或安装。独立只读审查结论与后续修正记录见本节追加内容。
+
+### 2026-09-29 Play 发布推进（1.13.0 / 126）
+
+- 用户决定以 `1.13.0 / 126` 推进 Play 更新：内部测试与封闭测试轨道都发布；商店 listing 与截图保持 1.0.2 时代现状，只更新版本说明。权限与数据安全表单无需变更（1.0.2 以来无新增 Android 权限，本轮仅将相机硬件声明改为可选特征）。
+- 审查修复以 `b8db716` 提交进 main（16 个文件：经验回执原子状态更新与回归测试、`DemoAtomicFileOps`/`DemoBase64` 恢复 minSdk 24 兼容、values-v27 主题资源等）；未跟踪设备探针与 Play 材料保持原状未入库。
+- release 构建于同一提交源码执行：`./gradlew.bat :demo-app:bundleRelease :demo-app:assembleRelease` 通过（含 `lintVitalRelease`）。产物：AAB `demo-app/build/outputs/bundle/release/demo-app-release.aab` 39,369,556 字节，SHA-256 `1dadb215e3081fdd9d1f0676c1466be9470dd7125ccfa34aa7a2e1adf355c879`；同源 Release APK 39,945,609 字节，SHA-256 `14543942e70d17c24e6b6a884a87a0a0733aaff31280d58d9dea95b5fedb8df2`。
+- `apksigner`/`keytool` 确认 AAB 与 APK 为同一 upload 证书（`CN=UGK Agent Upload`，SHA-256 `a7818fd48fb80e1a747f4bc3d2565b83c42ceff074d0a84cc5fceadbd6c693a0`，与 1.0.2–1.0.5 同一 keystore）；APK 元数据 `com.ugk.pi.agent / versionCode 126 / versionName 1.13.0 / minSdk 24`。
+- 版本说明重写为 1.13.0 口径：封闭测试轨道中英文更新（en 495/500、zh 248/500 字符），内部测试轨道新增同文案中英文文件；均为 `playstore/` 本地材料，不入库。
+- Agent 在 `round5_api35` 模拟器完成 release APK 安装与主界面启动初检后，最终 release 包验证由用户自行完成并确认通过；具体设备与路径未记录，不作 Agent 独立复核结论。
+- Play 上传由用户执行（内部 + 封闭测试轨道）；上传完成前轨道状态无外部观察证据，以 Play Console 实测为准。本节随台账提交后打 `demo-app-v1.13.0` 标签并推送 main 与标签。
 
 ### 已替代的方案
 
