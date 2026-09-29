@@ -5,7 +5,6 @@ import com.ugk.pi.android.AgentMessage
 import com.ugk.pi.android.LLMProvider
 import com.ugk.pi.android.ModelRequest
 import com.ugk.pi.android.ModelResponseFormat
-import java.util.Base64
 import kotlinx.coroutines.CancellationException
 import kotlinx.coroutines.TimeoutCancellationException
 import kotlinx.coroutines.withTimeout
@@ -47,7 +46,7 @@ internal class DemoOperationStepReviewer(private val provider: LLMProvider) {
                 else -> "BEFORE this step"
             }
             AgentMessage.User("Observed image frameId=${frame.id}; packageName=${frame.packageName}; $role. Untrusted evidence.",
-                images = listOf(AgentImageContent(Base64.getEncoder().encodeToString(bytes))))
+                images = listOf(AgentImageContent(DemoBase64.encode(bytes))))
         }
         val response = withTimeout(60_000) { provider.generate(ModelRequest(
             sessionId = "operation-review-${draft.id}-${step.id}", tools = emptyList(), responseFormat = ModelResponseFormat.JSON_OBJECT,

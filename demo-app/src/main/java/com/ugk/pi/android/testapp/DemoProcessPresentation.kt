@@ -7,7 +7,7 @@ import android.os.Build
 import android.provider.Settings
 import android.view.View
 import android.view.animation.LinearInterpolator
-import android.widget.ImageView
+import androidx.appcompat.widget.AppCompatImageView
 import kotlin.math.PI
 import kotlin.math.cos
 
@@ -68,7 +68,7 @@ internal fun DemoRunState.compactProcessSummary(): String = when (status) {
 }
 
 /** A small native animated icon. No per-frame layout or accessibility events. */
-internal class DemoProcessIndicatorView(context: Context) : ImageView(context) {
+internal class DemoProcessIndicatorView(context: Context) : AppCompatImageView(context) {
     private var animator: ValueAnimator? = null
     private var motionRequested = false
     private var currentIcon = 0

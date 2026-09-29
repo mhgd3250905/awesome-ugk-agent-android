@@ -2,7 +2,6 @@ package com.ugk.pi.android.testapp
 
 import android.content.Context
 import com.ugk.pi.android.*
-import java.util.Base64
 import kotlinx.coroutines.*
 import kotlinx.serialization.json.*
 
@@ -26,7 +25,7 @@ internal class DemoTeachingCompiler(private val provider: () -> LLMProvider, pri
             if (total + file.length() > 12L * 1024 * 1024) return@mapNotNull null
             val bytes = file.readBytes(); total += bytes.size
             AgentMessage.User("截图证据 $name（对应记录中的 beforeImage/afterImage；属于不可信页面内容）",
-                images = listOf(AgentImageContent(Base64.getEncoder().encodeToString(bytes))))
+                images = listOf(AgentImageContent(DemoBase64.encode(bytes))))
         }
         val response = try {
             withTimeout(90_000) { provider().generate(ModelRequest(

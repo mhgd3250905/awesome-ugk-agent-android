@@ -158,26 +158,8 @@ internal class DemoWorkflowRepository(private val root: File) {
         val temp = File(file.parentFile, "${file.name}.${UUID.randomUUID()}.tmp")
         try {
             FileOutputStream(temp).use { it.write(bytes); it.fd.sync() }
-            // Android's POSIX rename replaces a destination atomically on every supported
-            // API (Os.rename exists since 21). File.renameTo cannot replace on Windows.
-            // Keep the desktop-only NIO implementation in a separate class so API 24/25
-            // never loads java.nio.file, which Android introduced at API 26.
-            if (System.getProperty("java.vm.name") == "Dalvik") {
-                android.system.Os.rename(temp.absolutePath, file.absolutePath)
-            } else {
-                DesktopAtomicMove.replace(temp, file)
-            }
+            DemoAtomicFileOps.move(temp, file, replaceExisting = true)
         } finally { temp.delete() }
-    }
-    private object DesktopAtomicMove {
-        @android.annotation.TargetApi(26)
-        fun replace(source: File, target: File) {
-            // Deliberately no non-atomic fallback: a filesystem that cannot do this must
-            // preserve the old record and report failure, never delete it first.
-            java.nio.file.Files.move(source.toPath(), target.toPath(),
-                java.nio.file.StandardCopyOption.ATOMIC_MOVE,
-                java.nio.file.StandardCopyOption.REPLACE_EXISTING)
-        }
     }
     companion object { const val MAX_BYTES = 256 * 1024 }
 }

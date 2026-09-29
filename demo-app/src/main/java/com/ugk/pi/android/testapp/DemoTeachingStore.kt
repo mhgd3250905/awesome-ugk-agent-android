@@ -99,7 +99,7 @@ internal class DemoTeachingStore(private val root: File) {
         check(files.all { it.isFile && it.canonicalFile.parentFile == dir }) { "记录包含异常文件，未删除" }
         // Atomically remove the record from lookup before deleting its flat evidence directory.
         val removed = File(root, ".deleted-$id-${UUID.randomUUID()}")
-        java.nio.file.Files.move(dir.toPath(), removed.toPath(), java.nio.file.StandardCopyOption.ATOMIC_MOVE)
+        DemoAtomicFileOps.move(dir, removed)
         removed.listFiles().orEmpty().forEach { check(it.delete()) { "记录已移除，但部分文件清理失败" } }
         check(removed.delete()) { "记录已移除，但目录清理失败" }
     }
@@ -108,10 +108,24 @@ internal class DemoTeachingStore(private val root: File) {
         require(it.guide != null && it.status != "active") { "请先结束并整理教学" }
         it.copy(availability = availability)
     }
-    @Synchronized fun recordUsage(id: String, revision: Int, outcome: String, summary: String) = update(id) {
+    @Synchronized fun recordUsage(
+        id: String,
+        revision: Int,
+        outcome: String,
+        summary: String,
+        verifiedAvailable: Boolean = false
+    ) = update(id) {
         require(it.guide != null && revision == it.guideRevision) { "经验版本已变化，请重新检索" }
         require(outcome in setOf("success", "failure", "network_error", "cancelled", "needs_revision"))
-        it.copy(availability = if (outcome == "needs_revision" && it.availability != "disabled") "needs_revision" else it.availability,
+        if (verifiedAvailable) {
+            require(outcome == "success" && it.status != "active" && it.compilationStatus == "completed" &&
+                it.availability in setOf("pending_validation", "available")) { "经验状态已变化，请重新检索" }
+        }
+        it.copy(availability = when {
+            verifiedAvailable -> "available"
+            outcome == "needs_revision" && it.availability != "disabled" -> "needs_revision"
+            else -> it.availability
+        },
             usageHistory = (it.usageHistory + DemoTeachingUsage(revision, outcome, summary.take(2000), System.currentTimeMillis())).takeLast(100))
     }
     /** Local lexical retrieval; pending references require the caller to verify current applicability. */
@@ -164,10 +178,13 @@ internal class DemoTeachingStore(private val root: File) {
         atomicWrite(File(directory(record.id), "record.json"), bytes)
     }
     private fun atomicWrite(file: File, bytes: ByteArray) {
-        val temporary = File(file.parentFile, file.name + ".tmp")
-        FileOutputStream(temporary).use { it.write(bytes); it.fd.sync() }
-        java.nio.file.Files.move(temporary.toPath(), file.toPath(), java.nio.file.StandardCopyOption.ATOMIC_MOVE,
-            java.nio.file.StandardCopyOption.REPLACE_EXISTING)
+        val temporary = File.createTempFile("${file.name}.", ".tmp", file.parentFile)
+        try {
+            FileOutputStream(temporary).use { it.write(bytes); it.fd.sync() }
+            DemoAtomicFileOps.move(temporary, file, replaceExisting = true)
+        } finally {
+            temporary.delete()
+        }
     }
     companion object {
         private const val MAX_JSON_BYTES = 4L * 1024 * 1024

@@ -1371,6 +1371,7 @@ class AgentFloatingWindow(private val context: Context) : ConfirmationOverlayHos
     }
 
     /** API 30+ path: IME state read from the insets dispatched to this overlay. */
+    @RequiresApi(30)
     private fun handleImeInsets(insets: WindowInsets) {
         // A drag or resize gesture owns the position until the finger lifts.
         if (overlayGestureActive || transitionOpening != null) return

@@ -96,11 +96,13 @@ internal class DemoOperationDraftStore(private val root: File) {
     }
 
     private fun atomicWrite(target: File, bytes: ByteArray) {
-        val temp = File(target.parentFile, target.name + ".tmp")
-        FileOutputStream(temp).use { it.write(bytes); it.fd.sync() }
-        java.nio.file.Files.move(temp.toPath(), target.toPath(),
-            java.nio.file.StandardCopyOption.REPLACE_EXISTING,
-            java.nio.file.StandardCopyOption.ATOMIC_MOVE)
+        val temp = File.createTempFile("${target.name}.", ".tmp", target.parentFile)
+        try {
+            FileOutputStream(temp).use { it.write(bytes); it.fd.sync() }
+            DemoAtomicFileOps.move(temp, target, replaceExisting = true)
+        } finally {
+            temp.delete()
+        }
     }
 
     private fun encode(d: DemoOperationDraft) = buildJsonObject {

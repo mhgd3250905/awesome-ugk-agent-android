@@ -78,6 +78,29 @@ class DemoTeachingExperiencePluginTest {
         assertEquals(2, prompts)
     }
 
+    @Test fun stateChangeDuringValidationDoesNotLeaveAPartialUsageWrite() = runBlocking {
+        val (store, id) = fixture(); var prompts = 0
+        val plugin = DemoTeachingExperiencePlugin(store) {
+            prompts++
+            if (prompts == 1) UserConfirmationDialogResult("use")
+            else {
+                // Model another valid UI action while the validation dialog is open.
+                store.setAvailability(id, "needs_revision")
+                UserConfirmationDialogResult("verified")
+            }
+        }
+        val token = Json.parseToJsonElement(call(plugin, "use", use(id)).content)
+            .jsonObject.getValue("usageId").jsonPrimitive.content
+        val report = call(plugin, "report", buildJsonObject {
+            put("usageId", token); put("outcome", "success"); put("summary", "完成条件已核对")
+        })
+
+        assertTrue(report.isError)
+        val saved = store.read(id)!!
+        assertEquals("needs_revision", saved.availability)
+        assertTrue("Rejected stale validation must not leave a usage entry", saved.usageHistory.isEmpty())
+    }
+
     @Test fun unusedApprovalFromAnEarlierTurnDoesNotBlockCurrentReport() = runBlocking {
         val (store, id) = fixture()
         val plugin = DemoTeachingExperiencePlugin(store) { UserConfirmationDialogResult("use") }

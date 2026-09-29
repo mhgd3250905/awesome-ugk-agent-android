@@ -89,13 +89,7 @@ internal class DemoTeachingExperiencePlugin(
                 verified = !response.withoutUserDecision && response.selectedButtonId == "verified"
             }
             withContext(Dispatchers.IO) {
-                store.recordUsage(use.recordId, use.revision, outcome, summary)
-                if (verified) {
-                    store.update(use.recordId) {
-                        require(it.guideRevision == use.revision && it.availability !in setOf("disabled", "needs_revision"))
-                        it.copy(availability = "available")
-                    }
-                }
+                store.recordUsage(use.recordId, use.revision, outcome, summary, verifiedAvailable = verified)
             }
             uses.remove(token)
             "已记录本次使用结果。用户验证可用：$verified"
