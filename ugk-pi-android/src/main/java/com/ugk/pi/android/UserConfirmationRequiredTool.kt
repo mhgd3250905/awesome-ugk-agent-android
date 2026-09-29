@@ -119,6 +119,12 @@ class UserConfirmationRequiredTool(
      * the user actually authorized. Only an id that means refusal, resolved while
      * the dialog was still the current context and bound to this Tool by its
      * ticket, is reported as a refusal.
+     *
+     * The ticket's input fingerprint must match this call's input as well: the
+     * user declined the exact input the dialog showed. Without this, declining
+     * input A would also report "the user declined this exact operation" for a
+     * different input B, and the model would never seek the confirmation that
+     * B actually needs.
      */
     private fun ToolExecutionContext.declinedConfirmationFor(call: ToolCall): Boolean {
         val confirmation = immediateDialogResult(call) ?: return false
@@ -128,7 +134,11 @@ class UserConfirmationRequiredTool(
         if (confirmation.booleanField("withoutUserDecision")) return false
         val ticket = (confirmation["ticket"] as? JsonObject)?.toTicketOrNull()
             ?: return false
-        return ticket.sessionId == sessionId && ticket.toolName == call.name
+        if (ticket.sessionId != sessionId || ticket.toolName != call.name) return false
+        val inputFingerprint = runCatching {
+            UserConfirmationInputFingerprint.sha256(call.input)
+        }.getOrNull() ?: return false
+        return ticket.inputFingerprint == inputFingerprint
     }
 
     /**
@@ -137,14 +147,20 @@ class UserConfirmationRequiredTool(
      *
      * Neither an authorization nor a refusal, but it does answer the question
      * "should the model ask again?", which the plain missing-confirmation
-     * wording cannot.
+     * wording cannot. Like the refusal path, this is bound to the exact input
+     * the dialog showed: an unanswered dialog for input A must not suppress
+     * the confirmation prompt for a different input B.
      */
     private fun ToolExecutionContext.unresolvedConfirmationFor(call: ToolCall): Boolean {
         val confirmation = immediateDialogResult(call) ?: return false
         if (!confirmation.booleanField("withoutUserDecision")) return false
         val ticket = (confirmation["ticket"] as? JsonObject)?.toTicketOrNull()
             ?: return false
-        return ticket.sessionId == sessionId && ticket.toolName == call.name
+        if (ticket.sessionId != sessionId || ticket.toolName != call.name) return false
+        val inputFingerprint = runCatching {
+            UserConfirmationInputFingerprint.sha256(call.input)
+        }.getOrNull() ?: return false
+        return ticket.inputFingerprint == inputFingerprint
     }
 
     private fun ToolExecutionContext.hasImmediateUserConfirmation(call: ToolCall): Boolean {

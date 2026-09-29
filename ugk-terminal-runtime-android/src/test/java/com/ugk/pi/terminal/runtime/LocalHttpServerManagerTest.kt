@@ -172,6 +172,59 @@ class LocalHttpServerManagerTest {
         }
     }
 
+    @Test
+    fun tokenAttributionCheckRejectsForeignServerAnswering200OnEveryPath() {
+        // A foreign bind-race winner that answers 200 to every path must not
+        // be attributed as our token-gated handler: our handler 404s the bare
+        // path and any unguessable decoy path, so attribution also requires
+        // those probes to NOT answer 200. Without the negative probes,
+        // start() would hand out a token URL that is actually served by
+        // someone else's content.
+        val server = FakeHttpServer { _ -> 200 }
+        try {
+            assertFalse(
+                "a foreign responder answering 200 on every path must not count as our server",
+                LocalHttpServerManager.isTokenServed(server.port, "good-token")
+            )
+        } finally {
+            server.stop()
+        }
+    }
+
+    @Test
+    fun tokenAttributionCheckRejectsForeignCatchAllWithRoot404() {
+        // A foreign bind-race winner that 404s only the root but answers 200
+        // to every other path would pass a bare-path-only second probe. The
+        // unguessable decoy probe must still reject it: only a responder
+        // that knows the real token 404s the decoy.
+        val server = FakeHttpServer { path ->
+            if (path == "/") 404 else 200
+        }
+        try {
+            assertFalse(
+                "a foreign catch-all responder (root 404, rest 200) must not count as our server",
+                LocalHttpServerManager.isTokenServed(server.port, "good-token")
+            )
+        } finally {
+            server.stop()
+        }
+    }
+
+    @Test
+    fun tokenAttributionCheckStillAcceptsOurHandlerShape() {
+        // Positive control for the hardened check: 200 on the token path and
+        // 404 on the bare path (exactly what the token-gated handler serves)
+        // must keep attributing.
+        val server = FakeHttpServer { path ->
+            if (path == "/good-token/" || path == "/good-token") 200 else 404
+        }
+        try {
+            assertTrue(LocalHttpServerManager.isTokenServed(server.port, "good-token"))
+        } finally {
+            server.stop()
+        }
+    }
+
     /** Minimal single-thread HTTP responder for the attribution helper. */
     private class FakeHttpServer(private val statusFor: (String) -> Int) {
         val port: Int
