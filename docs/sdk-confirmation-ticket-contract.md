@@ -1,6 +1,6 @@
 # 高影响操作确认票据契约
 
-更新时间：2026-08-14
+更新时间：2026-09-29
 
 本文是 SDK-OPT-008 的协议设计结果。它先固化确认边界，再进入 Core、System、Terminal 和 Demo 的一次性实现；本文件本身不改变运行时行为。
 
@@ -65,7 +65,7 @@
 - 受保护 Tool 只有在其 `priorMessages` 的最后一条 ToolResult 是本次确认结果、其后至多只有一个包含当前完整 ToolCall 的 Assistant(tool-call) 外壳、按钮属于允许集合、结果未声明 `withoutUserDecision=true`、票据未过期且所有绑定字段匹配时才执行。该 Assistant 外壳是 Runtime 的消息封装，不代表新的执行；User/System 消息或任何其他 ToolResult 出现在确认之后都必须拒绝。
 - 目标 Tool 执行成功、失败或被拒绝后，确认结果不再是下一次 Tool 的最近 ToolResult；下一次尝试必须重新确认。这是 v1 的“紧邻结果一次性”语义。
 - 不匹配、缺字段、JSON 非法、过期、拒绝按钮、不同 Session 或重复使用均 fail-closed，不调用 delegate。
-- “用户拒绝”的判定条件（与授权判定共用同一条“紧邻上下文”规则，强度不得不对称）：最后一条 ToolResult 仍是本次 `show_user_confirmation_dialog` 的结果、其后至多只有包含当前完整 ToolCall 的 Assistant 外壳、`selectedButtonId` 属于**拒绝集合**（`declinedButtonIds`，默认 `cancel/deny/no/reject/decline/stop`）、结果不含 `withoutUserDecision=true`，且票据的 `sessionId` 与 `toolName` 绑定到当前受保护 Tool。四条中任何一条不满足都不得宣称“用户已拒绝”。回执措辞按三种状态分派，互不覆盖：真实拒绝→“用户已拒绝，本轮不要再请求”；宿主声明未触达用户（`withoutUserDecision=true`）→“未得到用户决定，本轮不要再请求，并说明联系不上用户”；其余（含 `approve` 这类未被识别的肯定按钮、无票据、已过期）→返回列出允许集合的“需要确认”提示，让模型可以自我纠正。把未识别按钮说成拒绝会阻断用户其实已经授权的动作；把未触达用户说成“请再弹一次窗”则会让无 UI 的后台回合在等不到答案的对话框上空转。
+- “用户拒绝”的判定条件（与授权判定共用同一条“紧邻上下文”规则，强度不得不对称）：最后一条 ToolResult 仍是本次 `show_user_confirmation_dialog` 的结果、其后至多只有包含当前完整 ToolCall 的 Assistant 外壳、`selectedButtonId` 属于**拒绝集合**（`declinedButtonIds`，默认 `cancel/deny/no/reject/decline/stop`）、结果不含 `withoutUserDecision=true`，且票据的 `sessionId` 与 `toolName` 绑定到当前受保护 Tool，且票据的 `inputFingerprint` 与当前调用输入按第 3 节的摘要规则匹配（拒绝与未触达两个状态都要求这层输入绑定：用户拒绝的是弹窗展示的那组输入，换一组输入重试不得复用旧的拒绝或未决结论）。任何一条不满足都不得宣称“用户已拒绝”。回执措辞按三种状态分派，互不覆盖：真实拒绝→“用户已拒绝，本轮不要再请求”；宿主声明未触达用户（`withoutUserDecision=true`）→“未得到用户决定，本轮不要再请求，并说明联系不上用户”；其余（含 `approve` 这类未被识别的肯定按钮、无票据、已过期、票据绑定的是另一组输入）→返回列出允许集合的“需要确认”提示，让模型可以自我纠正。把未识别按钮说成拒绝会阻断用户其实已经授权的动作；把未触达用户说成“请再弹一次窗”则会让无 UI 的后台回合在等不到答案的对话框上空转。
 - `UserConfirmationDialogResult.withoutUserDecision`（默认 `false`）由宿主声明“该结果不是用户作出的决定”——窗口随宿主销毁、协程被取消、无 UI 的后台运行等。宿主无法区分时保持 `false`，SDK 视同一次真实按钮选择。该字段是**授权与拒绝两侧共同的硬条件**：为 `true` 时票据照常返回，但既不构成授权（否则宿主自己兜底选出的允许集合按钮就能让受保护 Tool 在无用户参与时执行），也不构成“用户已拒绝”。Demo 的 Activity presenter 在生命周期销毁路径上置为 `true`；Headless presenter 在按钮集合里没有可用拒绝按钮时置为 `true`。
 - v1 不宣称对宿主手工伪造的 `priorMessages` 提供持久化防重放能力；如果未来支持跨进程/排队确认，必须增加共享的 TicketStore，并把消费状态纳入新的协议版本。
 
