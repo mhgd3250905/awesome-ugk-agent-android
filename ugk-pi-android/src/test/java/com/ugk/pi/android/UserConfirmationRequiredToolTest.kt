@@ -367,6 +367,115 @@ class UserConfirmationRequiredToolTest {
     }
 
     @Test
+    fun doesNotAttributeDeclineOfOneInputToADifferentInput() = runBlocking {
+        // The user declined the dialog shown for input A. When the model then
+        // attempts the same tool with a different input B, the decline must
+        // not be reported as "the user declined this exact operation": B was
+        // never declined, and the model should seek confirmation for B.
+        val delegate = RecordingTool()
+        val inputA = buildJsonObject { put("target", "open_url_a") }
+        val inputB = buildJsonObject { put("target", "open_url_b") }
+        val tool = UserConfirmationRequiredTool(delegate, nowEpochMillis = { NOW })
+        val declinedA = AgentMessage.Tool(
+            confirmationResult(SESSION, tool.name, inputA, selectedButtonId = "cancel")
+        )
+        val envelopeB = AgentMessage.Assistant(
+            content = "",
+            toolCalls = listOf(ToolCall("intent-b", tool.name, inputB))
+        )
+
+        val result = tool.execute(
+            ToolCall("intent-b", tool.name, inputB),
+            ToolExecutionContext(
+                sessionId = SESSION,
+                priorMessages = listOf(declinedA, envelopeB)
+            )
+        )
+
+        assertTrue(result.isError)
+        assertFalse(delegate.executed)
+        assertFalse(
+            "a decline of input A must not read as a decline of input B, got: ${result.content}",
+            result.content.contains("declined")
+        )
+        assertTrue(
+            "the model should be told to confirm input B, got: ${result.content}",
+            result.content.contains("User confirmation required")
+        )
+    }
+
+    @Test
+    fun stillReportsDeclineWhenRetryingTheExactSameInput() = runBlocking {
+        // The anti-nag wording is preserved for the identical retry: declining
+        // input A and immediately retrying input A still reads as a refusal,
+        // not as an invitation to show the dialog again.
+        val delegate = RecordingTool()
+        val input = buildJsonObject { put("target", "open_url") }
+        val tool = UserConfirmationRequiredTool(delegate, nowEpochMillis = { NOW })
+        val declined = AgentMessage.Tool(
+            confirmationResult(SESSION, tool.name, input, selectedButtonId = "cancel")
+        )
+        val envelope = AgentMessage.Assistant(
+            content = "",
+            toolCalls = listOf(ToolCall("intent-1", tool.name, input))
+        )
+
+        val result = tool.execute(
+            ToolCall("intent-1", tool.name, input),
+            ToolExecutionContext(
+                sessionId = SESSION,
+                priorMessages = listOf(declined, envelope)
+            )
+        )
+
+        assertTrue(result.isError)
+        assertFalse(delegate.executed)
+        assertTrue(
+            "retrying the declined input must still read as a refusal, got: ${result.content}",
+            result.content.contains("declined")
+        )
+    }
+
+    @Test
+    fun doesNotSuppressConfirmationForADifferentInputAfterAnUnansweredDialog() = runBlocking {
+        // A dialog shown for input A closed without a user decision. When the
+        // model then attempts the same tool with a different input B, the
+        // unanswered A dialog must not suppress the confirmation prompt for B:
+        // the model should be told to confirm B, not that "the user could not
+        // be reached".
+        val delegate = RecordingTool()
+        val inputA = buildJsonObject { put("target", "open_url_a") }
+        val inputB = buildJsonObject { put("target", "open_url_b") }
+        val tool = UserConfirmationRequiredTool(delegate, nowEpochMillis = { NOW })
+        val unansweredA = AgentMessage.Tool(
+            unresolvedResult(SESSION, tool.name, inputA)
+        )
+        val envelopeB = AgentMessage.Assistant(
+            content = "",
+            toolCalls = listOf(ToolCall("intent-b", tool.name, inputB))
+        )
+
+        val result = tool.execute(
+            ToolCall("intent-b", tool.name, inputB),
+            ToolExecutionContext(
+                sessionId = SESSION,
+                priorMessages = listOf(unansweredA, envelopeB)
+            )
+        )
+
+        assertTrue(result.isError)
+        assertFalse(delegate.executed)
+        assertFalse(
+            "an unanswered dialog for input A must not suppress confirmation for input B, got: ${result.content}",
+            result.content.contains("without a user decision")
+        )
+        assertTrue(
+            "the model should be told to confirm input B, got: ${result.content}",
+            result.content.contains("User confirmation required")
+        )
+    }
+
+    @Test
     fun confirmationResultCannotBeReusedAfterDelegateResultIsAppended() = runBlocking {
         val delegate = RecordingTool()
         val input = buildJsonObject { put("target", "open_url") }
@@ -408,6 +517,25 @@ class UserConfirmationRequiredToolTest {
             name = "show_user_confirmation_dialog",
             content = buildJsonObject {
                 put("selectedButtonId", selectedButtonId)
+                put("ticket", ticket.toJsonObject())
+            }.toString()
+        )
+    }
+
+    private fun unresolvedResult(
+        sessionId: String,
+        toolName: String,
+        input: JsonObject,
+        issuedAt: Long = NOW,
+        expiresAt: Long = NOW + UserConfirmationTicket.DEFAULT_TTL_MILLIS
+    ): ToolResult {
+        val ticket = confirmationTicket(sessionId, toolName, input, issuedAt, expiresAt)
+        return ToolResult(
+            toolCallId = "dialog-1",
+            name = "show_user_confirmation_dialog",
+            content = buildJsonObject {
+                put("selectedButtonId", "cancel")
+                put("withoutUserDecision", true)
                 put("ticket", ticket.toJsonObject())
             }.toString()
         )

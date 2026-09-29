@@ -692,10 +692,20 @@ class LocalHttpServerManager(
         val RUNNING_STATES = setOf(STATE_RUNNING, STATE_STARTING)
 
         /**
-         * True only when GET http://127.0.0.1:<port>/<token>/ answers 200 —
-         * i.e. the responder is OUR token-gated handler, not a foreign
-         * process that won a bind race. Legacy tokenless records keep the
-         * bare-connect contract and always attribute.
+         * True only when the responder on [port] proves it is OUR token-gated
+         * handler: the token path answers 200, a fresh unguessable decoy
+         * path does not, and the bare path does not.
+         *
+         * The token path alone cannot attribute the responder: a foreign
+         * process that won the bind race and answers 200 to every path would
+         * satisfy a token-only check, and start() would then hand out a token
+         * URL served by someone else's content. The bare-path probe alone is
+         * not enough either: a foreign catch-all that 404s only the root
+         * would pass it. Our handler 404s every path that does not start with
+         * the real token, so a responder that answers 200 to the real token
+         * but not to an unguessable decoy (nor to the bare path) must know
+         * the token. Legacy tokenless records keep the bare-connect contract
+         * and always attribute.
          */
         internal fun isTokenServed(
             port: Int,
@@ -703,6 +713,32 @@ class LocalHttpServerManager(
             connectTimeoutMillis: Int = SOCKET_CONNECT_TIMEOUT_MILLIS
         ): Boolean {
             if (token.isNullOrBlank()) return true
+            if (!isStatusLine(port, "/$token/", " 200 ", connectTimeoutMillis)) return false
+            // Fail closed: when either negative probe itself errors, the
+            // responder is not provably ours.
+            val decoyStatusLine = probeStatusLine(port, "/${generateToken()}/", connectTimeoutMillis)
+                ?: return false
+            if (decoyStatusLine.contains(" 200 ")) return false
+            val bareStatusLine = probeStatusLine(port, "/", connectTimeoutMillis)
+                ?: return false
+            return !bareStatusLine.contains(" 200 ")
+        }
+
+        private fun isStatusLine(
+            port: Int,
+            path: String,
+            expectedFragment: String,
+            connectTimeoutMillis: Int
+        ): Boolean {
+            return probeStatusLine(port, path, connectTimeoutMillis)
+                ?.contains(expectedFragment) == true
+        }
+
+        private fun probeStatusLine(
+            port: Int,
+            path: String,
+            connectTimeoutMillis: Int
+        ): String? {
             // Raw socket HTTP/1.0 probe: HttpURLConnection routes through the
             // JVM proxy selector and response pooling, neither of which is
             // wanted for a loopback liveness check.
@@ -714,13 +750,12 @@ class LocalHttpServerManager(
                     )
                     socket.soTimeout = connectTimeoutMillis
                     val writer = socket.getOutputStream().bufferedWriter()
-                    writer.write("GET /$token/ HTTP/1.0\r\n")
+                    writer.write("GET $path HTTP/1.0\r\n")
                     writer.write("Host: $LOOPBACK_HOST\r\n\r\n")
                     writer.flush()
-                    val statusLine = socket.getInputStream().bufferedReader().readLine()
-                    statusLine?.contains(" 200 ") == true
+                    socket.getInputStream().bufferedReader().readLine()
                 }
-            }.getOrDefault(false)
+            }.getOrNull()
         }
 
         /**

@@ -172,6 +172,107 @@ class LocalHttpServerManagerTest {
         }
     }
 
+    @Test
+    fun tokenAttributionCheckRejectsForeignServerAnswering200OnEveryPath() {
+        // A foreign bind-race winner that answers 200 to every path must not
+        // be attributed as our token-gated handler: our handler 404s the bare
+        // path and any unguessable decoy path, so attribution also requires
+        // those probes to NOT answer 200. Without the negative probes,
+        // start() would hand out a token URL that is actually served by
+        // someone else's content.
+        val server = FakeHttpServer { _ -> 200 }
+        try {
+            assertFalse(
+                "a foreign responder answering 200 on every path must not count as our server",
+                LocalHttpServerManager.isTokenServed(server.port, "good-token")
+            )
+        } finally {
+            server.stop()
+        }
+    }
+
+    @Test
+    fun tokenAttributionCheckRejectsForeignCatchAllWithRoot404() {
+        // A foreign bind-race winner that 404s only the root but answers 200
+        // to every other path would pass a bare-path-only second probe. The
+        // unguessable decoy probe must still reject it: only a responder
+        // that knows the real token 404s the decoy.
+        val server = FakeHttpServer { path ->
+            if (path == "/") 404 else 200
+        }
+        try {
+            assertFalse(
+                "a foreign catch-all responder (root 404, rest 200) must not count as our server",
+                LocalHttpServerManager.isTokenServed(server.port, "good-token")
+            )
+        } finally {
+            server.stop()
+        }
+    }
+
+    @Test
+    fun tokenAttributionCheckStillAcceptsOurHandlerShape() {
+        // Positive control for the hardened check: 200 on the token path and
+        // 404 on the bare path (exactly what the token-gated handler serves)
+        // must keep attributing.
+        val server = FakeHttpServer { path ->
+            if (path == "/good-token/" || path == "/good-token") 200 else 404
+        }
+        try {
+            assertTrue(LocalHttpServerManager.isTokenServed(server.port, "good-token"))
+        } finally {
+            server.stop()
+        }
+    }
+
+    @Test
+    fun tokenAttributionCheckKeepsLegacyBehaviorForBlankToken() {
+        // Pre-existing contract: records written before token gating have no
+        // token, and attribution for them stays a bare connectivity check.
+        val server = FakeHttpServer { _ -> 404 }
+        try {
+            assertTrue(LocalHttpServerManager.isTokenServed(server.port, ""))
+            assertTrue(LocalHttpServerManager.isTokenServed(server.port, "   "))
+        } finally {
+            server.stop()
+        }
+    }
+
+    @Test
+    fun tokenAttributionCheckFailsClosedWhenANegativeProbeCannotConnect() {
+        // The token probe answers 200, then the responder vanishes before the
+        // decoy probe: a probe that cannot connect must fail closed, not be
+        // skipped or treated as "not 200".
+        val serverSocket = java.net.ServerSocket(0, 4, java.net.InetAddress.getByName("127.0.0.1"))
+        val port = serverSocket.localPort
+        val thread = Thread {
+            // Serve exactly one probe (the real-token probe), then disappear.
+            val client = runCatching { serverSocket.accept() }.getOrNull()
+            runCatching {
+                client?.let {
+                    val reader = it.getInputStream().bufferedReader()
+                    reader.readLine()
+                    var line: String?
+                    do { line = reader.readLine() } while (!line.isNullOrEmpty())
+                    it.getOutputStream().write(
+                        "HTTP/1.0 200 X\r\nContent-Length: 2\r\nConnection: close\r\n\r\nok".toByteArray()
+                    )
+                    it.close()
+                }
+            }
+            runCatching { serverSocket.close() }
+        }.apply { isDaemon = true; start() }
+        try {
+            assertFalse(
+                "a vanished responder must fail the attribution check",
+                LocalHttpServerManager.isTokenServed(port, "good-token")
+            )
+        } finally {
+            runCatching { serverSocket.close() }
+            thread.join(2000)
+        }
+    }
+
     /** Minimal single-thread HTTP responder for the attribution helper. */
     private class FakeHttpServer(private val statusFor: (String) -> Int) {
         val port: Int
