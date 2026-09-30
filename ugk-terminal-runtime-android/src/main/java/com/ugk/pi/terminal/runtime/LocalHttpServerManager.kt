@@ -163,15 +163,18 @@ class LocalHttpServerManager(
                 "--directory",
                 directory.absolutePath
             )
+            val builder = ProcessBuilder(command)
+                .directory(directory)
+                .redirectErrorStream(true)
+                .apply {
+                    environment().clear()
+                    environment().putAll(processEnvironment)
+                }
             val process = try {
-                ProcessBuilder(command)
-                    .directory(directory)
-                    .redirectErrorStream(true)
-                    .apply {
-                        environment().clear()
-                        environment().putAll(processEnvironment)
-                    }
-                    .start()
+                // Same spawn helper as Bash: this child is a server, never an
+                // interactive reader, and an open stdin pipe is a descriptor
+                // the parent would otherwise hold for the server's whole life.
+                NativeExecutableProcess.spawnWithStdinClosed(builder)
             } catch (error: Exception) {
                 throw LocalHttpServerException(
                     code = ERROR_START_FAILED,

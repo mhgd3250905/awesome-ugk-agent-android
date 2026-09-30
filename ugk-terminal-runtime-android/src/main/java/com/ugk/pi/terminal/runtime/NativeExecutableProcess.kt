@@ -78,7 +78,7 @@ internal object NativeExecutableProcess {
         val startedAt = SystemClock.elapsedRealtime()
         var process: Process? = null
         try {
-            process = builder.start()
+            process = spawnWithStdinClosed(builder)
             val stdout = OutputCollector(maxCapturedBytes)
             val stderr = OutputCollector(maxCapturedBytes)
             val stdoutThread = drain(process.inputStream, stdout, "ugk-native-stdout")
@@ -125,6 +125,49 @@ internal object NativeExecutableProcess {
             throw interrupted
         } finally {
             if (sessionReport.exists()) sessionReport.delete()
+        }
+    }
+
+    /**
+     * Starts [builder] and immediately shuts the child's stdin.
+     *
+     * Every process this Runtime spawns goes through here, so the stdin rule
+     * cannot be forgotten at a new spawn site. The child's stdin is a pipe, and
+     * a pipe the parent keeps open never reports end-of-file: a command that
+     * reads standard input would then block until the whole call timeout
+     * expires and return with no output. Both launch paths are non-interactive
+     * by contract - Bash runs `-c` scripts behind a "non-interactive Bash
+     * script" tool description, and the HTTP handler is a server - so an
+     * immediate end-of-file is the correct and only useful state to publish.
+     *
+     * [starter] is a seam, not configurability: the production default is
+     * `ProcessBuilder.start()`, and only the JVM test substitutes it, because
+     * the surrounding call path reads `SystemClock` and execs an ELF from
+     * nativeLibraryDir, neither of which exists on the host JVM. That also
+     * means this test proves the rule inside the helper, not that each call
+     * site reaches the helper; the two call sites are pinned by grep in the
+     * round report.
+     */
+    internal fun spawnWithStdinClosed(
+        builder: ProcessBuilder,
+        starter: (ProcessBuilder) -> Process = { it.start() }
+    ): Process {
+        val process = starter(builder)
+        closeChildStdin(process)
+        return process
+    }
+
+    /**
+     * A failed shutdown is absorbed: nothing here can turn it into a hang, the
+     * write side has already been handed to the child, and this Runtime has no
+     * logging surface (see [sweepResidualProcessGroup]). The consequence stays
+     * observable as a timed-out result, so no silent success is claimed.
+     */
+    private fun closeChildStdin(process: Process) {
+        try {
+            process.outputStream.close()
+        } catch (_: IOException) {
+            // Android may close a Process pipe while its child is being reaped.
         }
     }
 
