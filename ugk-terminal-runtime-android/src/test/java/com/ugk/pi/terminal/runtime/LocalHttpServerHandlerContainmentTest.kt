@@ -80,14 +80,37 @@ class LocalHttpServerHandlerContainmentTest {
         File(outsideDirectory, "topsecret.txt").writeText(TOP_SECRET, Charsets.UTF_8)
         val fixture = startHandler()
         try {
-            assertFalse(
+            assertEquals(
                 "traversal escaped the served root",
-                fixture.get("/${fixture.token}/../../../../topsecret.txt").status == "200"
+                "404",
+                fixture.get("/${fixture.token}/../../../../topsecret.txt").status
             )
-            assertFalse(
+            assertEquals(
                 "encoded traversal escaped the served root",
-                fixture.get("/${fixture.token}/%2e%2e/%2e%2e/%2e%2e/topsecret.txt").status == "200"
+                "404",
+                fixture.get("/${fixture.token}/%2e%2e/%2e%2e/%2e%2e/topsecret.txt").status
             )
+        } finally {
+            fixture.close()
+        }
+    }
+
+    /**
+     * `realpath()` and `stat()` raise `ValueError`, not `OSError`, for a path
+     * carrying an embedded NUL. Uncaught, that escapes the request handler and
+     * the connection closes with no response at all - which every "must not be
+     * served" oracle in this class would happily accept as a refusal.
+     */
+    @Test
+    fun encodedNulIsRefusedWithAnAnswerNotWithAClosedConnection() {
+        val fixture = startHandler()
+        try {
+            assertEquals(
+                "a NUL-bearing path must be answered, not dropped",
+                "404",
+                fixture.get("/${fixture.token}/index.html%00.png").status
+            )
+            assertEquals("200", fixture.get("/${fixture.token}/index.html").status)
         } finally {
             fixture.close()
         }

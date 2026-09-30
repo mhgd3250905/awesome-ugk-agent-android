@@ -82,10 +82,11 @@ prebuilt Runtime-managed Tool when the task needs a persistent service.
   it.
 - Use `local_http_server_stop` when the user asks to stop the service. It only
   stops a service owned and recorded by this Runtime and requires confirmation.
-- The served directory is narrowed to what that directory itself publishes: a
-  link out of it, and any file reached through links that shares its inode with
-  a name outside the served tree, both answer 404. Do not treat the served
-  directory as a way to expose another app-private path.
+- The served directory is narrowed to what that directory itself publishes. A
+  link out of it answers 404, and so does any regular file whose inode carries
+  more than one link name anywhere - the second name does not have to be outside
+  the served tree. Do not treat the served directory as a way to expose another
+  app-private path, and do not link one in.
 - The returned URL has the form `http://127.0.0.1:<port>/<token>/`, where the
   token path segment is random and created by each start. Use the complete URL
   exactly as returned by the tool, without editing or shortening it. The URL is

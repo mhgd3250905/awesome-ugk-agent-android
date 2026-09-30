@@ -96,10 +96,7 @@ class LocalHttpServerManager(
             records[request.port]?.let { existing ->
                 val existingStatus = statusFor(existing)
                 // Reuse only what this call can still attribute to the server
-                // it is describing. An unattributable record is rebuilt rather
-                // than reused, exactly as the old liveness heuristic did: the
-                // port is not serving, so honouring the request means taking
-                // it over.
+                // it is describing; an unattributable row is rebuilt, not reused.
                 val attributable = queryDispositionFor(existing) == QueryDisposition.REPORT
                 if (existingStatus.state in RUNNING_STATES && attributable) {
                     directoryReuseError(request.port, existing.directory, directory)?.let { failure ->
@@ -107,7 +104,23 @@ class LocalHttpServerManager(
                     }
                     return existingStatus
                 }
-                discardRecord(existing)
+                // Nothing answers this port as our server, so honouring the
+                // request means taking the port over - but only once that is
+                // established. Dropping the record first deletes the persisted
+                // metadata, the only surviving copy of the issued token, and the
+                // port check below can still refuse the start; that ordering
+                // leaves a live server with no record at all, which is exactly
+                // the state status() was changed away from. An earlier shape of
+                // this method did it in that order.
+                if (isPortListening(request.port)) {
+                    throw LocalHttpServerException(
+                        code = ERROR_PORT_IN_USE,
+                        message = "Port ${request.port} is answering on 127.0.0.1 but the record for " +
+                            "${existing.directory.absolutePath} can no longer be attributed to a server " +
+                            "this Runtime can describe. Stop it first or choose another port."
+                    )
+                }
+                removeRecord(existing)
             }
 
             if (isPortListening(request.port)) {
@@ -325,10 +338,11 @@ class LocalHttpServerManager(
                 when (stopDispositionFor(server)) {
                     // Both drop-without-signalling rows: the group is either
                     // provably gone or no longer attributable, and in neither
-                    // case may stopAll() signal it. Neither is counted as
-                    // stopped, because nothing was terminated here - the
-                    // returned count is what the host uses to decide whether
-                    // its own services are all down.
+                    // case may stopAll() signal it. Neither is counted in the
+                    // returned total, because nothing was terminated here - the
+                    // total is the number of groups this call actually brought
+                    // down, so a caller must not read "stopped N" as "N records
+                    // were cleared". No caller today consumes it.
                     StopDisposition.DROP_CONFIRMED_DEAD,
                     StopDisposition.DROP_UNATTRIBUTABLE -> removeRecord(server)
                     StopDisposition.SIGNAL_PROCESS_GROUP -> {
@@ -373,7 +387,7 @@ class LocalHttpServerManager(
 
     private fun statusFor(server: ManagedServer): LocalHttpServerStatus {
         val processAlive = hasProcess(server)
-        val portListening = isPortListening(server.port)
+        val portListening = answersAsOurServer(server)
         val state = when {
             processAlive && portListening -> STATE_RUNNING
             processAlive -> STATE_STARTING
@@ -412,6 +426,31 @@ class LocalHttpServerManager(
     }
 
     /**
+     * Whether the responder on this port is this record's own server.
+     *
+     * A bare connect only proves something holds the port. For a record this
+     * process did not start there is no other attribution available: the
+     * process-group probe cannot do it either, because
+     * [NativeProcessGroupControl.processGroupExists] deliberately treats
+     * `EPERM` as "exists", so a group recycled to any other owner keeps the
+     * record looking alive. Only the token-gated handler can identify itself,
+     * and this is the same helper start() uses to attribute a server it just
+     * launched - without it a foreign listener makes status() report `running`
+     * with a token URL nobody is serving, and start() reuses that port.
+     *
+     * A record this process started is attributed by the handle alone: its
+     * process-group id came from our own session launcher, so a plain connect
+     * is enough and stays cheap on the hot status path.
+     */
+    private fun answersAsOurServer(server: ManagedServer): Boolean {
+        return if (server.process != null) {
+            isPortListening(server.port)
+        } else {
+            isTokenServed(server.port, server.token)
+        }
+    }
+
+    /**
      * One of the two observations the disposition tables need. The grace period
      * exists because kill(-pgid, 0) cannot distinguish a dead server from an
      * unrelated group that later recycled the same id: a normal start listens
@@ -428,28 +467,15 @@ class LocalHttpServerManager(
         processHandleAlive = server.process?.let(::isAlive) == true,
         processGroupExists = { NativeProcessGroupControl.processGroupExists(server.processGroupId) },
         pastStaleGrace = isPastStaleGrace(server),
-        portListening = { isPortListening(server.port) }
+        portListening = { answersAsOurServer(server) }
     )
 
     private fun stopDispositionFor(server: ManagedServer): StopDisposition = stopDisposition(
         processHandleAlive = server.process?.let(::isAlive) == true,
         processGroupExists = { NativeProcessGroupControl.processGroupExists(server.processGroupId) },
         pastStaleGrace = isPastStaleGrace(server),
-        portListening = { isPortListening(server.port) }
+        portListening = { answersAsOurServer(server) }
     )
-
-    /**
-     * Removes a record that must not be reused. A record that still owns a
-     * live in-process handle cannot have a recycled process-group id, so its
-     * group is terminated through the normal stop path. A handle-less
-     * (reloaded) record is dropped without signaling for the reason above.
-     */
-    private fun discardRecord(server: ManagedServer) {
-        if (server.process?.let(::isAlive) == true) {
-            stopRecord(server)
-        }
-        removeRecord(server)
-    }
 
     private fun stopRecord(server: ManagedServer): Boolean {
         var groupStopped = !NativeProcessGroupControl.processGroupExists(server.processGroupId)
@@ -759,15 +785,16 @@ class LocalHttpServerManager(
          * What stop() and stopAll() may do to one record, on the same ruler
          * status() reads from.
          *
-         * A group is only signalled while a process this instance started can
-         * still be seen in it, or while the port says the service is up. For a
-         * record whose own session leader has already been reaped, or that was
-         * rehydrated from disk, that is aged and deaf, the persisted id may
-         * have been recycled to an unrelated group: signalling it could kill
-         * innocent same-UID processes, so it is dropped instead. That leaks a
-         * process group in the case where it really was our own orphan - the
-         * cheaper of the two failures, and the stance this class has always
-         * taken.
+         * Three things grant attribution, and any one is enough: a process this
+         * instance started is still running; the record is younger than the
+         * grace period (its metadata was written during a start that either
+         * succeeded or rolled itself back, so the group is recent enough to be
+         * ours by history); or the port still answers this record's own token
+         * path. When none of them hold - an aged, deaf record rehydrated from
+         * disk - the persisted id may have been recycled to an unrelated group,
+         * so it is dropped rather than signalled. That leaks a process group in
+         * the case where it really was our own orphan, which is the cheaper of
+         * the two failures and the stance this class has taken since D-028.
          */
         internal fun stopDisposition(
             processHandleAlive: Boolean,
@@ -999,10 +1026,13 @@ from functools import partial
 from http.server import SimpleHTTPRequestHandler, ThreadingHTTPServer
 
 BIND_HOST = "127.0.0.1"
+# Used only if the standard library stops exposing index_pages; it is then a
+# floor rather than a full account of what the handler may open.
 FALLBACK_INDEX_PAGES = ("index.html", "index.htm")
 
 SYMLINK_ESCAPE_MESSAGE = "Path resolves outside the served root"
 HARD_LINK_MESSAGE = "Multiple-link file refused"
+MALFORMED_PATH_MESSAGE = "Path could not be resolved"
 
 
 class ServedRootEscape(Exception):
@@ -1053,10 +1083,20 @@ class TokenGatedRequestHandler(SimpleHTTPRequestHandler):
         else:
             # Only a token holder reaches this branch, so naming the cause is
             # safe and keeps the bounded server log attributable. Both
-            # messages are fixed constants: no path reaches the response.
+            # messages are fixed constants: no requested path reaches the response.
             self.send_error(404, str(error))
 
     def require_publishable(self, local):
+        # realpath() and stat() raise ValueError - not OSError - for a path
+        # carrying an embedded NUL, and an exception escaping from here aborts
+        # the connection with no answer at all. A refusal is the honest shape,
+        # which is why the tests insist on 404 rather than merely "not 200".
+        try:
+            self.require_publishable_name(local)
+        except ValueError:
+            raise ServedRootEscape(MALFORMED_PATH_MESSAGE)
+
+    def require_publishable_name(self, local):
         root = os.path.realpath(self.directory)
         resolved = os.path.realpath(local)
         if resolved != root and not resolved.startswith(root + os.sep):

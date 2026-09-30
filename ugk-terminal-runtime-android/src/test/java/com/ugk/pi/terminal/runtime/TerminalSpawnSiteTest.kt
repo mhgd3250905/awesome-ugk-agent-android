@@ -36,8 +36,8 @@ class TerminalSpawnSiteTest {
         )
 
         val offenders = codeLines
-            .filter { (_, line) -> line.contains(SPAWN_CALL) || line.contains(EXEC_CALL) }
-            .filterNot { (file, line) -> file == HELPER_FILE && line == HELPER_DEFAULT }
+            .filter { (_, line) -> line.contains(EXEC_CALL) || spawnsANativeProcess(line) }
+            .filterNot { (file, line) -> file == HELPER_FILE && line.contains(HELPER_DEFAULT_MARKER) }
             .map { (file, line) -> "$file: $line" }
 
         assertEquals(
@@ -49,12 +49,29 @@ class TerminalSpawnSiteTest {
         )
     }
 
+    /**
+     * Deliberately narrow: only a call that can create a child process counts.
+     * Matching bare `.start()` would flag every `Thread.start()` and
+     * `Timer.start()` in the module, and a guard that cries wolf gets deleted -
+     * which is worse than no guard.
+     */
+    private fun spawnsANativeProcess(line: String): Boolean {
+        val callsStart = line.contains(START_CALL) || line.contains(START_REFERENCE)
+        return callsStart && (line.contains(PROCESS_BUILDER) || line.contains(BUILDER_REFERENCE))
+    }
+
     companion object {
         private const val SOURCE_DIRECTORY = "src/main"
         private const val MAIN_SOURCE_FLOOR = 200
-        private const val SPAWN_CALL = ".start()"
+        private const val START_CALL = ".start()"
+        private const val START_REFERENCE = "::start"
         private const val EXEC_CALL = "Runtime.getRuntime().exec"
+        private const val PROCESS_BUILDER = "ProcessBuilder"
+        private const val BUILDER_REFERENCE = "builder"
         private const val HELPER_FILE = "NativeExecutableProcess.kt"
-        private const val HELPER_DEFAULT = "starter: (ProcessBuilder) -> Process = { it.start() }"
+
+        // Matched by content rather than by the whole trimmed line, so an
+        // unrelated reformat of the default argument cannot turn this red.
+        private const val HELPER_DEFAULT_MARKER = "starter: (ProcessBuilder) -> Process"
     }
 }

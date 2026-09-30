@@ -596,7 +596,7 @@ fun localHttpServerSkill(requireUserConfirmation: Boolean = true): AndroidSkill 
                 toolName = "local_http_server_stop",
                 purpose = "Stops one managed local HTTP server by port.",
                 whenToUse = "Use when the user asks to stop the local website or the temporary service should be cleaned up.",
-                resultSemantics = "Stops only a service recorded by this Runtime; it never kills an unmanaged process. A `stopped` state means the process group was terminated or was already provably gone; `unattributable` means the record was dropped without any signal being sent, so the service may still be running."
+                resultSemantics = "Stops only a service recorded by this Runtime, and only a process group it can attribute to that service; it never kills an unmanaged process. A `stopped` state means the process group was terminated or was already provably gone; `unattributable` means the record was dropped without any signal being sent, so the service may still be running."
             )
         )
     )
