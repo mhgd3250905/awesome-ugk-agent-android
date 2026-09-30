@@ -85,9 +85,15 @@ class LocalHttpServerManagerTest {
     }
 
     @Test
-    fun handlerScriptGatesPathsOnTheTokenAndContainsSymlinkEscapeCheck() {
+    fun handlerScriptGatesPathsOnTheTokenAndContainsServedRootContainment() {
         val script = LocalHttpServerManager.TOKEN_HTTP_HANDLER_SCRIPT
 
+        // Structural smoke only. These substrings cannot tell a working
+        // boundary from a no-op one: replacing the containment condition with
+        // `False` keeps every assertion below green while publishing the
+        // whole UID through the token URL. [LocalHttpServerHandlerContainmentTest]
+        // is the executable lock for this script.
+        //
         // Token gate: the first path segment must equal the token, and a
         // mismatch answers 404 (not 403, so the tree cannot be probed).
         assertTrue(script.contains("class TokenGatedRequestHandler(SimpleHTTPRequestHandler)"))
@@ -95,10 +101,18 @@ class LocalHttpServerManagerTest {
         assertTrue(script.contains("send_error(404)"))
 
         // Symlink containment: the mapped local path must stay inside the
-        // realpath of the served root.
+        // realpath of the served root, with a path separator on the prefix.
         assertTrue(script.contains("os.path.realpath(self.directory)"))
         assertTrue(script.contains("os.path.realpath(local)"))
-        assertTrue(script.contains("raise SymlinkEscape(path)"))
+        assertTrue(script.contains("root + os.sep"))
+        assertTrue(script.contains("raise ServedRootEscape(SYMLINK_ESCAPE_MESSAGE)"))
+
+        // Hard-link containment: realpath cannot tell a hard link from the
+        // file it shares an inode with, so extra links are refused. lstat is
+        // load-bearing - stat() would follow the link being judged.
+        assertTrue(script.contains("os.lstat(local)"))
+        assertTrue(script.contains("stat.S_ISREG(info.st_mode) and info.st_nlink > 1"))
+        assertTrue(script.contains("raise ServedRootEscape(HARD_LINK_MESSAGE)"))
 
         // Loopback-only binding and stdlib-only server bootstrap.
         assertTrue(script.contains("BIND_HOST = \"127.0.0.1\""))
@@ -121,17 +135,19 @@ class LocalHttpServerManagerTest {
                     .waitFor() == 0
             }.getOrDefault(false)
         }
-        if (pythonExecutable == null) {
-            // Optional smoke: the host running the JVM tests has no python.
-            System.err.println("py_compile smoke skipped: no python on PATH")
-            return
-        }
+        // A host without python used to return here, which counted as a pass
+        // for a check that never ran. Report it as a skip so the JUnit
+        // aggregate shows the missing coverage instead of hiding it.
+        org.junit.Assume.assumeTrue(
+            "py_compile smoke needs a python on the host PATH",
+            pythonExecutable != null
+        )
 
         val script = File.createTempFile("token-http-handler", ".py").apply {
             writeText(LocalHttpServerManager.TOKEN_HTTP_HANDLER_SCRIPT + "\n", Charsets.UTF_8)
             deleteOnExit()
         }
-        val process = ProcessBuilder(pythonExecutable, "-m", "py_compile", script.absolutePath)
+        val process = ProcessBuilder(pythonExecutable!!, "-m", "py_compile", script.absolutePath)
             .redirectErrorStream(true)
             .start()
         val output = process.inputStream.bufferedReader().readText()

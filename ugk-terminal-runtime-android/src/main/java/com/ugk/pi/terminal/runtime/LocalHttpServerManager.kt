@@ -70,8 +70,11 @@ class LocalHttpServerException(
  * loopback port space, so plain `python -m http.server` would let every
  * other App read the whole served tree. The handler rejects every path that
  * does not carry the token (404, not 403, so the tree cannot be probed) and
- * refuses local paths whose realpath escapes the served root, which blocks
- * symlink escapes planted inside the workspace.
+ * then applies two containment rules to what a token holder may read: a
+ * local path whose realpath escapes the served root is refused, which blocks
+ * symlink escapes planted inside the workspace, and a regular file carrying
+ * more than one link is refused, because a hard link resolves to its own
+ * served-tree name and would otherwise publish any same-UID file.
  */
 class LocalHttpServerManager(
     private val runtime: BashRuntime
@@ -834,27 +837,43 @@ class LocalHttpServerManager(
          * Fixed handler served by the managed Python process. Requirements:
          * standard library only; bind 127.0.0.1; answer 404 unless the first
          * URL path segment equals the per-start token; reject paths whose
-         * realpath leaves the served root (symlink containment).
+         * realpath leaves the served root (symlink containment); and refuse a
+         * regular file that carries more than one link (hard-link
+         * containment). Locked by [LocalHttpServerHandlerContainmentTest],
+         * which drives these bytes under a real interpreter; the text
+         * assertions in LocalHttpServerManagerTest are a smoke check only and
+         * stay green when the logic below is semantically broken.
          */
         internal const val TOKEN_HTTP_HANDLER_SCRIPT = """# Token-gated static HTTP server for the UGK Android Terminal Runtime.
 #
 # Standard library only. Every request URL must begin with the per-start
 # random token path segment created by the Runtime; any other path answers
 # 404, so other apps on the shared loopback interface cannot enumerate the
-# served tree. A path whose mapped local file resolves outside the served
-# root, for example through a symlink, is rejected with 404 as well.
+# served tree. Two containment rules then decide what the token holder may
+# actually read:
+#
+#   * a path whose mapped local file resolves outside the served root (for
+#     example through a symlink planted in the workspace) answers 404;
+#   * a regular file carrying more than one link answers 404, because a hard
+#     link is indistinguishable from the file it was made from: realpath
+#     resolves it to its own served-tree name, so the rule above alone would
+#     publish any same-UID file the workspace points a link at.
 
 import argparse
 import os
+import stat
 import urllib.parse
 from functools import partial
 from http.server import SimpleHTTPRequestHandler, ThreadingHTTPServer
 
 BIND_HOST = "127.0.0.1"
 
+SYMLINK_ESCAPE_MESSAGE = "Symlink escape blocked"
+HARD_LINK_MESSAGE = "Multiple-link file refused"
 
-class SymlinkEscape(Exception):
-    # Raised when a requested path resolves outside the served root.
+
+class ServedRootEscape(Exception):
+    # Raised when a mapped local path must not be published by this root.
     pass
 
 
@@ -877,28 +896,46 @@ class TokenGatedRequestHandler(SimpleHTTPRequestHandler):
 
     def do_GET(self):
         if not self.token_matches():
-            self.send_error(404)
+            self.refuse()
             return
         try:
             super().do_GET()
-        except SymlinkEscape:
-            self.send_error(404)
+        except ServedRootEscape as error:
+            self.refuse(error)
 
     def do_HEAD(self):
         if not self.token_matches():
-            self.send_error(404)
+            self.refuse()
             return
         try:
             super().do_HEAD()
-        except SymlinkEscape:
+        except ServedRootEscape as error:
+            self.refuse(error)
+
+    def refuse(self, error=None):
+        if error is None:
+            # No detail: an unauthenticated probe must not be able to tell an
+            # absent path from a refused one, so the tree cannot be probed.
             self.send_error(404)
+        else:
+            # Only a token holder reaches this branch, so naming the cause is
+            # safe and keeps the bounded server log attributable.
+            self.send_error(404, str(error))
 
     def translate_path(self, path):
         local = super().translate_path(self.path_without_token(path))
         root = os.path.realpath(self.directory)
         resolved = os.path.realpath(local)
         if resolved != root and not resolved.startswith(root + os.sep):
-            raise SymlinkEscape(path)
+            raise ServedRootEscape(SYMLINK_ESCAPE_MESSAGE)
+        # lstat, not stat: following the link is exactly what must not be
+        # trusted here. A missing path is left to send_head()'s own 404.
+        try:
+            info = os.lstat(local)
+        except OSError:
+            return local
+        if stat.S_ISREG(info.st_mode) and info.st_nlink > 1:
+            raise ServedRootEscape(HARD_LINK_MESSAGE)
         return local
 
 
