@@ -144,7 +144,7 @@ Android 11+ package visibility 可能让预查询返回空。
 `terminal_bash_execute` 的生命周期是一次 bounded call，不是 daemon supervisor。
 
 **修复**：SDK runtime `AGENTS.md` 明确了直接调用规则；Agent 需要长驻本地 HTTP 服务时使用
-`local_http_server_start`，用 `local_http_server_status` 做只读健康检查，用
+`local_http_server_start`，用 `local_http_server_status` 做健康检查（不启停服务、不发信号），用
 `local_http_server_stop` 做清理。专用 Tool 直接使用已验证的 CPython launcher 和 Runtime
 process-group 控制，服务只绑定 `127.0.0.1`。
 

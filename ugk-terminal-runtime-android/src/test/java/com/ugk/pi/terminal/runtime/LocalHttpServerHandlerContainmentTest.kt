@@ -257,7 +257,21 @@ class LocalHttpServerHandlerContainmentTest {
         val script = File(tempRoot, "token_http_handler.py").apply {
             writeText(LocalHttpServerManager.TOKEN_HTTP_HANDLER_SCRIPT, Charsets.UTF_8)
         }
-        return RunningHandler(script, servedRoot, LocalHttpServerManager.generateToken())
+        // A free port is only free until the interpreter binds it, so fixtures
+        // launched back to back can hand the same number to a process that no
+        // longer holds it. Retry on "never served" only: every other failure is
+        // a real answer from the server and must reach the test unchanged.
+        var lastFailure: Throwable? = null
+        repeat(LAUNCH_ATTEMPTS) {
+            val candidate = runCatching {
+                RunningHandler(script, servedRoot, LocalHttpServerManager.generateToken())
+            }
+            candidate.getOrNull()?.let { return it }
+            val failure = candidate.exceptionOrNull()!!
+            if (failure.message?.contains(NEVER_SERVED_MARKER) != true) throw failure
+            lastFailure = failure
+        }
+        throw lastFailure!!
     }
 
     private data class HandlerResponse(val status: String, val body: String)
@@ -308,7 +322,8 @@ class LocalHttpServerHandlerContainmentTest {
                 Thread.sleep(100L)
             }
             process.destroy()
-            fail("handler never served its token path (last probe: $lastStatus). log:\n$log")
+            process.waitFor(5, java.util.concurrent.TimeUnit.SECONDS)
+            fail(NEVER_SERVED_MARKER + " handler did not answer its token path (last probe: $lastStatus). log:\n$log")
         }
 
         fun get(path: String): HandlerResponse {
@@ -375,7 +390,12 @@ class LocalHttpServerHandlerContainmentTest {
     companion object {
         private const val TOP_SECRET = "API_KEY=sk-should-never-be-served"
         private const val LOOPBACK = "127.0.0.1"
-        private const val START_BUDGET_MILLIS = 40_000L
+
+        // Per attempt, not per test: a bound-then-released port can be taken
+        // again before the interpreter gets it, so the launcher retries.
+        private const val START_BUDGET_MILLIS = 15_000L
+        private const val LAUNCH_ATTEMPTS = 3
+        private const val NEVER_SERVED_MARKER = "never served:"
         private const val CONNECT_TIMEOUT_MILLIS = 4_000
         private const val READ_TIMEOUT_MILLIS = 8_000
         private val PYTHON_CANDIDATES = listOf("python", "python3")

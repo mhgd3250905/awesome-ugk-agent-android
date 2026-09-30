@@ -105,8 +105,8 @@ Agent 创建网站文件
   → local_http_server_start（一次用户确认）
   → SDK 直接启动 nativeLibraryDir 中的 CPython launcher
   → libugk_session_launcher.so / setsid 建立独立 process group
-  → python -m http.server --bind 127.0.0.1
-  → local_http_server_status（只读，无确认）
+  → token_http_handler.py（标准库 handler，仅绑定 127.0.0.1，URL 首段必须等于本次 token）
+  → local_http_server_status（不启停、不发信号，无需确认）
   → launch_android_app_intent(open_url, 返回的 loopback URL)
   → local_http_server_stop（一次用户确认）
 ```
