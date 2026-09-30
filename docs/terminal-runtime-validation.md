@@ -531,12 +531,12 @@ Core API/JVM 边界：
 
 ### 门禁口径（只认日志 `EXIT=` 行与 JUnit XML 汇总）
 
-独占 `--rerun-tasks` 全量实跑，代码状态 = 分支 HEAD `3977b77`，`git status --porcelain` 为 0 项，运行窗口 `2026-09-30T20:05:32Z … 20:06:22Z`，128 份 JUnit XML 的 `timestamp` 全部落在该窗口内（最早 `2026-09-30T20:05:40.265Z`、最晚 `2026-09-30T20:06:21.180Z`）：
+独占 `--rerun-tasks` 全量实跑，代码状态 = 分支 HEAD `04eefe0`，`git status --porcelain` 为 0 项，运行窗口 `2026-09-30T20:18:32Z … 20:19:12Z`，全部 JUnit XML 的 `timestamp` 落在该窗口内（最晚 `2026-09-30T20:19:11.700Z`）：
 
 ```
 EXIT=0
-TOTAL tests=843 failures=0 errors=0 skipped=3
-MODULE ugk-terminal-runtime-android   tests=49  failures=0 errors=0 skipped=0
+TOTAL tests=844 failures=0 errors=0 skipped=3
+MODULE ugk-terminal-runtime-android   tests=50  failures=0 errors=0 skipped=0
 MODULE pi-terminal-skill-android      tests=44  failures=0 errors=0 skipped=0
 MODULE demo-app                       tests=318 failures=0 errors=0 skipped=0
 MODULE ugk-pi-android                 tests=211 failures=0 errors=0 skipped=0
@@ -547,9 +547,11 @@ MODULE pi-schedule-skill-android      tests=20  failures=0 errors=0 skipped=0
 MODULE pi-file-skill-android          tests=13  failures=0 errors=0 skipped=1
 ```
 
-基线对照：同一台机器、同一命令在 `main@88b05e0` 上独占实跑为 `821 / 3 skipped / 0 failure`。本轮净增 22 项，全部落在 `ugk-terminal-runtime-android`（27 → 49）：`LocalHttpServerHandlerContainmentTest` 7、`LocalHttpServerRecordDispositionTest` 11、`NativeExecutableProcessStdinTest` 3、`TerminalSpawnSiteTest` 1。`pi-attention-skill-android` 仍 `NO-SOURCE`（第九轮已在 `AGENTS.md` 明示为已登记缺口，本轮未变）。
+基线对照：同一台机器、同一命令在 `main@88b05e0` 上独占实跑为 `821 / 3 skipped / 0 failure`。本轮净增 23 项，全部落在 `ugk-terminal-runtime-android`（27 → 50）：`LocalHttpServerHandlerContainmentTest` 8、`LocalHttpServerRecordDispositionTest` 11、`NativeExecutableProcessStdinTest` 3、`TerminalSpawnSiteTest` 1。`3 skipped` 的来源本轮不再唯一：新增 interpreter 用例在宿主无 python 或无链接权限时各自产生 skip（本机全部不 skip，所以仍为 3，且全部来自 agent-skill/file 两个模块）。`pi-attention-skill-android` 仍 `NO-SOURCE`（第九轮已在 `AGENTS.md` 明示为已登记缺口，本轮未变）。
 
-证据文件为 gitignore 的 `build/reviewlogs/`（本机可复核，合并后看不到）：`main-baseline.log`、`delivery-final-rerun.log`、`mut-*.log`、`probe-matrix-round2.txt`。关键输出原文已抄进本节与 D-029 / D-030。
+证据文件为 gitignore 的 `build/reviewlogs/`（本机可复核，合并后看不到）：`main-baseline.log`（基线 821）、`delivery-final-rerun.log`（中途态 843）、`delivery-final-r10.log`（交付态 844，本节数字来源）、`mut-*.log`、`probe-matrix-round2.txt`、`probe-matrix-round3.txt`。关键输出原文已抄进本节与 D-029 / D-030。
+
+另登记一次判废取数：`delivery-final-1`（`EXIT=0`、`tests=840`）未加 `--rerun-tasks`，聚合里混用了上一轮 targeted 跑留下的模块 XML 且分模块行缺一项，已作废，改用独占 `--rerun-tasks` 重跑。
 
 ### 实证缺陷与修复
 
@@ -559,7 +561,17 @@ MODULE pi-file-skill-android          tests=13  failures=0 errors=0 skipped=1
 4. **`status()` 删除它只是没探到的记录，`stop()` 对未发信号的记录报 `stopped`（P1）**，且 `status()`/`stop()`/`stopAll()` 用两把尺子问同一件事。修复：一张归属判定表（口径统一为"本进程启动的进程是否还活着"）供四处读取；新增 `unattributable` 状态并同步五处对模型的契约文字。
 5. **已核查不可达 / 已登记不修**：`LocalHttpServerManager` 内私有单参 `urlFor(port)`（返回无 token URL）全仓零调用点 → 直接删除；`stopDisposition` 归属存疑时不杀进程组，接受"可能泄漏一个我们自己的孤儿进程组"，这是两种失败里更便宜的一种，已在 KDoc 与 D-030 写明。
 
-### 本轮被否掉的复核立案（附复测命令）
+6. **本轮第一版整改又引入一条：`start()` 会销毁它随后拒绝接管的记录（P1）**。第一版把 `start()` 的复用条件接到 `queryDisposition` 之后，顺序变成「先 `discardRecord(existing)`（连带删 `.properties`）→ 再 `isPortListening` 判 PORT_IN_USE 并抛出」。于是一次抖动的 100 ms 探针就能让一个**在跑的服务**失去唯一记录：`status()`/`stop()` 从此报 `not_found`，端口永久不可复用——正是 F4 要消灭的那个状态，被本轮自己的修法在生产路径上复刻。现已改为「先确认端口不再应答，再删记录」，并把错误文案改成能读出成因的一支。**局限如实登记**：该顺序在宿主不可判红（`start()` 需要 Android Context 与真进程），`probe m4c` 亦为绿说明纯表用例看不见调用点装配；证据为代码路径推演 + 主仓仪器面复跑（见未证实项）。
+7. **对外来监听者的错误归属（P1）**。`NativeProcessGroupControl.processGroupExists` 有意把 `EPERM` 当作"存在"，所以进程组被任何别的所有者复用后记录仍"活着"；`status()` 的正分支又只看一次裸 connect。结果 App 重启 + 端口被别的进程占用时，`status()` 会返回 `running` 并附上一个**没有任何人在服务**的 token URL，`start()` 还会直接复用该端口——而类里早就有为归因写的 `isTokenServed` 却没被这条路用。修复：无进程内句柄的记录一律用 `isTokenServed(port, token)` 判"这个端口是不是我们自己的服务在应答"，有句柄的仍用便宜的 connect（句柄即归属证据）。
+8. **带 NUL 的 URL 不答话（P2）**。`realpath()`/`stat()` 对含 ` ` 的路径抛的是 `ValueError` 而非 `OSError`，它会逃出 `except ServedRootEscape`，连接被直接关闭、**没有任何响应**。变异 `m6-nul-guard-removed` 的实测原文即为证据：`expected:<[404]> but was:<[]>`（空状态）。这同时说明本轮此前所有"非 200 即拒绝"的断言形状是错的——连接中断、超时、文件不存在都能冒充拒绝，故本节新增/改写的所有拒绝断言一律要求显式 `404`。
+
+### 独立复核两轮的实际结果与处置
+
+第 1 轮专审本轮整改，抓出 2 条阻塞级（F1b 两处仍在出密、F4 的杀无辜 + 容量死锁），全部落地修复并配判别用例。第 2 轮专审第 1 轮的整改，再抓出 3 条（F6 `start()` 顺序复刻了 F4 的危害、F7 外来监听者被误归因为"我们的服务在跑"、F8 NUL 路径无响应）与 4 处**注释/契约文字比代码能做的说得多**：`stopDisposition` 的"只在能看见本进程启动的进程时才发信号"（代码还看宽限期）、`stopAll()` 返回计数的消费者（grep 无任何调用者消费该 Int）、`BashCommandTool` 的 stop 契约"绝不杀非托管进程"、`assets/ugk/AGENTS.md` 对硬链接规则"名字在服务树外"（代码是无条件 `st_nlink > 1`）。四条文字全部按代码实况改写。
+
+第 2 轮另报「`spawnWithStdinClosed` 的 `starter` 缝隙 + 注释声称的把关不成立」，本轮据此把 `TerminalSpawnSiteTest` 的谓词从裸 `.start()` 收窄为"能创建子进程的调用"，并补 `m5c`（`worker.start()` 不得误红）；豁免行改为按内容匹配，避免无关重排把它变红。
+
+第 2 轮复核者自报的正面结论也被本轮采信前复核过：31 条 URL × 2 种根目录形态（普通目录、`--directory` 本身是符号链接）在宿主 CPython 3.14.2 上 0 泄漏。
 
 - 「`stop()` 应在句柄已死但进程组仍在时仍发信号，因为该组确由本进程创建」——第十轮第一版整改就是这样写的，复核后由本轮回滚：会话领导者被回收后 pgid 会回到内核池，可能已被同 UID 无关进程组复用，`kill(-pgid, 0)`/信号都可能打死无辜进程。复测：`bash gate/run-targeted-r10.sh m ugk-terminal-runtime-android --tests "*LocalHttpServerRecordDispositionTest"`（`stopNeverSignalsAGroupWhoseOwnLeaderHasBeenReaped` 钉住现口径）。
 - 「`lstat` 换成 `stat` 是遏制弱化」——变异实测 `m1c-judge-link-not-target` 显示功能面确有红，但方向是**变严**：`stat` 跟随链接后可能拒掉一个合法的根内符号链接。现口径为 `realpath` 定根 + 对解析结果 `stat()`，两者都不是靠 `lstat`。

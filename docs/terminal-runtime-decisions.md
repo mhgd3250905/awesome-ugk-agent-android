@@ -266,3 +266,17 @@
 - 决策：新增 `queryDisposition` / `stopDisposition` 两张纯判定表，输入统一为"本进程启动的那个进程是否还活着"（句柄存在与否不算归属证据），`status()`、`stop()`、`stopAll()`、`start()` 的复用与容量清理全部读同一张表。查询不再删除无法归属的记录，而是保留并上报新状态 `unattributable`；`stop()` 对同一条记录返回 `unattributable` 而不是 `stopped`，只有真正终止过或进程组已确证消失才报 `stopped`。发信号的前置条件保持 D-028 时代的保守立场：归属存疑时宁可不杀（接受泄漏一个可能属于我们自己的孤儿进程组，并在注释与工具契约里写明这是已实测的取舍），并把 `stopAll()` 返回值继续定义为"真正终止的数量"。`start()` 的容量清理改为释放"任何非 REPORT 行"，否则 status() 不再遗忘了旧记录之后会出现 `MAX_MANAGED_SERVERS` 永久占满。两处 spawn 收敛到 `NativeExecutableProcess.spawnWithStdinClosed()`，启动后立即关闭 `process.outputStream`，关闭失败被吸收而不是升级为启动失败；新增 `TerminalSpawnSiteTest` 扫描入库源码，任何绕过该 helper 的 spawn（含 `Runtime.exec`）判红。
 - 原因：假绿的状态报告比缺状态更坏——模型据此宣称服务已停；而"同一条规则三把尺子"正是第十轮复核里被逐条抓出来的形态。把判定收敛成表是能在宿主 JVM 上钉死的唯一办法（周边路径需要 Android Context 与真进程）。
 - 影响：`local_http_server_status`/`stop` 的返回状态集合多一个 `unattributable`，SDK runtime `AGENTS.md`、skill `resultSemantics`、`LocalHttpServerTools` 注释与架构/排障文档同步改口径，"read-only/只读"措辞全部撤下；demo 仪器用例断言的是"宽限期内真停"的路径，仍为 `stopped`，不受影响。`spawnWithStdinClosed` 的 `starter` 参数只是测试缝隙，生产默认值仍是 `ProcessBuilder.start()`；该测试证明规则在 helper 内成立，调用点是否走 helper 由源码扫描那条用例把关。
+
+## D-029 / D-030 追加订正（第十轮第二批复核后，2026-10-01）
+
+第二遍只读复核专审第一遍整改后落地的那些句子，发现两节的「决策 / 影响」各有一句比代码能做的说得多，另有一处安全规则本身仍不完整。按本仓「已提交记录不改写、就地登记订正」的惯例在此追加，不回改上文。
+
+1. **D-029 的遏制还漏两类，已补**：
+   - `%00` 这类路径：`realpath()`/`stat()` 抛的是 `ValueError` 不是 `OSError`，它会绕过 `except ServedRootEscape` 直接把连接关掉、**一个响应都不发**。变异实测原文即证据：`expected:<[404]> but was:<[]>`（空状态）。现在这类路径显式回 404。同一原因，本模块所有「必须被拒绝」的断言一律改成要求 `404`，不再接受「非 200」——连接中断、超时、文件不存在都能冒充拒绝。
+   - `st_nlink > 1` 是**无条件**拒绝，不看第二个名字在服务树内还是树外；`assets/ugk/AGENTS.md` 原先写成「与树外的名字共享 inode」，比代码窄，已按代码实况改写，并明确不要往服务目录里 link。
+2. **D-030 的两处失实**：
+   - `stopDisposition` 的注释声称「只在还能看见本进程启动的进程、或端口说服务在跑时才发信号」，但代码里 `if (!pastStaleGrace) return SIGNAL` 排在端口探测之前——未过期的宽限期本身也被当作归属证据。行为保持（这是 D-028 起的既有保守立场，且 `start()` 失败会立刻自我回滚，未过期记录不会是无主组），**注释按代码实况重写**，把三条归属证据一条条列出来。`BashCommandTool` 的 stop 契约那句「绝不杀非托管进程」同时改成「只杀本 Runtime 记录、且能归属于该服务的进程组」。
+   - `stopAll()` 的注释声称返回计数是「宿主据此判断自己的服务是否全部停净」——grep 无任何消费者：`stopAllLocalHttpServers()` 只透传，`close()` 直接丢弃。已改成如实描述（计数只包含真正终止掉的组，不含只删记录的）。
+3. **D-030 决策里"四个落点读同一张表"当时并未做到**：`start()` 被接成了「先 `discardRecord()`（连带删 `.properties`，即已签发 token 的唯一存留处）→ 再 `isPortListening` 判 `PORT_IN_USE` 并抛出」。一次抖动的 100 ms 探针就会让一个仍在服务的应用失去唯一记录，`status()`/`stop()` 从此 `not_found`，端口在本进程生命周期内不可再用——正是 F4 要消灭的状态，被本轮自己的修法复刻。现已改为「先确认端口不再应答、再删记录」，并把拒绝文案改成能读出成因的一支。
+4. **归属证据换了来源**：`NativeProcessGroupControl.processGroupExists` 有意把 `EPERM` 当作「存在」，因此进程组被任何其他所有者复用后，记录仍然"看起来活着"；而 `status()` 的正分支此前只看一次裸 connect。App 重启 + 端口被别人占用时，`status()` 会报 `running` 并附上一个没有人在服务的 token URL，`start()` 还会直接复用该端口——类里早就有为归因写的 `isTokenServed`，这条路却没用。现在：没有进程内句柄的记录一律用 `isTokenServed(port, token)` 判定「这个端口是否以本记录的 token 应答」，有句柄的仍用便宜的 connect（句柄即归属证据）。
+5. **登记一条测试面局限（不假装已把关）**：第 3、4 两条都改在需要 Android Context 与真进程的路径上，宿主 JVM 无法判红；本轮的变异探针 `m4c-stop-wrapper-wiring` 为绿，正说明「纯判定表用例看不见调用点装配」。合并前必须在仪器面复跑：`:demo-app:connectedDebugAndroidTest --tests "*LocalHttpServerManagerInstrumentedTest*"`，并扩展一条「外来监听者不得被报成 running」的断言。
