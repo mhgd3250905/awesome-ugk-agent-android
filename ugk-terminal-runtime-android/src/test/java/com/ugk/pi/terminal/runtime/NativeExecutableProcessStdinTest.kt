@@ -4,7 +4,6 @@ import java.io.IOException
 import java.io.InputStream
 import java.io.OutputStream
 import org.junit.Assert.assertEquals
-import org.junit.Assert.assertFalse
 import org.junit.Assert.assertSame
 import org.junit.Assert.assertThrows
 import org.junit.Assert.assertTrue
@@ -47,11 +46,11 @@ class NativeExecutableProcessStdinTest {
 
         val failure = assertThrows(IllegalThreadStateException::class.java) { child.exitValue() }
 
+        // Control for the test above: this is the state the Runtime used to
+        // leave every stdin-reading command in. Without this row the fake would
+        // be a process that exits no matter what, and the assertion in the
+        // first test would prove nothing.
         assertTrue(failure.message!!.contains("stdin"))
-        // Control for the test above: this is the state the Runtime would leave
-        // every stdin-reading command in, and it is not something the fake can
-        // reach by accident.
-        assertFalse(child.stdinClosed)
     }
 
     /**

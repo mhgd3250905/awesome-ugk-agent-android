@@ -143,10 +143,10 @@ internal object NativeExecutableProcess {
      * [starter] is a seam, not configurability: the production default is
      * `ProcessBuilder.start()`, and only the JVM test substitutes it, because
      * the surrounding call path reads `SystemClock` and execs an ELF from
-     * nativeLibraryDir, neither of which exists on the host JVM. That also
-     * means this test proves the rule inside the helper, not that each call
-     * site reaches the helper; the two call sites are pinned by grep in the
-     * round report.
+     * nativeLibraryDir, neither of which exists on the host JVM. That seam
+     * also means this test proves the rule inside the helper but not that each
+     * call site reaches it - [TerminalSpawnSiteTest] guards that half by
+     * scanning the shipped sources for any spawn that skips this function.
      */
     internal fun spawnWithStdinClosed(
         builder: ProcessBuilder,

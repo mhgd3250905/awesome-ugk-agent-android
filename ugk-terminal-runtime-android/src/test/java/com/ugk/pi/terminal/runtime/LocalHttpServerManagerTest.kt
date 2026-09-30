@@ -107,12 +107,18 @@ class LocalHttpServerManagerTest {
         assertTrue(script.contains("root + os.sep"))
         assertTrue(script.contains("raise ServedRootEscape(SYMLINK_ESCAPE_MESSAGE)"))
 
-        // Hard-link containment: realpath cannot tell a hard link from the
-        // file it shares an inode with, so extra links are refused. lstat is
-        // load-bearing - stat() would follow the link being judged.
-        assertTrue(script.contains("os.lstat(local)"))
-        assertTrue(script.contains("stat.S_ISREG(info.st_mode) and info.st_nlink > 1"))
+        // Hard-link containment: realpath cannot tell a hard link from the file
+        // it shares an inode with, so the inode actually opened is judged.
+        // stat() rather than lstat() is load-bearing - the check must follow
+        // the link chain, not stop at the first name.
+        assertTrue(script.contains("opened = os.stat(resolved)"))
+        assertTrue(script.contains("stat.S_ISREG(opened.st_mode) and opened.st_nlink > 1"))
         assertTrue(script.contains("raise ServedRootEscape(HARD_LINK_MESSAGE)"))
+
+        // The index file send_head() picks for a directory request is judged
+        // too, and by the names the standard library itself carries.
+        assertTrue(script.contains("self.require_publishable(candidate)"))
+        assertTrue(script.contains("getattr(self, \"index_pages\", FALLBACK_INDEX_PAGES)"))
 
         // Loopback-only binding and stdlib-only server bootstrap.
         assertTrue(script.contains("BIND_HOST = \"127.0.0.1\""))

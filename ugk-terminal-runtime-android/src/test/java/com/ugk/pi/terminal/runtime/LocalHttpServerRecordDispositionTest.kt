@@ -7,9 +7,9 @@ import org.junit.Test
  * Truth table for what a lifecycle call may conclude about one managed record.
  *
  * Both decisions need no Android Context and no live process, while every
- * caller of them needs both - that is why they are functions of three
- * observations instead of inline branches. The observations arrive lazily
- * because two of them are a JNI `kill(-pgid, 0)` and a TCP connect: an
+ * caller of them needs both - that is why they are functions of four
+ * observations instead of inline branches. Two of the observations arrive
+ * lazily because they are a JNI `kill(-pgid, 0)` and a TCP connect: an
  * unconditional version would pay a socket probe per record per status() call.
  */
 class LocalHttpServerRecordDispositionTest {
@@ -23,11 +23,10 @@ class LocalHttpServerRecordDispositionTest {
     }
 
     @Test
-    fun queryForgetRecordsAConfirmedDeadProcessAndFreesItsPort() {
+    fun queryForgetsARecordWhoseProcessGroupIsGone() {
         val probes = ProbeCounter()
 
         val disposition = LocalHttpServerManager.queryDisposition(
-            hasInProcessHandle = false,
             processHandleAlive = false,
             processGroupExists = probes.exists(answer = false),
             pastStaleGrace = false,
@@ -39,11 +38,10 @@ class LocalHttpServerRecordDispositionTest {
     }
 
     @Test
-    fun queryNeverSignalsAndNeverProbesTheGroupWhileItsOwnHandleIsAlive() {
+    fun queryNeverProbesTheGroupWhileItsOwnProcessIsStillAlive() {
         val probes = ProbeCounter()
 
         val disposition = LocalHttpServerManager.queryDisposition(
-            hasInProcessHandle = true,
             processHandleAlive = true,
             processGroupExists = probes.exists(answer = false),
             pastStaleGrace = true,
@@ -51,8 +49,8 @@ class LocalHttpServerRecordDispositionTest {
         )
 
         assertEquals(QueryDisposition.REPORT, disposition)
-        assertEquals("a live handle already answers liveness", 0, probes.groupExists)
-        assertEquals("a live handle must not be demoted by one deaf probe", 0, probes.portListening)
+        assertEquals("a live process already answers liveness", 0, probes.groupExists)
+        assertEquals("a live process must not be demoted by one deaf probe", 0, probes.portListening)
     }
 
     @Test
@@ -60,7 +58,6 @@ class LocalHttpServerRecordDispositionTest {
         val probes = ProbeCounter()
 
         val disposition = LocalHttpServerManager.queryDisposition(
-            hasInProcessHandle = false,
             processHandleAlive = false,
             processGroupExists = probes.exists(answer = true),
             pastStaleGrace = false,
@@ -76,7 +73,6 @@ class LocalHttpServerRecordDispositionTest {
         val probes = ProbeCounter()
 
         val disposition = LocalHttpServerManager.queryDisposition(
-            hasInProcessHandle = false,
             processHandleAlive = false,
             processGroupExists = probes.exists(answer = true),
             pastStaleGrace = true,
@@ -98,7 +94,6 @@ class LocalHttpServerRecordDispositionTest {
         val probes = ProbeCounter()
 
         val disposition = LocalHttpServerManager.queryDisposition(
-            hasInProcessHandle = false,
             processHandleAlive = false,
             processGroupExists = probes.exists(answer = true),
             pastStaleGrace = true,
@@ -110,39 +105,57 @@ class LocalHttpServerRecordDispositionTest {
     }
 
     @Test
-    fun queryForgetsADeadHandleWhoseProcessGroupIsGone() {
+    fun queryTreatsAReapedSessionLeaderTheSameAsARehydratedRecord() {
         val probes = ProbeCounter()
 
         val disposition = LocalHttpServerManager.queryDisposition(
-            hasInProcessHandle = true,
             processHandleAlive = false,
-            processGroupExists = probes.exists(answer = false),
-            pastStaleGrace = true,
-            portListening = probes.listening(answer = false)
-        )
-
-        assertEquals(QueryDisposition.FORGET_CONFIRMED_DEAD, disposition)
-    }
-
-    /**
-     * Attribution survives a dead direct child as long as this process still
-     * holds the handle: the process-group id came from our own session
-     * launcher. The old ruler asked "is the handle alive", so stop() abandoned
-     * a group it had created, without ever signalling it, and reported it as
-     * stopped.
-     */
-    @Test
-    fun stopSignalsAGroupThisProcessStartedEvenAfterItsDirectChildDied() {
-        val probes = ProbeCounter()
-
-        val disposition = LocalHttpServerManager.stopDisposition(
-            hasInProcessHandle = true,
             processGroupExists = probes.exists(answer = true),
             pastStaleGrace = true,
             portListening = probes.listening(answer = false)
         )
 
+        assertEquals(
+            "a reaped handle says nothing more about the group than no handle does",
+            QueryDisposition.REPORT_UNATTRIBUTABLE,
+            disposition
+        )
+    }
+
+    @Test
+    fun stopSignalsAGroupThisInstanceIsStillRunningIn() {
+        val probes = ProbeCounter()
+
+        val disposition = LocalHttpServerManager.stopDisposition(
+            processHandleAlive = true,
+            processGroupExists = probes.exists(answer = false),
+            pastStaleGrace = true,
+            portListening = probes.listening(answer = false)
+        )
+
         assertEquals(StopDisposition.SIGNAL_PROCESS_GROUP, disposition)
+        assertEquals("attribution does not need a second opinion", 0, probes.groupExists)
+    }
+
+    /**
+     * The direct child was our session leader; once it has been reaped the
+     * group id can be recycled, so a deaf aged record must be dropped rather
+     * than signalled - killing whatever group now holds that id would hit an
+     * unrelated same-UID process. What the call may no longer do is report that
+     * as `stopped`.
+     */
+    @Test
+    fun stopNeverSignalsAGroupWhoseOwnLeaderHasBeenReaped() {
+        val probes = ProbeCounter()
+
+        val disposition = LocalHttpServerManager.stopDisposition(
+            processHandleAlive = false,
+            processGroupExists = probes.exists(answer = true),
+            pastStaleGrace = true,
+            portListening = probes.listening(answer = false)
+        )
+
+        assertEquals(StopDisposition.DROP_UNATTRIBUTABLE, disposition)
     }
 
     @Test
@@ -150,7 +163,7 @@ class LocalHttpServerRecordDispositionTest {
         val probes = ProbeCounter()
 
         val disposition = LocalHttpServerManager.stopDisposition(
-            hasInProcessHandle = false,
+            processHandleAlive = false,
             processGroupExists = probes.exists(answer = true),
             pastStaleGrace = true,
             portListening = probes.listening(answer = true)
@@ -161,25 +174,11 @@ class LocalHttpServerRecordDispositionTest {
     }
 
     @Test
-    fun stopDropsAnUnattributableRecordWithoutSignalling() {
-        val probes = ProbeCounter()
-
-        val disposition = LocalHttpServerManager.stopDisposition(
-            hasInProcessHandle = false,
-            processGroupExists = probes.exists(answer = true),
-            pastStaleGrace = true,
-            portListening = probes.listening(answer = false)
-        )
-
-        assertEquals(StopDisposition.DROP_UNATTRIBUTABLE, disposition)
-    }
-
-    @Test
     fun stopReportsConfirmedDeadWhenTheGroupIsProvablyGone() {
         val probes = ProbeCounter()
 
         val disposition = LocalHttpServerManager.stopDisposition(
-            hasInProcessHandle = false,
+            processHandleAlive = false,
             processGroupExists = probes.exists(answer = false),
             pastStaleGrace = true,
             portListening = probes.listening(answer = false)
@@ -193,7 +192,7 @@ class LocalHttpServerRecordDispositionTest {
         val probes = ProbeCounter()
 
         val disposition = LocalHttpServerManager.stopDisposition(
-            hasInProcessHandle = false,
+            processHandleAlive = false,
             processGroupExists = probes.exists(answer = true),
             pastStaleGrace = false,
             portListening = probes.listening(answer = false)

@@ -113,11 +113,13 @@ class LocalHttpServerHandlerContainmentTest {
         val fixture = startHandler()
         try {
             val response = fixture.get("/${fixture.token}/index-copy.txt")
-            assertFalse(
-                "hard-linked file was served through the token URL (status=${response.status}, " +
-                    "body='${response.body.take(48)}'): realpath cannot distinguish a hard link, " +
-                    "so the served root must refuse files carrying extra links",
-                response.status == "200" && response.body.contains(TOP_SECRET)
+            // A refusal must be an explicit 404: "not 200" would also be
+            // satisfied by a connection abort, a timeout, or a missing file,
+            // none of which prove the containment did anything.
+            assertEquals(
+                "hard-linked file was served through the token URL, body='${response.body.take(48)}'",
+                "404",
+                response.status
             )
             // Positive control: refusing extra links must not take the normal
             // single-link files of the served tree down with it.
@@ -138,10 +140,8 @@ class LocalHttpServerHandlerContainmentTest {
         val fixture = startHandler()
         try {
             val response = fixture.get("/${fixture.token}/notes.md")
-            assertFalse(
-                "symlinked file escaped the served root (status=${response.status})",
-                response.status == "200" && response.body.contains(TOP_SECRET)
-            )
+            assertEquals("symlinked file escaped the served root", "404", response.status)
+            assertFalse(response.body.contains(TOP_SECRET))
             assertEquals("200", fixture.get("/${fixture.token}/index.html").status)
         } finally {
             fixture.close()
@@ -164,11 +164,69 @@ class LocalHttpServerHandlerContainmentTest {
         val fixture = startHandler()
         try {
             val response = fixture.get("/${fixture.token}/leaked.txt")
-            assertFalse(
-                "a root-prefix comparison without a path separator served the sibling " +
-                    "directory (status=${response.status})",
-                response.status == "200" && response.body.contains(TOP_SECRET)
+            assertEquals(
+                "a root-prefix comparison without a path separator served the sibling directory",
+                "404",
+                response.status
             )
+        } finally {
+            fixture.close()
+        }
+    }
+
+    /**
+     * `send_head()` resolves a directory request to `<dir>/index.html` itself,
+     * after `translate_path()` has already run, so a containment check that
+     * only sees translate_path's answer never looks at the file that gets
+     * opened.
+     */
+    @Test
+    fun hardLinkPublishedAsADirectoryIndexIsNotServed() {
+        Assume.assumeTrue("host filesystem cannot create hard links", hostSupportsHardLinks())
+        val secret = File(outsideDirectory, "tokens.json").apply { writeText(TOP_SECRET, Charsets.UTF_8) }
+        val sub = File(servedRoot, "sub").apply { mkdirs() }
+        val index = File(sub, "index.html")
+        Files.createLink(index.toPath(), secret.toPath())
+
+        val fixture = startHandler()
+        try {
+            val response = fixture.get("/${fixture.token}/sub/")
+            assertEquals(
+                "a hard-linked index.html was opened for a directory request: " +
+                    "body='${response.body.take(48)}'",
+                "404",
+                response.status
+            )
+            assertEquals("200", fixture.get("/${fixture.token}/index.html").status)
+        } finally {
+            fixture.close()
+        }
+    }
+
+    /**
+     * A symlink is not itself a regular file, so judging the link rather than
+     * what it resolves to lets `ln secret site/real` + `ln -s real site/link`
+     * through while realpath still reports a path inside the root.
+     */
+    @Test
+    fun symlinkResolvingToAHardLinkIsNotServed() {
+        Assume.assumeTrue("host cannot create both links", hostSupportsHardLinks() && hostSupportsSymlinks())
+        val secret = File(outsideDirectory, "session.db").apply { writeText(TOP_SECRET, Charsets.UTF_8) }
+        val hardLink = File(servedRoot, "real.txt")
+        Files.createLink(hardLink.toPath(), secret.toPath())
+        val symlink = File(servedRoot, "alias.txt")
+        Files.createSymbolicLink(symlink.toPath(), hardLink.toPath())
+
+        val fixture = startHandler()
+        try {
+            val response = fixture.get("/${fixture.token}/alias.txt")
+            assertEquals(
+                "a symlink to a multi-link file inside the root was served: " +
+                    "body='${response.body.take(48)}'",
+                "404",
+                response.status
+            )
+            assertEquals("200", fixture.get("/${fixture.token}/index.html").status)
         } finally {
             fixture.close()
         }
