@@ -57,13 +57,19 @@ class LocalHttpServerStartTool(
     }
 }
 
-/** Reads managed local HTTP server state without confirmation or side effects. */
+/**
+ * Reads managed local HTTP server state without confirmation.
+ *
+ * Not side-effect free: a query forgets records whose process group is
+ * confirmed gone, which is what frees their port for a later start. It never
+ * signals, stops, or rewrites a live service.
+ */
 class LocalHttpServerStatusTool(
     private val controller: LocalHttpServerController,
     override val name: String = "local_http_server_status"
 ) : AgentTool {
     override val description: String =
-        "Reads the state of Runtime-managed local HTTP servers without starting, stopping, or changing anything. Errors are reported as a plain-text message prefixed with the error code."
+        "Reads the state of Runtime-managed local HTTP servers without starting, stopping, or signalling anything. Errors are reported as a plain-text message prefixed with the error code."
 
     override val inputSchema: JsonObject = buildJsonObject {
         put("type", "object")

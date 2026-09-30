@@ -247,17 +247,19 @@ class LocalHttpServerManager(
                 .filter { port == null || it.port == port }
                 .toList()
             return selected.mapNotNull { server ->
-                if (!hasProcess(server)) {
-                    removeRecord(server)
-                    null
-                } else if (isStaleNonListening(server) && server.process == null) {
-                    // The persisted process-group id most likely died and was
-                    // recycled. status() stays read-only, so drop the dead
-                    // record without signaling and let start() rebuild.
-                    removeRecord(server)
-                    null
-                } else {
-                    statusFor(server)
+                when (queryDispositionFor(server)) {
+                    QueryDisposition.FORGET_CONFIRMED_DEAD -> {
+                        removeRecord(server)
+                        null
+                    }
+                    QueryDisposition.REPORT_UNATTRIBUTABLE ->
+                        // A query must not forget what it only failed to
+                        // observe: dropping the record here would delete the
+                        // persisted metadata, so the token that the caller was
+                        // handed would exist nowhere and the port could never
+                        // be stopped or described again.
+                        statusFor(server).copy(state = STATE_UNATTRIBUTABLE)
+                    QueryDisposition.REPORT -> statusFor(server)
                 }
             }
         }
@@ -268,24 +270,34 @@ class LocalHttpServerManager(
             ensureMetadataLoaded()
             validatePort(port)
             val server = records[port] ?: return LocalHttpServerStatus.notFound(port)
-            if (isUnattributableStaleRecord(server)) {
-                // The recorded process-group id can no longer be attributed to
-                // this server and may since have been recycled to an unrelated
-                // group, so signaling it could kill innocent processes. Only
-                // drop the dead record so the port can be rebuilt.
-                removeRecord(server)
-            } else {
-                val stopped = stopRecord(server)
-                if (!stopped) {
-                    throw LocalHttpServerException(
-                        code = ERROR_STOP_FAILED,
-                        message = "Unable to terminate the managed HTTP server process group ${server.processGroupId}."
-                    )
+            val reported = when (stopDispositionFor(server)) {
+                StopDisposition.DROP_CONFIRMED_DEAD -> {
+                    // Nothing is running under that process-group id, so
+                    // "stopped" is a claim this call can actually support.
+                    removeRecord(server)
+                    STATE_STOPPED
                 }
-                removeRecord(server)
+                StopDisposition.DROP_UNATTRIBUTABLE -> {
+                    // The recorded id may have been recycled by an unrelated
+                    // group, so signalling it could kill innocent processes.
+                    // Dropping the record is the safe half; claiming the
+                    // service is down is not, because it may well be up.
+                    removeRecord(server)
+                    STATE_UNATTRIBUTABLE
+                }
+                StopDisposition.SIGNAL_PROCESS_GROUP -> {
+                    if (!stopRecord(server)) {
+                        throw LocalHttpServerException(
+                            code = ERROR_STOP_FAILED,
+                            message = "Unable to terminate the managed HTTP server process group ${server.processGroupId}."
+                        )
+                    }
+                    removeRecord(server)
+                    STATE_STOPPED
+                }
             }
             return LocalHttpServerStatus(
-                state = STATE_STOPPED,
+                state = reported,
                 port = server.port,
                 directory = server.directory.absolutePath,
                 url = urlFor(server.port, server.token),
@@ -301,21 +313,27 @@ class LocalHttpServerManager(
             val servers = records.values.toList()
             var stopped = 0
             servers.forEach { server ->
-                // stopAll()/close() must keep exactly the same process-group
-                // recycling safety semantics as stop(): an unattributable
-                // stale record (no live handle, aged, and no longer listening)
-                // is only dropped without signaling, because its persisted
-                // process-group id may already belong to an unrelated group.
-                if (isUnattributableStaleRecord(server)) {
-                    discardRecord(server)
-                    return@forEach
-                }
-                // Keep the record for a group that survived the kill window:
-                // dropping it would orphan a live process group that the tool
-                // can no longer see or stop. This mirrors stop()'s contract.
-                if (stopRecord(server)) {
-                    stopped++
-                    removeRecord(server)
+                when (stopDispositionFor(server)) {
+                    StopDisposition.DROP_CONFIRMED_DEAD -> removeRecord(server)
+                    StopDisposition.DROP_UNATTRIBUTABLE -> {
+                        // stopAll() and close() keep exactly the same
+                        // process-group recycling safety stance as stop(): a
+                        // record that can no longer be attributed is dropped
+                        // without signalling, because its persisted id may
+                        // belong to an unrelated group. It is not counted as
+                        // stopped, because it was not stopped.
+                        removeRecord(server)
+                    }
+                    StopDisposition.SIGNAL_PROCESS_GROUP -> {
+                        // Keep the record for a group that survived the kill
+                        // window: dropping it would orphan a live process group
+                        // that the tool can no longer see or stop. This mirrors
+                        // stop()'s contract, which raises STOP_FAILED instead.
+                        if (stopRecord(server)) {
+                            stopped++
+                            removeRecord(server)
+                        }
+                    }
                 }
             }
             return stopped
@@ -373,29 +391,38 @@ class LocalHttpServerManager(
      * Lazy liveness cross-check for records whose existence is only inferred
      * from a persisted process-group id. kill(-pgid, 0) cannot distinguish a
      * dead server from an unrelated group that later recycled the same id, so
-     * an aged record that is still not listening is treated as dead. A normal
-     * start listens within seconds (and a start that never listens is rolled
-     * back immediately), so the grace period never overlaps a real starting
-     * phase. No timer or thread is introduced: this runs inside the existing
-     * start()/status()/stop() check paths.
+     * an aged record that is still not listening is treated as unattributable.
+     * A normal start listens within seconds (and a start that never listens is
+     * rolled back immediately), so the grace period never overlaps a real
+     * starting phase. No timer or thread is introduced: this runs inside the
+     * existing start()/status()/stop() check paths.
+     *
+     * The two observations stay separate so [queryDisposition] and
+     * [stopDisposition] - the one ruler every lifecycle call reads from - can
+     * order them and skip a socket probe for a record that has not aged.
      */
     private fun isStaleNonListening(server: ManagedServer): Boolean {
-        if (System.currentTimeMillis() - server.startedAtMillis < STALE_RECORD_GRACE_MILLIS) return false
+        if (!isPastStaleGrace(server)) return false
         return !isPortListening(server.port)
     }
 
-    /**
-     * True when a record can no longer be attributed to its persisted
-     * process-group id: it has no live in-process handle, it is past the
-     * stale grace period, and its port is not listening. The recorded group
-     * id may since have been recycled to an unrelated group, so signaling it
-     * could kill innocent processes — such a record must only be dropped,
-     * never signaled. stop(), stopAll() and close() must all preserve this
-     * pgid-recycling safety semantics, so they share this one predicate.
-     */
-    private fun isUnattributableStaleRecord(server: ManagedServer): Boolean {
-        return isStaleNonListening(server) && server.process?.let(::isAlive) != true
-    }
+    private fun isPastStaleGrace(server: ManagedServer): Boolean =
+        System.currentTimeMillis() - server.startedAtMillis >= STALE_RECORD_GRACE_MILLIS
+
+    private fun queryDispositionFor(server: ManagedServer): QueryDisposition = queryDisposition(
+        hasInProcessHandle = server.process != null,
+        processHandleAlive = server.process?.let(::isAlive) == true,
+        processGroupExists = { NativeProcessGroupControl.processGroupExists(server.processGroupId) },
+        pastStaleGrace = isPastStaleGrace(server),
+        portListening = { isPortListening(server.port) }
+    )
+
+    private fun stopDispositionFor(server: ManagedServer): StopDisposition = stopDisposition(
+        hasInProcessHandle = server.process != null,
+        processGroupExists = { NativeProcessGroupControl.processGroupExists(server.processGroupId) },
+        pastStaleGrace = isPastStaleGrace(server),
+        portListening = { isPortListening(server.port) }
+    )
 
     /**
      * Removes a record that must not be reused. A record that still owns a
@@ -605,8 +632,6 @@ class LocalHttpServerManager(
         }
     }
 
-    private fun urlFor(port: Int): String = "http://$LOOPBACK_HOST:$port/"
-
     private class ManagedServer(
         val port: Int,
         val directory: File,
@@ -668,6 +693,73 @@ class LocalHttpServerManager(
         const val STATE_STARTING = "starting"
         const val STATE_STOPPED = "stopped"
         const val STATE_NOT_FOUND = "not_found"
+
+        /**
+         * A record the Runtime can no longer attribute to a process it started:
+         * the persisted process-group id is still taken, but it may have been
+         * recycled by an unrelated group, so signalling it could kill innocent
+         * processes. The Runtime has dropped or kept the record without
+         * terminating anything, and the service may still be up. Reporting
+         * `stopped` here would tell the model a loopback file server is down
+         * when it might be serving its workspace to the token URL right now.
+         */
+        const val STATE_UNATTRIBUTABLE = "unattributable"
+
+        /**
+         * What status() may conclude about one record from three observations.
+         *
+         * Split out because deciding it needs no Android Context and no live
+         * process, while every surrounding path needs both: this is the only
+         * place the rule can be pinned with a host test.
+         *
+         * The two probes are lazy on purpose - the truth table is asserted with
+         * a counter for how often each runs.
+         */
+        internal fun queryDisposition(
+            hasInProcessHandle: Boolean,
+            processHandleAlive: Boolean,
+            processGroupExists: () -> Boolean,
+            pastStaleGrace: Boolean,
+            portListening: () -> Boolean
+        ): QueryDisposition {
+            if (!processHandleAlive && !processGroupExists()) return QueryDisposition.FORGET_CONFIRMED_DEAD
+            if (hasInProcessHandle) return QueryDisposition.REPORT
+            if (!pastStaleGrace) return QueryDisposition.REPORT
+            return if (portListening()) {
+                QueryDisposition.REPORT
+            } else {
+                // Rehydrated from disk, aged, and deaf: the group id behind it
+                // may belong to somebody else now. Report that honestly and
+                // keep the record - a query that deletes it would destroy the
+                // only place the issued token still exists.
+                QueryDisposition.REPORT_UNATTRIBUTABLE
+            }
+        }
+
+        /**
+         * What stop() and stopAll() may do to one record, on the same ruler
+         * status() reads from. Attribution is only lost for a record this
+         * process did not start: while an in-process handle exists the
+         * process-group id came from our own session launcher, so the group is
+         * ours to signal even after the direct child has died. Trunk used
+         * "the handle is no longer alive" here, which abandoned a group this
+         * process demonstrably created - and then reported it as stopped.
+         */
+        internal fun stopDisposition(
+            hasInProcessHandle: Boolean,
+            processGroupExists: () -> Boolean,
+            pastStaleGrace: Boolean,
+            portListening: () -> Boolean
+        ): StopDisposition {
+            if (hasInProcessHandle) return StopDisposition.SIGNAL_PROCESS_GROUP
+            if (!pastStaleGrace) return StopDisposition.SIGNAL_PROCESS_GROUP
+            if (portListening()) return StopDisposition.SIGNAL_PROCESS_GROUP
+            return if (processGroupExists()) {
+                StopDisposition.DROP_UNATTRIBUTABLE
+            } else {
+                StopDisposition.DROP_CONFIRMED_DEAD
+            }
+        }
         const val ERROR_PORT_IN_USE = "PORT_IN_USE"
         const val ERROR_TOO_MANY_SERVERS = "TOO_MANY_SERVERS"
         const val ERROR_START_FAILED = "START_FAILED"
@@ -959,5 +1051,11 @@ if __name__ == "__main__":
 """
     }
 }
+
+/** What a status() query may conclude, and may therefore do to, one record. */
+internal enum class QueryDisposition { REPORT, REPORT_UNATTRIBUTABLE, FORGET_CONFIRMED_DEAD }
+
+/** What stop()/stopAll() may do to one record. */
+internal enum class StopDisposition { SIGNAL_PROCESS_GROUP, DROP_UNATTRIBUTABLE, DROP_CONFIRMED_DEAD }
 
 const val DEFAULT_LOCAL_HTTP_SERVER_PORT: Int = 8_765
