@@ -258,7 +258,7 @@ class LocalHttpServerManager(
                         // persisted metadata, so the token that the caller was
                         // handed would exist nowhere and the port could never
                         // be stopped or described again.
-                        statusFor(server).copy(state = STATE_UNATTRIBUTABLE)
+                        unattributableStatusFor(server)
                     QueryDisposition.REPORT -> statusFor(server)
                 }
             }
@@ -374,6 +374,24 @@ class LocalHttpServerManager(
         }
         return LocalHttpServerStatus(
             state = state,
+            port = server.port,
+            directory = server.directory.absolutePath,
+            url = urlFor(server.port, server.token),
+            logFile = server.logFile.absolutePath,
+            processGroupId = server.processGroupId
+        )
+    }
+
+    /**
+     * Description of a record whose liveness this call already probed and could
+     * not attribute. Built without [statusFor] on purpose: that helper re-runs
+     * the process-group and port probes, and [queryDisposition] has just run
+     * both, so a query over the cap of four records would otherwise open eight
+     * loopback connections instead of four.
+     */
+    private fun unattributableStatusFor(server: ManagedServer): LocalHttpServerStatus {
+        return LocalHttpServerStatus(
+            state = STATE_UNATTRIBUTABLE,
             port = server.port,
             directory = server.directory.absolutePath,
             url = urlFor(server.port, server.token),
