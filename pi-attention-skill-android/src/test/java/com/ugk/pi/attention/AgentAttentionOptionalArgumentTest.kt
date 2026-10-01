@@ -88,118 +88,100 @@ class AgentAttentionOptionalArgumentTest {
      * The guard has to stay strict in the other direction: a declared value of
      * the wrong shape is still refused rather than silently dropped, otherwise
      * this fix would degrade into "ignore whatever the model asked for".
+     *
+     * One test per reader, because the cases used to share a single loop over all
+     * three: the first refused `blocks` case then hid the `actions` and `form`
+     * discriminators, which is exactly how a rule that survives at only one landing
+     * point gets past review.
      */
-    private class Case(
-        val label: String,
-        val controlKey: String,
-        val input: JsonObject,
-        val read: JsonObject.() -> Any?
-    )
+    private class Case(val label: String, val input: JsonObject)
 
     @Test
-    fun declaredButUnusableArgumentsAreStillRefused() {
-        val readBlocks: JsonObject.() -> Any? = { readUrgentBlocks() }
-        val readActions: JsonObject.() -> Any? = { readUrgentActions() }
-        val readForm: JsonObject.() -> Any? = { readUrgentForm() }
-
-        val cases = listOf(
-            Case(
-                "blocks as a number",
-                "blocks",
-                buildJsonObject { put("blocks", 5) },
-                readBlocks
-            ),
-            Case(
-                "blocks as an object",
-                "blocks",
-                buildJsonObject { put("blocks", buildJsonObject { put("a", "b") }) },
-                readBlocks
-            ),
+    fun declaredGarbageBlocksAreStillRefused() {
+        assertDeclaredGarbageRefused("blocks", { readUrgentBlocks() },
+            Case("blocks as a number", buildJsonObject { put("blocks", 5) }),
+            Case("blocks as an object", buildJsonObject { put("blocks", buildJsonObject { put("a", "b") }) }),
             Case(
                 "unknown block type",
-                "blocks",
                 buildJsonObject {
                     put("blocks", buildJsonArray {
                         add(buildJsonObject { put("type", "sidestep"); put("text", "内容") })
                     })
-                },
-                readBlocks
+                }
             ),
             Case(
                 "block with an extra key",
-                "blocks",
                 buildJsonObject {
                     put("blocks", buildJsonArray {
                         add(buildJsonObject { put("type", "paragraph"); put("text", "内容"); put("url", "x") })
                     })
-                },
-                readBlocks
+                }
             ),
             Case(
                 "nine blocks",
-                "blocks",
                 buildJsonObject {
                     put("blocks", buildJsonArray {
                         repeat(9) {
                             add(buildJsonObject { put("type", "paragraph"); put("text", "内容") })
                         }
                     })
-                },
-                readBlocks
-            ),
-            Case(
-                "actions as a string",
-                "actions",
-                buildJsonObject { put("actions", "confirm") },
-                readActions
-            ),
+                }
+            )
+        )
+    }
+
+    @Test
+    fun declaredGarbageActionsAreStillRefused() {
+        assertDeclaredGarbageRefused("actions", { readUrgentActions() },
+            Case("actions as a string", buildJsonObject { put("actions", "confirm") }),
             Case(
                 "duplicate action ids",
-                "actions",
                 buildJsonObject {
                     put("actions", buildJsonArray {
                         add(buildJsonObject { put("id", "ok"); put("label", "好") })
                         add(buildJsonObject { put("id", "ok"); put("label", "好") })
                     })
-                },
-                readActions
-            ),
-            Case(
-                "form as an array",
-                "form",
-                buildJsonObject { put("form", buildJsonArray {}) },
-                readForm
-            ),
+                }
+            )
+        )
+    }
+
+    @Test
+    fun declaredGarbageFormIsStillRefused() {
+        assertDeclaredGarbageRefused("form", { readUrgentForm() },
+            Case("form as an array", buildJsonObject { put("form", buildJsonArray {}) }),
             Case(
                 "form with an id that is not an identifier",
-                "form",
                 buildJsonObject {
                     put("form", buildJsonObject {
                         put("id", "1 bad id"); put("label", "答案"); put("submitLabel", "提交")
                     })
-                },
-                readForm
+                }
             ),
             Case(
                 "form with a non-string placeholder",
-                "form",
                 buildJsonObject {
                     put("form", buildJsonObject {
                         put("id", "answer"); put("label", "答案"); put("placeholder", 7); put("submitLabel", "提交")
                     })
-                },
-                readForm
+                }
             )
         )
+    }
+
+    private fun assertDeclaredGarbageRefused(
+        controlKey: String,
+        read: JsonObject.() -> Any?,
+        vararg cases: Case
+    ) {
         for (case in cases) {
             assertTrue(
                 "${case.label}: a declared control key must stay visible",
-                case.input.declaresControl(case.controlKey)
+                case.input.declaresControl(controlKey)
             )
-            assertNull(case.label, case.read(case.input))
+            assertNull("${case.label} must be refused", read(case.input))
         }
     }
-
 
     @Test
     fun wellFormedArgumentsStillParse() {
@@ -227,57 +209,81 @@ class AgentAttentionOptionalArgumentTest {
     }
 
     /**
+     * Every optional argument the urgent-message schema declares, with the reader
+     * that owns it. The fold below is what makes this list a check rather than a
+     * list: the schema's own optional keys must equal the keys that have a reader
+     * waiting here, so a new optional argument cannot arrive without a case.
+     */
+    private val urgentOptionalReaders: Map<String, UrgentOptionalReader> = mapOf(
+        "accent" to UrgentOptionalReader({ readUrgentAccent() }, UrgentAccent.AMBER),
+        "blocks" to UrgentOptionalReader({ readUrgentBlocks() }, emptyList<UrgentContentBlock>()),
+        "actions" to UrgentOptionalReader({ readUrgentActions() }, emptyList<UrgentAction>()),
+        "form" to UrgentOptionalReader({ readUrgentForm() }, null)
+    )
+
+    private class UrgentOptionalReader(
+        val read: JsonObject.() -> Any?,
+        val default: Any?
+    )
+
+    /**
      * The optional keys are read off the tool's own schema rather than a list
      * written next to this test, so a new optional argument arrives with a reader
-     * case already waiting for it - and the expected set is pinned too, otherwise
-     * a schema edit could quietly shrink the fold to nothing.
-     *
-     * Each key is asserted through *its own reader*: `declaresControl` alone does
-     * not care which key it is handed, so a per-key loop over that function would
-     * pass for any string.
+     * case already waiting for it - and the expected set is pinned by literal too,
+     * otherwise a schema edit could quietly shrink the fold to nothing.
      */
     @Test
-    fun everyOptionalArgumentOfTheUrgentSchemaReadsNullAsAbsent() {
+    fun everyOptionalArgumentOfTheUrgentSchemaHasAReaderWaitingForIt() {
         val schema = urgentMessageSchema()
         val properties = (schema["properties"] as JsonObject).keys
         val required = (schema["required"] as JsonArray).map { (it as JsonPrimitive).content }
-        val readersByKey: Map<String, (JsonObject) -> Any?> = mapOf(
-            "accent" to { it.readUrgentAccent() },
-            "blocks" to { it.readUrgentBlocks() },
-            "actions" to { it.readUrgentActions() },
-            "form" to { it.readUrgentForm() }
-        )
         assertEquals(
             "the urgent-message tool's optional arguments",
-            readersByKey.keys,
+            setOf("accent", "blocks", "actions", "form"),
             properties - required.toSet()
         )
-        for ((key, read) in readersByKey) {
-            val nullArgument = buildJsonObject { put(key, JsonNull) }
-            val expected = when (key) {
-                "accent" -> UrgentAccent.AMBER
-                "blocks" -> emptyList<UrgentContentBlock>()
-                "actions" -> emptyList<UrgentAction>()
-                else -> null
-            }
-            assertEquals(
-                "$key serialized as null must read as the default, not a refusal",
-                expected,
-                read(nullArgument)
-            )
-            assertFalse(
-                "$key: a null is not a request for that control",
-                nullArgument.declaresControl(key)
-            )
-            assertFalse(
-                "$key: absent must not declare",
-                buildJsonObject {}.declaresControl(key)
-            )
-            assertTrue(
-                "$key: a value must declare",
-                buildJsonObject { put(key, "value") }.declaresControl(key)
-            )
-        }
+        assertEquals(
+            "every optional argument needs a reader, and only the declared ones do",
+            properties - required.toSet(),
+            urgentOptionalReaders.keys
+        )
+    }
+
+    /**
+     * One test per optional argument: a shared loop would let the first key that
+     * goes red hide the other three, which is the same masking that made the
+     * schema fold worth splitting in the first place.
+     *
+     * `declaresControl` alone does not care which key it is handed, so each key is
+     * also asserted through *its own reader* - the default it answers with when a
+     * gateway filled it with `null`.
+     */
+    @Test
+    fun nullAccentReadsAsTheDefaultAndDoesNotDeclare() = assertNullOptionalArgumentReadsAsTheDefault("accent")
+
+    @Test
+    fun nullBlocksReadsAsTheDefaultAndDoesNotDeclare() = assertNullOptionalArgumentReadsAsTheDefault("blocks")
+
+    @Test
+    fun nullActionsReadsAsTheDefaultAndDoesNotDeclare() = assertNullOptionalArgumentReadsAsTheDefault("actions")
+
+    @Test
+    fun nullFormReadsAsTheDefaultAndDoesNotDeclare() = assertNullOptionalArgumentReadsAsTheDefault("form")
+
+    private fun assertNullOptionalArgumentReadsAsTheDefault(key: String) {
+        val reader = urgentOptionalReaders.getValue(key)
+        val nullArgument = buildJsonObject { put(key, JsonNull) }
+        assertEquals(
+            "$key serialized as null must read as the default, not a refusal",
+            reader.default,
+            reader.read(nullArgument)
+        )
+        assertFalse("$key: a null is not a request for that control", nullArgument.declaresControl(key))
+        assertFalse("$key: absent must not declare", buildJsonObject {}.declaresControl(key))
+        assertTrue(
+            "$key: a value must declare",
+            buildJsonObject { put(key, "value") }.declaresControl(key)
+        )
     }
 
     /**
@@ -287,25 +293,33 @@ class AgentAttentionOptionalArgumentTest {
      * the second is the shape this guard itself broke when it was first written:
      * a null-valued key is not a declaration, so a gateway filling every optional
      * with null must still get its screen.
+     *
+     * The expected key sets are literals, not the schema read back: asserting
+     * `messageArgumentKeys(…)` against the schema it derives from is true by
+     * construction and would keep passing even if the derivation started answering
+     * the wrong shape. The literals are what make the derivation a test subject.
      */
     @Test
-    fun undeclaredArgumentNamesAreVisibleToBothTools() {
-        val notificationSchema = notificationSchema()
-        val urgentSchema = urgentMessageSchema()
+    fun eachToolValidatesAgainstTheArgumentsItsOwnSchemaPublishes() {
         assertEquals(
-            "the notification tool must validate against its own schema, not the urgent one",
-            (notificationSchema["properties"] as JsonObject).keys.toSet(),
-            messageArgumentKeys(withReason = false, withInteractions = false)
-        )
-        assertEquals(
-            (urgentSchema["properties"] as JsonObject).keys.toSet(),
-            messageArgumentKeys(withReason = true, withInteractions = true)
-        )
-        assertEquals(
+            "the notification tool declares only title and body",
             setOf("title", "body"),
             messageArgumentKeys(withReason = false, withInteractions = false)
         )
+        assertEquals(
+            "a non-interactive urgent host has no controls to accept",
+            setOf("title", "body", "reason", "blocks"),
+            messageArgumentKeys(withReason = true, withInteractions = false)
+        )
+        assertEquals(
+            "an interactive urgent host adds exactly actions and form",
+            setOf("title", "body", "reason", "blocks", "actions", "form"),
+            messageArgumentKeys(withReason = true, withInteractions = true)
+        )
+    }
 
+    @Test
+    fun undeclaredArgumentNamesAreVisibleToBothTools() {
         val notificationKeys = messageArgumentKeys(withReason = false, withInteractions = false)
         assertFalse(
             buildJsonObject {

@@ -330,9 +330,6 @@ internal fun messageArgumentKeys(withReason: Boolean, withInteractions: Boolean)
 /** The schema the urgent-message Tool answers to, exposed so its keys can be enumerated. */
 internal fun urgentMessageSchema(): JsonObject = messageSchema(withReason = true, withInteractions = true)
 
-/** The schema the notification Tool answers to. */
-internal fun notificationSchema(): JsonObject = messageSchema()
-
 /** See [readUrgentBlocks] for why this is internal. */
 internal fun validControlId(id: String): Boolean =
     id.length in 1..MAX_CONTROL_ID_CHARS &&

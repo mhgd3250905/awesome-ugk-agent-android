@@ -144,36 +144,64 @@ class SkillSaveNullOptionalArgumentTest {
         )
         assertFalse("a declared overwrite=true must still replace: ${allowed.content}", allowed.isError)
         assertTrue(allowed.content.startsWith("Updated skill"))
+        assertEquals(
+            "the stored body, read back from disk, must be the new one",
+            "Version two.",
+            repository.load().single().body.trim()
+        )
     }
 
-    /** Declared-but-unusable must stay refused; the null rule is not a wildcard. */
+    /**
+     * Declared-but-unusable must stay refused; the null rule is not a wildcard.
+     *
+     * One test per argument because the refusal is decided by a separate reader for
+     * each: a shared loop let the first code that stopped matching hide the other
+     * three landing points, and `INVALID_OVERWRITE` in particular is the refusal
+     * that would let an unwanted replace through if it ever degraded into a default.
+     */
     @Test
-    fun declaredGarbageOptionalsAreStillRefused() = runBlocking {
-        val cases = listOf(
-            "loadPolicy as a number" to Triple("loadPolicy", JsonPrimitive(5), "INVALID_LOAD_POLICY"),
-            "triggers as a number" to Triple("triggers", JsonPrimitive(5), "INVALID_TRIGGERS"),
-            "embedFiles as a number" to Triple("embedFiles", JsonPrimitive(5), "INVALID_EMBED_FILES"),
-            "overwrite as a string" to Triple("overwrite", JsonPrimitive("true"), "INVALID_OVERWRITE")
+    fun declaredGarbageLoadPolicyIsStillRefused() {
+        assertDeclaredGarbageRefused("loadPolicy", JsonPrimitive(5), "garbage-loadpolicy", "INVALID_LOAD_POLICY")
+    }
+
+    @Test
+    fun declaredGarbageTriggersAreStillRefused() {
+        assertDeclaredGarbageRefused("triggers", JsonPrimitive(5), "garbage-triggers", "INVALID_TRIGGERS")
+    }
+
+    @Test
+    fun declaredGarbageEmbedFilesAreStillRefused() {
+        assertDeclaredGarbageRefused("embedFiles", JsonPrimitive(5), "garbage-embedfiles", "INVALID_EMBED_FILES")
+    }
+
+    @Test
+    fun declaredGarbageOverwriteIsStillRefused() {
+        assertDeclaredGarbageRefused("overwrite", JsonPrimitive("true"), "garbage-overwrite", "INVALID_OVERWRITE")
+    }
+
+    private fun assertDeclaredGarbageRefused(
+        key: String,
+        value: JsonElement,
+        skillName: String,
+        expectedCode: String
+    ) = runBlocking {
+        val result = SkillSaveTool(repository()).execute(
+            call(
+                "name" to JsonPrimitive(skillName),
+                "description" to JsonPrimitive("A guide."),
+                "body" to JsonPrimitive("Body."),
+                key to value
+            ),
+            context()
         )
-        cases.forEachIndexed { index, (label, argument) ->
-            val result = SkillSaveTool(repository()).execute(
-                call(
-                    "name" to JsonPrimitive("garbage-$index"),
-                    "description" to JsonPrimitive("A guide."),
-                    "body" to JsonPrimitive("Body."),
-                    argument.first to argument.second
-                ),
-                context()
-            )
-            // Bare isError would also be satisfied by a bad name, a missing skill
-            // or any other refusal, so the code is the assertion that carries the
-            // meaning.
-            assertEquals(
-                "$label must be refused for its own reason, got: ${result.content}",
-                argument.third,
-                (result.metadata["code"] as? JsonPrimitive)?.content
-            )
-        }
+        // Bare isError would also be satisfied by a bad name, a missing skill
+        // or any other refusal, so the code is the assertion that carries the
+        // meaning.
+        assertEquals(
+            "$key as $value must be refused for its own reason, got: ${result.content}",
+            expectedCode,
+            (result.metadata["code"] as? JsonPrimitive)?.content
+        )
     }
 
     private fun context(): ToolExecutionContext = ToolExecutionContext(sessionId = "test")

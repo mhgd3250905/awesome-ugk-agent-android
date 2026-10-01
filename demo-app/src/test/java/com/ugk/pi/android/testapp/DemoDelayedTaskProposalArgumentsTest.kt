@@ -126,11 +126,6 @@ class DemoDelayedTaskProposalArgumentsTest {
     }
 
     /**
-     * The check order is what the model reads, so it is part of the behaviour: the
-     * extraction must not reorder it. `repeating` is judged before `instruction`,
-     * and the interval range before `repeating`.
-     */
-    /**
      * The check order is what the model reads, so it is behaviour: the extraction
      * into a function must not reorder it. These are separate cases because a
      * single method asserting three orders lets the first red hide the other two.
@@ -166,11 +161,33 @@ class DemoDelayedTaskProposalArgumentsTest {
     }
 
     @Test
-    fun unknownFieldsAreJudgedBeforeEverything() {
+    fun unknownFieldsAreJudgedBeforeTheMissingArgumentCheck() {
         val result = readDelayProposalArguments(
             buildJsonObject {
                 put("instruction", JsonPrimitive("提醒我喝水"))
                 put("cron", JsonPrimitive("0 8 * * *"))
+            }
+        )
+        assertEquals(
+            "Unknown timer proposal field.",
+            (result as DelayProposalArguments.Refused).message
+        )
+    }
+
+    /**
+     * "Before everything" has to be tested against everything at once: the unknown
+     * key is judged ahead of the argument-presence check, the interval range, the
+     * `repeating` shape and the instruction length, so a violation of all of them
+     * still answers with the unknown-field message.
+     */
+    @Test
+    fun unknownFieldsAreJudgedBeforeEveryValueCheck() {
+        val result = readDelayProposalArguments(
+            buildJsonObject {
+                put("cron", JsonPrimitive("0 8 * * *"))
+                put("delaySeconds", JsonPrimitive(0))
+                put("repeating", JsonPrimitive("yes"))
+                put("instruction", JsonPrimitive(""))
             }
         )
         assertEquals(
