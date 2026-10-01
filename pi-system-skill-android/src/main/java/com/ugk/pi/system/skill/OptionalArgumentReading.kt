@@ -5,7 +5,6 @@ import kotlinx.serialization.json.JsonElement
 import kotlinx.serialization.json.JsonNull
 import kotlinx.serialization.json.JsonObject
 import kotlinx.serialization.json.JsonPrimitive
-import kotlinx.serialization.json.contentOrNull
 
 /**
  * The shape a gateway emits for an optional argument nobody filled in.
@@ -34,15 +33,32 @@ internal sealed interface DeclaredStringList {
     /** Nothing was filled in: the key is absent, or the endpoint emitted `null`. */
     object Undeclared : DeclaredStringList
 
-    /** A value was declared that is not a list - the caller must refuse it. */
+    /** A value was declared that is not a list of names - the caller must refuse it. */
     object Unusable : DeclaredStringList
 
-    /** The declared entries. Non-string items are dropped, as this reader always has. */
+    /** The declared names. May be empty when every entry was a `null` nobody filled in. */
     class Values(val values: List<String>) : DeclaredStringList
 }
 
+/**
+ * Three states, because the two "nothing usable here" shapes have opposite consequences.
+ *
+ * `Unusable` must be refused: an entry that is an object or a number is a value the
+ * caller *did* send, and dropping it would leave an empty list, which every caller in
+ * this module reads as "use the documented default" - a default that here means a set
+ * of runtime permissions nobody asked for. A `null` *entry* is different: that is the
+ * same unfilled field this whole reader exists to tolerate, so it is dropped and the
+ * rest of the list stands.
+ */
 internal fun JsonObject.declaredStringList(key: String): DeclaredStringList {
     val declared = optionalElement(key) ?: return DeclaredStringList.Undeclared
     val items = declared as? JsonArray ?: return DeclaredStringList.Unusable
-    return DeclaredStringList.Values(items.mapNotNull { (it as? JsonPrimitive)?.contentOrNull })
+    val names = items.mapNotNull { item ->
+        when {
+            item is JsonNull -> null
+            item is JsonPrimitive && item.isString -> item.content
+            else -> return DeclaredStringList.Unusable
+        }
+    }
+    return DeclaredStringList.Values(names)
 }

@@ -1,12 +1,14 @@
 package com.ugk.pi.system.skill
 
 import com.ugk.pi.android.ToolCall
+import kotlinx.serialization.json.Json
 import kotlinx.serialization.json.JsonArray
 import kotlinx.serialization.json.JsonElement
 import kotlinx.serialization.json.JsonNull
 import kotlinx.serialization.json.JsonPrimitive
 import kotlinx.serialization.json.buildJsonArray
 import kotlinx.serialization.json.buildJsonObject
+import kotlinx.serialization.json.jsonObject
 import kotlinx.serialization.json.put
 import kotlinx.serialization.json.putJsonArray
 import kotlinx.serialization.json.putJsonObject
@@ -91,15 +93,76 @@ class SystemSkillOptionalArgumentTest {
         }
     }
 
+    /**
+     * An item that is declared and is not a string is garbage too, and garbage must
+     * be refused rather than filtered down into "nobody asked for anything" - because
+     * "nobody asked" is exactly this reader's trigger for handing back the *default
+     * permission set*, which is a set of runtime permissions the caller never named.
+     *
+     * Before round 5 this shape silently became the default; on `main` it threw
+     * (`it.jsonPrimitive` on an object element), so neither behaviour refused with the
+     * argument's own name.
+     */
+    @Test
+    fun declaredNonStringPermissionItemsAreVisibleAsUnusable() {
+        val unusable = listOf(
+            "an object item" to buildJsonArray { add(buildJsonObject { put("name", "camera") }) },
+            "a number item" to buildJsonArray { add(JsonPrimitive(5)) },
+            "a boolean item" to buildJsonArray { add(JsonPrimitive(true)) },
+            "one good item and one object" to buildJsonArray {
+                add(JsonPrimitive("android.permission.CAMERA"))
+                add(buildJsonObject { put("name", "camera") })
+            }
+        )
+        for ((label, value) in unusable) {
+            assertNull(
+                "$label must be refused rather than folded into the default set",
+                permissionCall(value).permissionsOrDefault()
+            )
+        }
+    }
+
+    /** A `null` *entry* is an unfilled entry, not garbage: it is dropped, the rest stands. */
+    @Test
+    fun nullPermissionEntriesAreTreatedAsUnfilledItems() {
+        assertEquals(
+            listOf("android.permission.CAMERA"),
+            permissionCall(
+                buildJsonArray { add(JsonPrimitive("android.permission.CAMERA")); add(JsonNull) }
+            ).permissionsOrDefault()
+        )
+    }
+
+    /** The three states of the shared list reader, pinned directly. */
+    @Test
+    fun theListReaderAnswersAbsentUnusableAndDeclaredSeparately() {
+        assertEquals(DeclaredStringList.Undeclared, buildJsonObject {}.declaredStringList("permissions"))
+        assertEquals(DeclaredStringList.Undeclared, buildJsonObject { put("permissions", JsonNull) }.declaredStringList("permissions"))
+        assertEquals(DeclaredStringList.Unusable, buildJsonObject { put("permissions", JsonPrimitive("x")) }.declaredStringList("permissions"))
+        assertEquals(
+            listOf("android.permission.CAMERA"),
+            (buildJsonObject { put("permissions", names("android.permission.CAMERA")) }.declaredStringList("permissions")
+                as DeclaredStringList.Values).values
+        )
+    }
+
+    /**
+     * The refusal has to name the argument, and name it in the *message* - the error
+     * code `invalid_permissions` contains the word too, so a `contains("permissions")`
+     * assertion is satisfied by the code alone and would stay green if the explanation
+     * were deleted.
+     */
     @Test
     fun unusablePermissionsAnswerWithARefusalThatNamesTheArgument() {
         val result = permissionCall(JsonPrimitive("camera"))
             .unusablePermissions("request_android_runtime_permissions")
+        val payload = Json.parseToJsonElement(result.content).jsonObject
 
         assertTrue(result.isError)
+        assertEquals("invalid_permissions", (payload["error"] as? JsonPrimitive)?.content)
         assertTrue(
-            "the refusal must name the argument the caller has to fix: ${result.content}",
-            result.content.contains("permissions")
+            "the refusal must explain the argument the caller has to fix: ${result.content}",
+            (payload["message"] as? JsonPrimitive)?.content?.contains("permissions must be a list") == true
         )
     }
 
