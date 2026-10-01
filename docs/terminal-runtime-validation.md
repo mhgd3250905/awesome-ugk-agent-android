@@ -600,4 +600,52 @@ MODULE pi-file-skill-android          tests=13  failures=0 errors=0 skipped=1
 - 背景：§34、§35 均声明设备通道未运行。2026-10-01 经用户同意，在日用 MIUI 真机 `QSG6Q8IFDMDELVGQ` 上补跑 `:demo-app:connectedDebugAndroidTest` 与 `am instrument`，共五轮独立尝试（三次 gradle connected、两次直接 `am instrument`，其中一轮关闭全部系统动画校准）。
 - 结果定性：设备环境阻塞，非本轮代码回归。① 首轮运行期间发生一次对在用应用的卸载重装，应用私有数据被清空（五份教学记录与 API 配置；事故与教训登记于版本台账 2026-10-01 节）；② 用户手动开启 MIUI「显示悬浮窗」后 `Settings.canDrawOverlays()` 守卫通过，证明该开关在 MIUI 上不受 AOSP `appops set SYSTEM_ALERT_WINDOW allow` 影响；③ `DemoDialogTestHostActivity` 45 秒无法达到 idle（事件队列零空闲），关闭 window/transition/animator 三个动画缩放后依旧复现，属设备系统 UI 级重绘，FloatingConversation、NoteStyle、PermissionGuide、DemoDelayedTaskDialog 等依赖该宿主 Activity 的用例系统性超时；④ `PermissionGuideInstrumentedTest.settingsEntry...SurvivesRecreation` 三轮挂起（§33 已登记该用例首跑偶发，本机为常态）。
 - 影响边界：失败用例与本轮合并代码（教学编译器、终端本地 HTTP 运行时）无文件交集，不构成第九/十轮修复的回归或假绿证据；通过类与失败类的完整清单留在 `/tmp/am-instrument-run*.log`（未入库）。
-- 结论与后续：UI 仪器套件的通过性验收只在 AVD 上执行（§33 惯例）；日用手机禁止直跑 connected/instrumented，确需时先 `run-as` tar 备份 `files/` 与 `shared_prefs/` 到 PC，跑完恢复并核对哈希。另登记两条操作教训：TaskStop gradle connected 会触发其清理阶段异步卸载主应用与 test APK（重装须用同钥 APK 并重授权限）；结果目录的孤儿 UTP JVM 进程不终止时，Gradle 因无法哈希 `.lck`/logcat 文件而拒绝执行 connected 任务。
+- 结论与后续：UI 仪器套件的通过性验收只在 AVD 上执行（§33 惯例）；日用手机禁止直跑 connected/instrumented，确需时先 `run-as` tar 备份 `files/` 与 `shared_prefs/` 到 PC，跑完恢复并核对哈希。另登记两条操作教训：TaskStop gradle connected 会触发其清理阶段异步卸载主应用与 test APK（重装须用同钥 APK 并重授权限）；结果目录的孤儿 UTP JVM 进程不终止时，Gradle 因无法哈希 `.lck`/logcat 文件而拒绝执行 connected 任务
+
+## 37. 第十一轮 P0 审查修复（分支 `fix/p0-review-round11-20261002`，基线 `main@710d567`，2026-10-02）
+
+本轮对象不是终端 Runtime，而是 SDK 响应框架与「模型可控可选参数」这条横切规则：Terminal v1 scope、原生载荷与权限边界均未改动，因此不改变 D-029/D-030 的边界。
+
+验证宿主：Windows 10.0.26200 / Git Bash；JDK 17.0.11 位于 `E:\Android\Android Studio\jbr`（PATH 上无 `java`、继承环境 `JAVA_HOME` 为空，必须显式指定——按 §33 之后立下的规矩，「探测不到」不等于「跑不了」）；Android SDK `E:\Android\SDK`（platforms 31/33/34/35/36、build-tools 30.0.3–36.0.0、NDK 26.3/27.0/28.2.13676358）；`GRADLE_USER_HOME=E:\DevCaches\gradle`（Gradle 8.13 发行包与 2.0 GB 依赖缓存已在位）；宿主 CPython 3.14.2；PowerShell 5.1.26100 可用（`scripts/terminal-runtime/verify-runtime.ps1` 与 `scripts/sdk/*.ps1` 本机可跑，本轮未跑：未改原生载荷/打包/Core API 面）。`adb devices` 为空；AVD `ugk_m3` 存在但本轮未启动。本仓**没有任何 CI**，AGENTS.md 的门禁全部靠人执行——这是仓库属性，不是本轮发现。
+
+### 门禁口径（只认日志内 `EXIT=` 行与 JUnit XML 汇总 + 时间戳窗口）
+
+- 基线 `main@710d567` 独占 `--rerun-tasks --no-build-cache`：**`858 tests / 3 skipped / 0 failures / 0 errors`**，`BUILD SUCCESSFUL in 1m 27s`，191 actionable tasks 全执行，全部 XML `timestamp` 落在 `2026-10-01T19:04:59Z … 19:05:52Z`。日志 `build/review-evidence/baseline-710d567.log`，汇总 `baseline-710d567-summary.txt`。
+- 交付态 `4a3da1c`（其后仅本文档与 `AGENTS.md`/`HANDOVER.md` 的文字提交）同一命令独占实跑：**`912 tests / 3 skipped / 0 failures / 0 errors`**，`BUILD SUCCESSFUL in 58s`，194 actionable tasks 全执行，134 份 XML 的 `timestamp` 全部落在 `2026-10-01T21:12:40Z … 21:13:33Z`。日志 `build/review-evidence/delivery-final-r11.log`，逐模块差值 `delivery-final-r11-aggregate.txt`。
+- 净增 54 项：Core +23（`StreamedResponseTransportContractTest`）、`pi-attention-skill-android` 0→11、`pi-agent-skill-runtime-android` +6、`pi-schedule-skill-android` +5、`demo-app` +9；其余五个模块计数不变。`skipped=3` 来源不变（File Skill 1、Agent Skill Runtime 2 的 Windows symlink 既有用例）。
+- **`:pi-attention-skill-android` 的 `NO-SOURCE` 缺口本轮关闭**（第九轮曾把它明示为「永远不可能变红的把关」）。同时订正两处「跑全量」清单：`AGENTS.md` 的模块数说明，以及 `HANDOVER.md` 第 5 节命令——该命令此前漏列本模块，照它执行不会跑到新用例。
+- 变异取证合并写在 `build/review-evidence/mutation-matrix-final.txt`（23 行，逐行只回退本轮写下去的那一处语义，红集合与预期完全一致）；基线复现另有 `r1-f1-baseline-red.log`（F1 族 6 红/8 对照绿）、`run-f2-baseline-repro.sh`（attention 5 红/3 对照绿）、`r5-baseline-skillred2.log`、`r5-baseline-schedule-red.log`、`mutation-matrix-b1.txt`。
+- 过程失败登记：① 两次把未提交的改动留在跑变异脚本的工作树里，被脚本收尾的 `git checkout --` 抹掉（一次丢修复、一次丢测试），此后规则固化为「先 commit 再派线程/跑变异」；② 一次 `z50` 行读到上一行的陈旧 XML（demo 主源码编译失败时测试任务不产出新 XML），靠逐行比对 `timestamp` 发现，脚本已把该检查写成硬条件；③ 一次 `true && <cond>` 被当成变异，它语义等价于不改，红集合为空才暴露——变异必须换掉那一行的语义；④ 探针脚本把临时文件写进仓库根目录（25 个 `.ts`），已删除并在收尾核对 `git status --porcelain` 为 0。
+
+### 实证缺陷与修复
+
+1. **F1（P0 数据正确性 + P0 假绿门禁）非流式 JSON 文档被逐行切开后，回答被当成「成功的空回答」**。`JavaNetHttpTransport.postStream` 无条件逐行发射，而两 provider 的整段 JSON 容错分支要求「同一行以 `{` 开头且以 `}` 结尾」，于是**缩进排版**的非流式回答被切成碎片，每一片既不是独立文档也不是 `data:` 行 → 全部跳过 → 流尾兜底 `emit(Completed(""))`。真 socket 实测（环回、随机端口、`ServerSocket`）原文即 `expected:<[第一段内容]> but was:<[]>`，Anthropic/OpenAI/折叠契约各一条红，三条对照（紧凑单行文档、真 SSE 增量）在主干即绿。
+   **为什么此前没人发现**：唯一断言该属性的 `ProviderStreamFramingTest.anthropicReadsAPrettyPrintedJsonDocumentFromAPostOnlyTransport` 驱动的是只实现 `post()` 的假件（走接口默认实现，`asSseLines` 能识别整段文档），而默认使用的 `JavaNetHttpTransport` 覆盖了这个方法——同一契约的两个实现行为相反，测试只绿的那一个不是产品用的那个。修法（根因层）：传输层按**响应媒体类型 + 首行 SSE 前缀**决定分帧；非事件流响应整体交出一个 emission（受 `maxResponseBytes` 约束，与 `post()` 同口径），并把契约折进**全部两个 `postStream` 实现**、都走真 socket 复验。
+2. **F2（P1）200 响应中的 API error 文档被静默丢弃**。`{"error":{…}}` 缩进排版时同样被切碎，配额耗尽/过载变成一次空的完成——代码自己的注释写的是「mask the real failure」。两 provider 各加一条用例（含 `error.message` 为**对象**的代理形状，此时旧实现抛 `Element class … is not a JsonPrimitive`，用户看到的是序列化库内部消息而非端点原因，本轮一并按 `JsonObject.textOrNull` 修正，6 处落点）。
+3. **F3（P1）可选参数写成 JSON null 时整个工具调用被拒**。跨 4 个模块的 5 个工具，共 14 个可选参数键：`agent_show_urgent_message` 的 `blocks/actions/form/placeholder/accent`；`skill_save` 的 `loadPolicy/triggers/embedFiles/overwrite`；`agent_task_update` 的 `schedule/action`；`read_teaching_evidence` 的 `offset/includeImages`；`demo_delay_propose` 的 `repeating`。根因是同一条：`JsonNull` **是** `JsonPrimitive` 也是**值**，所以 `this[key]`、`!= null`、`"k" in obj` 三种写法都把「网关没填」读成「模型要了」，再判整次调用非法。第七轮已在**响应侧**修过同一个 `JsonNull` 事实（`ProviderStreamNullFieldTest`），参数侧此前无人做。修法：每个模块一条 `optionalElement/declaresControl` 读取口（**不新增 Core 公开 API**，避免为两行惯用法扩大已发布 AAR 的 API 面）；null 一律等于文档化默认值，其中 `overwrite` 必须是 `false`（把 null 读成 true 会覆盖既有 skill），`accent`/非法类型仍判红（不得静默回落）。
+4. **F4（P2）本轮第一版整改自带的三个新缺陷**（第 1/2 轮独立复核抓出，均已修并配判别用例）：① 守卫只认「出现过 `data:` 前缀」，于是 `data: [DONE]` 或 `data: 123` 仍旧空完成——改为要求负载被理解为事件对象；② 只按媒体类型分帧，使**误标 Content-Type 的真流式**被整段缓冲：丢掉增量送达、并把流落到 4 MB 文档上限，比修复前更差——加入首行 SSE 前缀作为第二信号，并断言 emission 形状（只看解析结果看不出这点）；③ 折叠契约的那条用例给 fallback 臂建了一个从不连接的 socket（假件死设置），且 `contains('\n')` 类断言对逐行读取器是永真式——改为两臂都走真 socket、并断言 emission 条数与响应体行数相等。
+5. **F5（P2）文档事实源里有真 NUL 字节**。§35 在记录「带 U+0000 的 URL 不答话」时把那个字节直接写进了正文：Git 因此把该文件判为非文本（`git ls-files --eol` → `i/-text`），**ripgrep 对 §35/§36 的检索返回零命中**（修前实测 `No matches found`，修后命中 2 行），GNU grep 只回 `Binary file … matches` 而不给正文；`git grep` 不受影响（字节在第 84578 位，超出其 8 KB 采样窗）。本仓与审查纪律都要求「文档里声称的把关者必须 grep 核实」，而这份恰是 grep 不到的那一份。已改为字面转义写法。
+6. **契约与代码不一致的两处（P2，同族第 6/7 轮反复出现）**：两个 attention 工具声明 `additionalProperties: false` 却在**顶层**完全不设防（嵌套 items 反而逐个筛键，同仓 `demo_delay_propose` 也答 `Unknown timer proposal field.`）——现两个工具都拒陌生顶层键，且「允许的键集」由 schema 自己核对；`agent_task_create/agent_task_update` 的 schema **没有任何 required 列表**，代码却拒缺失的 title/schedule/action/taskId（同参数名的 `agent_task_cancel` 反而声明了），现补齐并双向断言「schema 声明的必填 == 工具真正拒绝缺失的那些」。
+
+### 独立复核（本轮实跑 2 轮 × 2 路只读；立案一律在当前字节复跑后才处置）
+
+- 第 1 轮（两路并行，一路审修复面、一路审取证面）在整改里抓出 F4 的三个自引入缺陷、F2 的 `error.message` 对象形状、假件死设置、永真式断言、以及「折叠只覆盖了臂的一半」。
+- 第 2 轮专审第 1 轮的整改，抓出 F3 在另外四个模块的 7 个同族落点（`overwrite`、`stringList`、`schedule/action`、`offset/includeImages`、`repeating`）、attention 顶层 `additionalProperties` 装饰化、`required` 列表缺失、以及「一个测试里跑 for 循环 → 第一处红遮住后面所有行」这一取证形态问题（已拆成每个落点一条用例）。
+- 被否掉的立案（附复测命令）：① `LocalHttpServerTools.runToolCall` 的 `catch (Exception)` 吞取消——`block` 非挂起、`controller.start()` 阻塞、`withContext` 的取消异常发生在 `try` 之外，宿主无法从这条路径抛 `CancellationException`，判为已核查不可达；② `LocalHttpServerStatusTool.description` 的「不 start/stop/signal」——`status()` 只 forget 确认已死的记录，与同文件 KDoc「never signals, stops, or rewrites a live service」一致，判为文字正确；③ §34/§35 里「`pi-attention-skill-android` 仍 NO-SOURCE」按「带轮次时间戳的历史快照」保留，不改写历史，只在本节记录关闭时点。复测命令均在 `build/review-evidence/` 脚本内。
+
+### 已核查不修 / 遗留风险
+
+- `LocalHttpServerManager.start()` 容量清理会 `removeRecord` 掉 `REPORT_UNATTRIBUTABLE` 行（删的正是 token 的唯一存留处，端口可能仍在服务）；`ensureMetadataLoaded` 对任何解析失败 `.onFailure { metadataFile.delete() }`。两处都在代码注释里**自我声明为刻意取舍**（前者解「上限被过期记录永久占满」，后者配 stage+rename 保证「撕裂写不会被当成有效」）。按「把有意设计当缺陷」的既有教训本轮不动，登记为遗留风险；若要改，方向是「退役而非删除」（改名 `.retired` 保留 token）并先在仪器面复现端口仍活。
+- `DemoUrgentInteractionDispatcher`（零用例）两处**未证实**：① `onOutcome` 的 `checkNotNull(store.appendMessagesAndFlush(...))` 在会话运行中被删除时抛到 `DemoAgentRunCoordinator.dispatch` 的 `runCatching` 里，其后的 `setSending(false)/setStatus` 不再执行，悬浮窗停在「正在处理悬浮操作」，只能靠悬浮窗「停止」复位；② `submit()` 已返回 true 后若 `drain()` 撞上 `isScreenOperationOwned()` 会 `cancelPending()` 静默丢弃，且 `presentationId` 留在 `acceptedPresentationIds`，同一屏幕再点被永久拒。合并前应跑：`:demo-app:connectedDebugAndroidTest`（先 `:app:installDebug`，再用 appops 授 `SYSTEM_ALERT_WINDOW`），或在 AVD 上定向跑 `DemoUrgent*`/悬浮相关用例。
+- 本轮**未运行任何设备/仪器/打包门禁**。§33–§36 的设备数字仍是历史时点。合并前应跑：`:demo-app:connectedDebugAndroidTest`、`:terminal-probe-demo-a:connectedDebugAndroidTest`、`:terminal-probe-demo-b:connectedDebugAndroidTest`、`scripts\terminal-runtime\verify-runtime.ps1 -CheckPackages -NdkRoot (Join-Path $env:ANDROID_HOME 'ndk\28.2.13676358')`；`-CheckPackages` 未跑的原因是本轮未触碰载荷与打包，而非不可跑（PowerShell 与 NDK 均已实测在位）。
+
+### 本轮新增教训（建议固化为动作）
+
+- **契约测试必须折叠在该契约的全部实现上，并且都走真边**：接口有默认实现 + 子类覆盖时，只测默认实现等于没测。动作：新增/修改任何 `interface + override` 的验收时，把实现列表写进一条 `listOf(...)` 折行用例，逐臂打印臂名与失败原因（本轮 `z04` 行一次红 10 项即为此形态）。
+- **一个测试方法里的 `for` 循环 = 第一处红遮住其余落点**：兄弟落点要么拆成独立 `@Test`，要么在循环里收集失败后一次性断言。本轮 `n5/n7` 两行都只报出同一个索引，就是这种形态的伪装。
+- **每落地一遍整改就再开一轮只审这一遍**：本轮 F4 的三个缺陷全部来自第一版整改，且都是「本轮正在打的那类形状」的复发（恒真式断言、死设置、单信号判断）。
+- **变异必须换掉那一行的语义**，加一个 `true &&` 前缀不是变异；取证脚本必须自带「时间戳与上一行不同」的硬条件，否则编译失败会静默留下上一行的 XML。
+- **未提交的改动绝不能和 `git checkout` 类脚本同处一个工作树**：本轮两次被自己的还原逻辑抹掉成果。动作：任何线程/脚本派发前先 commit 冻结。
+- **文档里的把关者要 grep 核实，而 grep 本身要验能被检索**：本轮第一次 `grep -rn docs/` 就因一个 NUL 字节漏掉了整份事实源。动作：接手文档密集的仓库先跑一次「tracked 文本文件含控制字节」扫描（`git ls-files --eol` 里的 `-text` 即线索）。
+- **行尾/属性卫生**：`git ls-files --eol` 显示 3 个 Kotlin 文件各含 1 行 CRLF（`DemoWorkflowActionGateway.kt`、`DemoWorkflowRunner.kt`、`DemoWorkflowRunnerTest.kt`），且无 `.gitattributes`。本轮未改（无可证后果，属同一陷阱的潜伏形态），建议下一轮以「加 `.gitattributes` 并把 `*.kt text eol=lf` 与 `*.bat text eol=crlf` 钉住」一次性收口。
+。
