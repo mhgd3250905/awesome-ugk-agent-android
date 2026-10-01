@@ -23,9 +23,15 @@ import org.junit.Test
  * completes with an empty response.
  *
  * Line framing is what a streaming endpoint needs; a non-streaming document has
- * to survive intact until a provider can classify it. Both `postStream`
- * implementations in this module carry that obligation, so the document cases run
- * against each of them.
+ * to survive intact until a provider can classify it. `everyPostStreamImplementationDeliversANonStreamDocumentIntact`
+ * folds that one contract over both `postStream` implementations in this module;
+ * the remaining cases drive the transport the SDK uses by default, because the
+ * property previously held only against a post-only stand-in.
+ *
+ * The two `...ACompactJsonDocument...` cases are controls: they already passed
+ * before the fix, and their job is to show the harness and the single-line
+ * tolerance branch work, so a red elsewhere cannot be blamed on the fake
+ * endpoint.
  */
 class StreamedResponseTransportContractTest {
 
@@ -76,6 +82,16 @@ class StreamedResponseTransportContractTest {
         "",
         "event: message_stop",
         """data: {"type":"message_stop"}"""
+    ).joinToString("\n")
+
+    private val openAiSseBody = listOf(
+        """data: {"id":"chatcmpl-1","object":"chat.completion.chunk","choices":[{"index":0,"delta":{"content":"第一段"}}]}""",
+        "",
+        """data: {"id":"chatcmpl-1","object":"chat.completion.chunk","choices":[{"index":0,"delta":{"content":"内容"}}]}""",
+        "",
+        """data: {"id":"chatcmpl-1","object":"chat.completion.chunk","choices":[{"index":0,"delta":{},"finish_reason":"stop"}]}""",
+        "",
+        "data: [DONE]"
     ).joinToString("\n")
 
     @Test
@@ -173,19 +189,35 @@ class StreamedResponseTransportContractTest {
      */
     @Test
     fun everyPostStreamImplementationDeliversANonStreamDocumentIntact() {
-        val implementations = listOf(
-            "JavaNetHttpTransport (the default)" to JavaNetHttpTransport(
-                connectTimeoutMillis = 5_000,
-                readTimeoutMillis = 5_000
-            ),
-            "HttpTransport default fallback" to PostOnlyTransport(HttpResponse(200, anthropicPrettyJson))
-        )
-        for ((label, transport) in implementations) {
-            ScriptedEndpoint(anthropicPrettyJson, contentType = "application/json").use { endpoint ->
+        ScriptedEndpoint(anthropicPrettyJson, contentType = "application/json").use { endpoint ->
+            val implementations = listOf(
+                "JavaNetHttpTransport (the default)" to JavaNetHttpTransport(
+                    connectTimeoutMillis = 5_000,
+                    readTimeoutMillis = 5_000
+                ),
+                // A host that implements only post() inherits the interface's
+                // default postStream: a second implementation of the same
+                // contract, so it is driven over the same socket rather than
+                // handed a canned body.
+                "HttpTransport default fallback" to PostOnlyTransport(endpoint.url)
+            )
+            for ((label, transport) in implementations) {
+                val emissions = runBlocking {
+                    transport.postStream(HttpRequest(endpoint.url, emptyMap(), "{}")).toList()
+                }
+                assertEquals(
+                    "$label must hand a non-event response over as one document",
+                    1,
+                    emissions.size
+                )
+                assertTrue(
+                    "$label lost the document's internal line breaks",
+                    emissions.single().contains('\n') && isStandaloneJsonDocument(emissions.single())
+                )
                 val provider = AnthropicMessagesProvider(
                     apiKey = "test-key",
                     model = "claude-3-7-sonnet",
-                    baseUrl = if (transport is PostOnlyTransport) "https://example.invalid/anthropic" else endpoint.baseUrl,
+                    baseUrl = endpoint.baseUrl,
                     transport = transport
                 )
                 val response = runBlocking { provider.generateStream(request()).toList() }.completedOrNull()
@@ -195,19 +227,6 @@ class StreamedResponseTransportContractTest {
                     response?.content
                 )
             }
-        }
-        // The shipped transport has to hand the document over without chopping it
-        // into lines; that is the shape the provider tolerance branch reads.
-        ScriptedEndpoint(anthropicPrettyJson, contentType = "application/json").use { endpoint ->
-            val emissions = runBlocking {
-                JavaNetHttpTransport(connectTimeoutMillis = 5_000, readTimeoutMillis = 5_000)
-                    .postStream(HttpRequest(endpoint.url, emptyMap(), "{}"))
-                    .toList()
-            }
-            assertTrue(
-                "expected one intact document emission, got ${emissions.size} lines",
-                emissions.any { it.trim().startsWith("{") && it.trim().endsWith("}") }
-            )
         }
     }
 
@@ -315,13 +334,28 @@ class StreamedResponseTransportContractTest {
                     .postStream(HttpRequest(endpoint.url, emptyMap(), "{}"))
                     .toList()
             }
-            assertTrue(
-                "an event stream must arrive as several emissions, got ${emissions.size}",
-                emissions.size > 1
+            assertEquals(
+                "an event stream must arrive one line at a time",
+                anthropicSseBody.lines().size,
+                emissions.size
             )
-            assertTrue(
-                "no emission may carry a line of its own past a line terminator",
-                emissions.none { it.contains('\n') || it.contains('\r') }
+            assertEquals("the framing must not invent or drop a line", anthropicSseBody.lines(), emissions)
+        }
+        ScriptedEndpoint(anthropicSseBody, contentType = "application/json").use { endpoint ->
+            val chunks = runBlocking {
+                AnthropicMessagesProvider(
+                    apiKey = "test-key",
+                    model = "claude-3-7-sonnet",
+                    baseUrl = endpoint.baseUrl,
+                    transport = JavaNetHttpTransport(connectTimeoutMillis = 5_000, readTimeoutMillis = 5_000)
+                ).generateStream(request()).toList()
+            }
+            // An endpoint that forgets the media type still has to stream: without
+            // the first-line signal its answer arrives in one burst at EOF, and a
+            // long answer would fall under the document size cap.
+            assertEquals(
+                listOf("第一段", "内容"),
+                chunks.filterIsInstance<ModelStreamChunk.ContentDelta>().map { it.delta }
             )
         }
         ScriptedEndpoint(anthropicPrettyJson, contentType = "application/json").use { endpoint ->
@@ -339,9 +373,16 @@ class StreamedResponseTransportContractTest {
         }
     }
 
+    /**
+     * The two signals the transport is allowed to key framing on, over the shapes
+     * a real gateway actually sends: media type with and without parameters, case
+     * changes, blank, and the near-misses that must not be read as an event
+     * stream. The end-to-end consequences of each decision are the socket cases
+     * above, not this table.
+     */
     @Test
-    fun onlyAnEventStreamMediaTypeSelectsLineFraming() {
-        val cases = listOf(
+    fun contentTypeAndFirstLineDecideFraming() {
+        val mediaTypes = listOf(
             "text/event-stream" to true,
             "TEXT/EVENT-STREAM" to true,
             "  text/event-stream  " to true,
@@ -354,8 +395,23 @@ class StreamedResponseTransportContractTest {
             "" to false,
             null to false
         )
-        for ((value, expected) in cases) {
+        for ((value, expected) in mediaTypes) {
             assertEquals("Content-Type <$value>", expected, isEventStreamContentType(value))
+        }
+        val firstLines = listOf(
+            "data: {\"type\":\"message_start\"}" to true,
+            "event: message_start" to true,
+            "id: 7" to true,
+            "retry: 1000" to true,
+            ": keep-alive comment" to true,
+            "{" to false,
+            "  {" to false,
+            "[1,2]" to false,
+            "" to false,
+            "data" to false
+        )
+        for ((value, expected) in firstLines) {
+            assertEquals("first line <$value>", expected, looksLikeEventStreamLine(value))
         }
     }
 
@@ -422,8 +478,111 @@ class StreamedResponseTransportContractTest {
         }
     }
 
-    private class PostOnlyTransport(private val response: HttpResponse) : HttpTransport {
-        override suspend fun post(request: HttpRequest) = response
+    /**
+     * A stream whose only event is `[DONE]` carried nothing this reader could
+     * understand. It used to fall through to the end-of-stream completion with an
+     * empty body, which is the same silent blank answer this fix exists to stop -
+     * recognising the `data:` prefix is not understanding an event.
+     */
+    @Test
+    fun anthropicFailsLoudlyWhenTheStreamCarriedOnlyADoneMarker() {
+        ScriptedEndpoint("data: [DONE]\n\n", contentType = "text/event-stream").use { endpoint ->
+            val failure = assertThrows(Exception::class.java) {
+                runBlocking {
+                    AnthropicMessagesProvider(
+                        apiKey = "test-key",
+                        model = "claude-3-7-sonnet",
+                        baseUrl = endpoint.baseUrl,
+                        transport = JavaNetHttpTransport(connectTimeoutMillis = 5_000, readTimeoutMillis = 5_000)
+                    ).generateStream(request()).toList()
+                }
+            }
+            assertTrue(
+                "expected a framing failure, got: ${failure.message}",
+                failure.message?.contains("no SSE event") == true
+            )
+        }
+    }
+
+    /** Same rule for a payload that is a data event but not an event object. */
+    @Test
+    fun anthropicFailsLoudlyWhenTheEventPayloadIsNotAnObject() {
+        ScriptedEndpoint("data: 123\n\ndata: \"text\"\n\n", contentType = "text/event-stream")
+            .use { endpoint ->
+                val failure = assertThrows(Exception::class.java) {
+                    runBlocking {
+                        AnthropicMessagesProvider(
+                            apiKey = "test-key",
+                            model = "claude-3-7-sonnet",
+                            baseUrl = endpoint.baseUrl,
+                            transport = JavaNetHttpTransport(connectTimeoutMillis = 5_000, readTimeoutMillis = 5_000)
+                        ).generateStream(request()).toList()
+                    }
+                }
+                assertTrue(
+                    "expected a framing failure, got: ${failure.message}",
+                    failure.message?.contains("no SSE event") == true
+                )
+            }
+    }
+
+    /**
+     * A 200 document with an empty `choices` array is a legal content-filter
+     * refusal shape, and the parser refuses it. The failure must name that, not
+     * send the reader hunting for a framing bug that is not there.
+     */
+    @Test
+    fun openAiNamesTheDocumentCauseInsteadOfBlamingTheFraming() {
+        val body = """
+            {
+              "id": "chatcmpl-1",
+              "object": "chat.completion",
+              "choices": []
+            }
+        """.trimIndent()
+        ScriptedEndpoint(body, contentType = "application/json").use { endpoint ->
+            val failure = assertThrows(Exception::class.java) {
+                runBlocking {
+                    OpenAiChatCompletionsProvider(
+                        apiKey = "test-key",
+                        model = "gpt-test",
+                        endpoint = endpoint.url,
+                        transport = JavaNetHttpTransport(connectTimeoutMillis = 5_000, readTimeoutMillis = 5_000)
+                    ).generateStream(request()).toList()
+                }
+            }
+            assertTrue(
+                "expected the payload's own parse refusal to be reported, got: ${failure.message}",
+                failure.message?.contains("whole-body document failed to parse") == true &&
+                    failure.message?.contains("choices") == true
+            )
+        }
+    }
+
+    @Test
+    fun openAiStillReceivesSseDeltasLineByLineFromTheShippedTransport() {
+        ScriptedEndpoint(openAiSseBody, contentType = "text/event-stream").use { endpoint ->
+            val chunks = runBlocking {
+                OpenAiChatCompletionsProvider(
+                    apiKey = "test-key",
+                    model = "gpt-test",
+                    endpoint = endpoint.url,
+                    transport = JavaNetHttpTransport(connectTimeoutMillis = 5_000, readTimeoutMillis = 5_000)
+                ).generateStream(request()).toList()
+            }
+            assertEquals(
+                listOf("第一段", "内容"),
+                chunks.filterIsInstance<ModelStreamChunk.ContentDelta>().map { it.delta }
+            )
+            assertEquals("第一段内容", chunks.completedOrNull()?.content)
+        }
+    }
+
+    /** Routes through the real socket, but implements only `post()`. */
+    private class PostOnlyTransport(private val url: String) : HttpTransport {
+        private val delegate = JavaNetHttpTransport(connectTimeoutMillis = 5_000, readTimeoutMillis = 5_000)
+
+        override suspend fun post(request: HttpRequest) = delegate.post(request.copy(url = url))
     }
 
     private fun request() = ModelRequest(
@@ -440,12 +599,22 @@ class StreamedResponseTransportContractTest {
      * the documented managed-server ports.
      */
     private class ScriptedEndpoint(body: String, contentType: String?) : Closeable {
-        private val server = ServerSocket(0, 1, java.net.InetAddress.getLoopbackAddress())
+        private val server = ServerSocket(0, 16, java.net.InetAddress.getLoopbackAddress())
         private val worker = thread(isDaemon = true) {
-            try {
-                server.accept().use { socket -> handle(socket, body, contentType) }
-            } catch (_: IOException) {
-                // The client may hang up once it has the answer.
+            // One request per call: a case that asks the transport and then the
+            // provider makes more than one connection, so the endpoint keeps
+            // answering until it is closed.
+            while (!server.isClosed) {
+                val socket = try {
+                    server.accept()
+                } catch (_: IOException) {
+                    break
+                }
+                try {
+                    socket.use { handle(it, body, contentType) }
+                } catch (_: IOException) {
+                    // The client may hang up once it has the answer.
+                }
             }
         }
 
