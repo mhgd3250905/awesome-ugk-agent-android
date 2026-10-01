@@ -119,10 +119,7 @@ private class ShowUrgentMessageTool(
         val reason = call.input.stringValue("reason")?.trim()
             ?.takeIf { it.isNotEmpty() && it.length <= MAX_REASON_CHARS }
             ?: return invalidInput(call)
-        val accent = call.input.stringValue("accent")?.let { value ->
-            UrgentAccent.entries.firstOrNull { it.name.equals(value, ignoreCase = true) }
-                ?: return invalidInput(call)
-        } ?: UrgentAccent.AMBER
+        val accent = call.input.readUrgentAccent() ?: return invalidInput(call)
         val blocks = call.input.readUrgentBlocks() ?: return invalidInput(call)
         if (!supportsInteractions &&
             (call.input.declaresControl("actions") || call.input.declaresControl("form"))
@@ -194,11 +191,15 @@ private fun JsonObject.stringValue(key: String): String? =
     (this[key] as? JsonPrimitive)?.takeIf { it.isString }?.content
 
 /**
- * An optional argument a gateway serialized as JSON `null` means the same thing
- * as one the model left out. POJO/Jackson-style endpoints emit `"blocks":null`
- * and `"offset":null` for fields they do not fill in, and the providers in this
- * SDK already read that shape as absent - a presence test written against the
- * raw map treats it as a request instead, and rejects the whole call.
+ * An optional argument a gateway serialized as JSON `null` means the same thing as
+ * one the model left out. POJO/Jackson-style endpoints emit `"blocks":null` for
+ * fields they do not fill in, and a presence test written against the raw map
+ * reads that as a request - then rejects the whole call.
+ *
+ * The providers in this SDK tolerate the same shape on the response side (a JSON
+ * `null` delta, a `null` error, a `null` tool-call `input`), but nothing strips
+ * `null`-valued keys out of a tool's arguments on the way in, so every reader of
+ * an optional argument has to make the call itself.
  */
 private fun JsonObject.optionalElement(key: String): JsonElement? =
     this[key]?.takeUnless { it is JsonNull }
@@ -273,6 +274,25 @@ internal fun JsonObject.readUrgentForm(): UrgentForm? {
  * endpoint filling the key with `null`.
  */
 internal fun JsonObject.declaresControl(key: String): Boolean = optionalElement(key) != null
+
+/**
+ * The screen accent. Absent or serialized as null is the documented default; a
+ * value the model did supply that is not an accent name is refused rather than
+ * quietly recoloured.
+ *
+ * See [readUrgentBlocks] for why this is internal.
+ */
+internal fun JsonObject.readUrgentAccent(): UrgentAccent? =
+    if (!declaresControl("accent")) {
+        UrgentAccent.AMBER
+    } else {
+        stringValue("accent")?.let { name ->
+            UrgentAccent.entries.firstOrNull { it.name.equals(name, ignoreCase = true) }
+        }
+    }
+
+/** The schema the urgent-message Tool answers to, exposed so its optional keys can be enumerated. */
+internal fun urgentMessageSchema(): JsonObject = messageSchema(withReason = true, withInteractions = true)
 
 /** See [readUrgentBlocks] for why this is internal. */
 internal fun validControlId(id: String): Boolean =

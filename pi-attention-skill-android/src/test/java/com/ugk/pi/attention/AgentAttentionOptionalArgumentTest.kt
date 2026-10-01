@@ -1,6 +1,8 @@
 package com.ugk.pi.attention
 
+import kotlinx.serialization.json.JsonArray
 import kotlinx.serialization.json.JsonNull
+import kotlinx.serialization.json.JsonPrimitive
 import kotlinx.serialization.json.JsonObject
 import kotlinx.serialization.json.buildJsonArray
 import kotlinx.serialization.json.buildJsonObject
@@ -17,16 +19,18 @@ import org.junit.Test
  *
  * The endpoints this SDK is pointed at are frequently OpenAI-compatible
  * Java/Pojo services that fill every optional field with `null` rather than
- * omitting it; the providers already treat that shape as absent (see the
- * round-7 `ProviderStreamNullFieldTest`), and `readMessage`/`readUrgentBlocks`
- * were the last readers in this module still asking the raw map whether a key
- * was present. A `"blocks": null` used to fail the whole call, so a screen the
- * user was waiting for was refused over a field nobody had filled in.
+ * omitting it - the shape round 7 had to fix on the providers' *response* side,
+ * where `"delta":null` aborted a stream. Nothing strips null-valued keys out of a
+ * tool's arguments on the way in, so every reader of an optional argument decides
+ * this for itself, and these readers asked the raw map: a `"blocks": null` failed
+ * the whole call, so a screen the user was waiting for was refused over a field
+ * nobody had filled in.
  *
- * The readings are exercised directly because the Tools that use them need an
- * [AndroidNotificationPublisher], and that needs an Android Context. Which
- * reader the Tool calls is pinned by [declaresControlCasesCoverEveryOptionalControlKey]
- * and by the argument table below, not by a stand-in.
+ * The readers are exercised directly because the Tools that call them need an
+ * [AndroidNotificationPublisher], and that needs an Android
+ * [android.content.Context]. The cost of that seam is stated rather than hidden:
+ * these cases pin what a reader answers, not that the Tool calls it - which is
+ * why each reader is reached by exactly one mutation row in the review evidence.
  */
 class AgentAttentionOptionalArgumentTest {
 
@@ -222,13 +226,24 @@ class AgentAttentionOptionalArgumentTest {
     }
 
     /**
-     * Folded over every optional control key this module reads, so a new one
-     * cannot be added with a raw presence test and no null case.
+     * The optional keys are read off the tool's own schema rather than a list
+     * written next to this test, so a new optional argument arrives with a null
+     * case already waiting for it - and the expected set is pinned too, otherwise
+     * a schema edit could quietly shrink the fold to nothing.
      */
     @Test
-    fun declaresControlCasesCoverEveryOptionalControlKey() {
-        val optionalControlKeys = listOf("blocks", "actions", "form", "accent", "reason", "placeholder")
-        for (key in optionalControlKeys) {
+    fun everyOptionalArgumentOfTheUrgentSchemaReadsNullAsAbsent() {
+        val schema = urgentMessageSchema()
+        val properties = (schema["properties"] as JsonObject).keys
+        val required = (schema["required"] as JsonArray).map { (it as JsonPrimitive).content }
+        val optional = properties - required.toSet()
+        assertEquals(
+            "the urgent-message tool's optional arguments",
+            setOf("accent", "blocks", "actions", "form"),
+            optional
+        )
+        assertTrue("the fold must not be empty", optional.isNotEmpty())
+        for (key in optional) {
             assertFalse(
                 "$key: absent must not declare",
                 buildJsonObject {}.declaresControl(key)
@@ -241,6 +256,33 @@ class AgentAttentionOptionalArgumentTest {
                 "$key: a value must declare",
                 buildJsonObject { put(key, "value") }.declaresControl(key)
             )
+        }
+    }
+
+    @Test
+    fun accentDefaultsOnlyWhenItWasNotFilledIn() {
+        assertEquals(UrgentAccent.AMBER, buildJsonObject {}.readUrgentAccent())
+        assertEquals(UrgentAccent.AMBER, buildJsonObject { put("accent", JsonNull) }.readUrgentAccent())
+        assertEquals(UrgentAccent.RED, buildJsonObject { put("accent", "RED") }.readUrgentAccent())
+        assertEquals(UrgentAccent.BLUE, buildJsonObject { put("accent", "blue") }.readUrgentAccent())
+    }
+
+    /** Declared-but-not-an-accent must be refused, not silently recoloured to amber. */
+    @Test
+    fun declaredNonAccentValueIsRefused() {
+        val cases = listOf(
+            "a number" to JsonPrimitive(5),
+            "an unknown name" to JsonPrimitive("purple"),
+            "an empty string" to JsonPrimitive("")
+        )
+        for ((label, primitive) in cases) {
+            val input = buildJsonObject { put("accent", primitive) }
+            assertTrue("$label must declare a value", input.declaresControl("accent"))
+            assertNull("$label must be refused, not defaulted", input.readUrgentAccent())
+        }
+        for (value in listOf(buildJsonObject { }, buildJsonArray { })) {
+            val input = buildJsonObject { put("accent", value) }
+            assertNull("an accent of ${value::class.simpleName} must be refused", input.readUrgentAccent())
         }
     }
 }
