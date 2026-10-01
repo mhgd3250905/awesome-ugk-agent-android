@@ -106,6 +106,45 @@ class DemoTeachingCompilationLimitsTest {
             diagnostics.contains("\"failureCode\":\"EVIDENCE_MERGE_NO_PROGRESS\""))
     }
 
+    /**
+     * A round that halves the batch count while the re-summarised text does not shrink is
+     * progress, not a stall: comparing the batch axis against the pre-round count is what
+     * keeps it alive. Judged against the post-round count (which is groups' own mapping)
+     * the batch axis would compare groups with itself, always pass, and kill this round.
+     */
+    @Test fun mergeRoundThatShrinksBatchesButNotTextIsNotKilled() = runBlocking {
+        val store = DemoTeachingStore(temporary.newFolder())
+        val id = UUID.randomUUID().toString(); store.create(id, "先并批再缩文")
+        assertNull(record(id, store, 24, 8, 12_000))
+        var mergeCalls = 0
+        val provider = object : LLMProvider {
+            override suspend fun generate(request: ModelRequest): ModelResponse {
+                val stage = stageOf(request)
+                if (stage == DemoTeachingSopSkill.Stage.MERGE_NOTES) {
+                    mergeCalls++
+                    val material = request.messages.filterIsInstance<AgentMessage.User>()
+                        .joinToString { it.content }
+                    // Round 1 re-summarises the step notes without shortening them (the
+                    // material still carries the round-1 marker); every later part,
+                    // including the markerless head of a split round-1 note, converges.
+                    return if (material.contains("MERGE1")) {
+                        ModelResponse(content = "## 步骤笔记\n\n" + "x".repeat(58_000) + "\nMERGE2\n")
+                    } else {
+                        ModelResponse(content = "## 步骤笔记\n\n" + "y".repeat(1_000))
+                    }
+                }
+                if (stage == DemoTeachingSopSkill.Stage.STEP_NOTES) {
+                    return ModelResponse(content = "## 步骤笔记\n\n" + "x".repeat(9_000) + "\nMERGE1\n")
+                }
+                return respond(request, "笔记")
+            }
+        }
+        val guide = DemoTeachingCompiler({ provider }, store, ::skill).compile(store.read(id)!!)
+        assertTrue("the surviving round must be followed by a converging one: $mergeCalls",
+            mergeCalls >= 2)
+        assertTrue(guide.document.contains("查看秒表"))
+    }
+
     /** Screenshots reach the wire as Base64 text, so the request budget must count that. */
     @Test fun screenshotPayloadIsBoundedByEncodedSize() = runBlocking {
         val root = temporary.newFolder()
@@ -379,5 +418,9 @@ class DemoTeachingCompilationLimitsTest {
         val page = toolContent.joinToString("\n")
         assertTrue("imagesAvailable must report the true batch size: $page",
             page.contains("\"imagesAvailable\":6") && page.contains("\"imagesSupplied\":1"))
+        // A single-batch record has nowhere else to fetch the capped screenshots from,
+        // so the read-back must not advise switching batches.
+        assertFalse("single-batch read-back must not advise switching batches: $page",
+            page.contains("可换批次回查"))
     }
 }
