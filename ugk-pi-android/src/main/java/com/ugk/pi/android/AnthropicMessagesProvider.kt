@@ -351,7 +351,7 @@ class AnthropicMessagesProvider(
 
                 "error" -> {
                     val errorObj = dataObj["error"] as? JsonObject
-                    val message = errorObj?.get("message")?.jsonPrimitive?.contentOrNull ?: dataStr
+                    val message = errorObj?.textOrNull("message") ?: dataStr
                     throw IllegalStateException("Anthropic SSE stream error: $message")
                 }
             }
@@ -651,8 +651,7 @@ class AnthropicMessagesProvider(
     private fun fullBodyApiErrorMessageOrNull(body: String): String? {
         val root = runCatching { json.parseToJsonElement(body).jsonObject }.getOrNull() ?: return null
         val errorObj = root["error"] as? JsonObject ?: return null
-        return errorObj["message"]?.jsonPrimitive?.contentOrNull
-            ?: errorObj["type"]?.jsonPrimitive?.contentOrNull
+        return errorObj.textOrNull("message") ?: errorObj.textOrNull("type")
     }
 
     private fun parseResponse(body: String): ModelResponse {
@@ -661,8 +660,8 @@ class AnthropicMessagesProvider(
         // from an overloaded gateway). Parsing it as a message would yield a
         // blank "successful" response and mask the real failure.
         (root["error"] as? JsonObject)?.let { errorObj ->
-            val message = errorObj["message"]?.jsonPrimitive?.contentOrNull
-                ?: errorObj["type"]?.jsonPrimitive?.contentOrNull
+            val message = errorObj.textOrNull("message")
+                ?: errorObj.textOrNull("type")
                 ?: body.take(200)
             throw IllegalStateException("Anthropic API error: $message")
         }

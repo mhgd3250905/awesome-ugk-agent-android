@@ -293,8 +293,7 @@ class OpenAiChatCompletionsProvider(
             // error", and JsonNull is a value rather than an absent key.
             val errorElement = dataObj["error"]
             if (errorElement != null && errorElement !is JsonNull) {
-                val message = (errorElement as? JsonObject)
-                    ?.get("message")?.jsonPrimitive?.contentOrNull
+                val message = (errorElement as? JsonObject)?.textOrNull("message")
                     ?: dataStr
                 throw IllegalStateException("OpenAI stream error: $message")
             }
@@ -531,8 +530,7 @@ class OpenAiChatCompletionsProvider(
     private fun fullBodyApiErrorMessageOrNull(body: String): String? {
         val root = runCatching { json.parseToJsonElement(body).jsonObject }.getOrNull() ?: return null
         val errorObj = root["error"] as? JsonObject ?: return null
-        return errorObj["message"]?.jsonPrimitive?.contentOrNull
-            ?: errorObj["type"]?.jsonPrimitive?.contentOrNull
+        return errorObj.textOrNull("message") ?: errorObj.textOrNull("type")
     }
 
     private fun parseResponse(body: String): ModelResponse {
@@ -541,8 +539,8 @@ class OpenAiChatCompletionsProvider(
         // gateway overload). Parsing it as a message would yield a blank
         // "successful" response and mask the real failure.
         (root["error"] as? JsonObject)?.let { errorObj ->
-            val message = errorObj["message"]?.jsonPrimitive?.contentOrNull
-                ?: errorObj["type"]?.jsonPrimitive?.contentOrNull
+            val message = errorObj.textOrNull("message")
+                ?: errorObj.textOrNull("type")
                 ?: body.take(200)
             throw IllegalStateException("OpenAI API error: $message")
         }

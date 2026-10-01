@@ -4,6 +4,20 @@ import kotlinx.coroutines.flow.Flow
 import kotlinx.coroutines.flow.flow
 import kotlinx.serialization.json.Json
 import kotlinx.serialization.json.JsonObject
+import kotlinx.serialization.json.JsonPrimitive
+
+/**
+ * The text of an object field an endpoint may fill with anything.
+ *
+ * `element?.jsonPrimitive` throws `IllegalStateException` for a non-primitive, so
+ * reading an error description that way replaces the API's own reason - the one
+ * string a caller needs to be able to read - with a serialization-library message
+ * about `JsonObject is not a JsonPrimitive`. A value that is not a string is
+ * reported as absent, which lets the caller fall back to what it already holds
+ * (the raw payload, or the body snippet).
+ */
+internal fun JsonObject.textOrNull(key: String): String? =
+    (this[key] as? JsonPrimitive)?.takeIf { it.isString }?.content
 
 /**
  * Splits any emission that carries several lines into one emission per line.

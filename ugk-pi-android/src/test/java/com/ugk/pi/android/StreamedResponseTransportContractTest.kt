@@ -578,6 +578,127 @@ class StreamedResponseTransportContractTest {
         }
     }
 
+    /**
+     * The OpenAI siblings of the Anthropic cases: the two providers carry the
+     * same rule in two places, and a rule pinned in one of them is not pinned.
+     */
+    @Test
+    fun openAiKeepsTheAccumulatedAnswerWhenTheStreamEndsBeforeDone() {
+        val truncated = openAiSseBody.substringBefore("data: [DONE]")
+        ScriptedEndpoint(truncated, contentType = "text/event-stream").use { endpoint ->
+            val chunks = runBlocking {
+                OpenAiChatCompletionsProvider(
+                    apiKey = "test-key",
+                    model = "gpt-test",
+                    endpoint = endpoint.url,
+                    transport = JavaNetHttpTransport(connectTimeoutMillis = 5_000, readTimeoutMillis = 5_000)
+                ).generateStream(request()).toList()
+            }
+            assertEquals("第一段内容", chunks.completedOrNull()?.content)
+        }
+    }
+
+    @Test
+    fun openAiFailsLoudlyWhenTheEventPayloadIsNotAnObject() {
+        ScriptedEndpoint("data: 123\n\ndata: \"text\"\n\n", contentType = "text/event-stream")
+            .use { endpoint ->
+                val failure = assertThrows(Exception::class.java) {
+                    runBlocking {
+                        OpenAiChatCompletionsProvider(
+                            apiKey = "test-key",
+                            model = "gpt-test",
+                            endpoint = endpoint.url,
+                            transport = JavaNetHttpTransport(connectTimeoutMillis = 5_000, readTimeoutMillis = 5_000)
+                        ).generateStream(request()).toList()
+                    }
+                }
+                assertTrue(
+                    "expected a framing failure, got: ${failure.message}",
+                    failure.message?.contains("no SSE event") == true
+                )
+            }
+    }
+
+    /**
+     * A gateway that wraps the upstream error with `message` as an object rather
+     * than a string must still be reported as the API error it is. Reading that
+     * field with `?.jsonPrimitive` throws for a non-primitive, which replaced the
+     * endpoint's own reason with a serialization-library message about
+     * `JsonObject is not a JsonPrimitive` - in the one place whose whole job is to
+     * tell the caller what failed.
+     */
+    @Test
+    fun anthropicReportsAnErrorWhoseMessageFieldIsAnObject() {
+        val body = """
+            {
+              "type": "error",
+              "error": {
+                "type": "overloaded_error",
+                "message": {
+                  "text": "Overloaded",
+                  "retry_after": 30
+                }
+              }
+            }
+        """.trimIndent()
+        ScriptedEndpoint(body, contentType = "application/json").use { endpoint ->
+            val failure = assertThrows(Exception::class.java) {
+                runBlocking {
+                    AnthropicMessagesProvider(
+                        apiKey = "test-key",
+                        model = "claude-3-7-sonnet",
+                        baseUrl = endpoint.baseUrl,
+                        transport = JavaNetHttpTransport(connectTimeoutMillis = 5_000, readTimeoutMillis = 5_000)
+                    ).generateStream(request()).toList()
+                }
+            }
+            assertTrue(
+                "expected the API error to be named, got: ${failure.message}",
+                failure.message?.contains("Anthropic API error") == true &&
+                    failure.message?.contains("overloaded_error") == true
+            )
+            assertTrue(
+                "a serialization internal must not replace the endpoint's reason: ${failure.message}",
+                failure.message?.contains("is not a JsonPrimitive") == false
+            )
+        }
+    }
+
+    @Test
+    fun openAiReportsAnErrorWhoseMessageFieldIsAnObject() {
+        val body = """
+            {
+              "error": {
+                "type": "server_error",
+                "message": {
+                  "detail": "upstream refused",
+                  "code": 503
+                }
+              }
+            }
+        """.trimIndent()
+        ScriptedEndpoint(body, contentType = "application/json").use { endpoint ->
+            val failure = assertThrows(Exception::class.java) {
+                runBlocking {
+                    OpenAiChatCompletionsProvider(
+                        apiKey = "test-key",
+                        model = "gpt-test",
+                        endpoint = endpoint.url,
+                        transport = JavaNetHttpTransport(connectTimeoutMillis = 5_000, readTimeoutMillis = 5_000)
+                    ).generateStream(request()).toList()
+                }
+            }
+            assertTrue(
+                "expected the API error to be named, got: ${failure.message}",
+                failure.message?.contains("OpenAI") == true && failure.message?.contains("server_error") == true
+            )
+            assertTrue(
+                "a serialization internal must not replace the endpoint's reason: ${failure.message}",
+                failure.message?.contains("is not a JsonPrimitive") == false
+            )
+        }
+    }
+
     /** Routes through the real socket, but implements only `post()`. */
     private class PostOnlyTransport(private val url: String) : HttpTransport {
         private val delegate = JavaNetHttpTransport(connectTimeoutMillis = 5_000, readTimeoutMillis = 5_000)
