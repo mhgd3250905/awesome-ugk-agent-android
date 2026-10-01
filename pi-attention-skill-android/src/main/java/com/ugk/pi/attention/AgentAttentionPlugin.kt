@@ -185,8 +185,13 @@ private fun JsonObject.readMessage(): AttentionMessage? {
     return AttentionMessage(title, body)
 }
 
+/**
+ * Reads a string field. A `null` is not screened here: every field reachable
+ * through this reader is required by the schema, and an explicitly null
+ * optional is refused one level up by [declaresControl] before it gets here.
+ */
 private fun JsonObject.stringValue(key: String): String? =
-    (optionalElement(key) as? JsonPrimitive)?.takeIf { it.isString }?.content
+    (this[key] as? JsonPrimitive)?.takeIf { it.isString }?.content
 
 /**
  * An optional argument a gateway serialized as JSON `null` means the same thing
