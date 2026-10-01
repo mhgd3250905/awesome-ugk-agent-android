@@ -2,7 +2,7 @@ package com.ugk.pi.android.testapp
 
 import androidx.test.ext.junit.runners.AndroidJUnit4
 import androidx.test.platform.app.InstrumentationRegistry
-import com.ugk.pi.android.AndroidLaunchAppTool
+import com.ugk.pi.system.skill.AndroidLaunchAppTool
 import com.ugk.pi.android.AgentToolDecorator
 import com.ugk.pi.android.ToolCall
 import com.ugk.pi.android.ToolExecutionContext

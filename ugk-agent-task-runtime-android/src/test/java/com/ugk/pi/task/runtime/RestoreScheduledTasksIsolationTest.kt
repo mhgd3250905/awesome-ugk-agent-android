@@ -2,13 +2,13 @@ package com.ugk.pi.task.runtime
 
 import android.content.Context
 import android.content.ContextWrapper
-import com.ugk.pi.android.AgentTask
-import com.ugk.pi.android.AgentTaskAction
-import com.ugk.pi.android.AgentTaskSchedule
-import com.ugk.pi.android.AgentTaskScheduler
-import com.ugk.pi.android.AgentTaskStatus
-import com.ugk.pi.android.AgentTaskStore
-import com.ugk.pi.android.FixedClock
+import com.ugk.pi.schedule.skill.AgentTask
+import com.ugk.pi.schedule.skill.AgentTaskAction
+import com.ugk.pi.schedule.skill.AgentTaskSchedule
+import com.ugk.pi.schedule.skill.AgentTaskScheduler
+import com.ugk.pi.schedule.skill.AgentTaskStatus
+import com.ugk.pi.schedule.skill.AgentTaskStore
+import com.ugk.pi.schedule.skill.FixedClock
 import kotlinx.coroutines.runBlocking
 import org.junit.Assert.assertEquals
 import org.junit.Test

@@ -2,8 +2,8 @@ package com.ugk.pi.android.testapp
 
 import android.accessibilityservice.AccessibilityService
 import android.view.accessibility.AccessibilityEvent
-import com.ugk.pi.android.AndroidAccessibilityServiceState
-import com.ugk.pi.android.AndroidAccessibilityServiceStateProvider
+import com.ugk.pi.system.skill.AndroidAccessibilityServiceState
+import com.ugk.pi.system.skill.AndroidAccessibilityServiceStateProvider
 
 class AgentAccessibilityService : AccessibilityService() {
     override fun onAccessibilityEvent(event: AccessibilityEvent?) {

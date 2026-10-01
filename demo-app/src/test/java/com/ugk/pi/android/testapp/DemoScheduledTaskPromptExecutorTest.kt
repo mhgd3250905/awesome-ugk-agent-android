@@ -4,10 +4,10 @@ import android.content.Context
 import android.content.ContextWrapper
 import com.ugk.pi.android.AgentRuntime
 import com.ugk.pi.android.AgentSession
-import com.ugk.pi.android.AgentTask
-import com.ugk.pi.android.AgentTaskAction
-import com.ugk.pi.android.AgentTaskSchedule
-import com.ugk.pi.android.AgentTaskStatus
+import com.ugk.pi.schedule.skill.AgentTask
+import com.ugk.pi.schedule.skill.AgentTaskAction
+import com.ugk.pi.schedule.skill.AgentTaskSchedule
+import com.ugk.pi.schedule.skill.AgentTaskStatus
 import com.ugk.pi.android.AgentTool
 import com.ugk.pi.android.AgentToolDecorator
 import com.ugk.pi.android.AgentToolInterlockErrorCodes

@@ -3,8 +3,8 @@ package com.ugk.pi.android.testapp
 import android.system.Os
 import androidx.test.ext.junit.runners.AndroidJUnit4
 import androidx.test.platform.app.InstrumentationRegistry
-import com.ugk.pi.android.AppFileListTool
-import com.ugk.pi.android.AppFileWriteTool
+import com.ugk.pi.file.skill.AppFileListTool
+import com.ugk.pi.file.skill.AppFileWriteTool
 import com.ugk.pi.android.ToolCall
 import com.ugk.pi.android.ToolExecutionContext
 import java.io.File

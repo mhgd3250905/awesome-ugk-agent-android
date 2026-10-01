@@ -728,7 +728,6 @@ class LocalHttpServerManager(
         const val MIN_PORT = 1_024
         const val MAX_PORT = 65_535
         const val LOOPBACK_HOST = "127.0.0.1"
-        const val DEFAULT_LOCAL_HTTP_SERVER_PORT = 8_765
         const val STATE_RUNNING = "running"
         const val STATE_STARTING = "starting"
         const val STATE_STOPPED = "stopped"
@@ -1150,4 +1149,5 @@ internal enum class QueryDisposition { REPORT, REPORT_UNATTRIBUTABLE, FORGET_CON
 /** What stop()/stopAll() may do to one record. */
 internal enum class StopDisposition { SIGNAL_PROCESS_GROUP, DROP_UNATTRIBUTABLE, DROP_CONFIRMED_DEAD }
 
+/** Single source of the default loopback port; the companion keeps no duplicate. */
 const val DEFAULT_LOCAL_HTTP_SERVER_PORT: Int = 8_765

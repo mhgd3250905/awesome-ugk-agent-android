@@ -1413,7 +1413,6 @@ class MainActivity : ComponentActivity() {
             activeConversation.updatedAt = System.currentTimeMillis()
             conversationStore.save(activeConversation)
         }
-        syncTranscript()
         updateAppBar()
 
         assistantMessageView = null
@@ -1697,7 +1696,6 @@ class MainActivity : ComponentActivity() {
             activeConversation.updatedAt = System.currentTimeMillis()
             conversationStore.save(activeConversation)
         }
-        syncTranscript()
         assistantMessageView?.updateText(text)
             ?: run { assistantMessageView = addChatMessage(DemoChatMessageRole.ASSISTANT, text) }
     }
@@ -2264,15 +2262,6 @@ class MainActivity : ComponentActivity() {
         inputField.setSelection(inputField.length())
     }
 
-    private fun syncTranscript() {
-        conversationRuntime.transcript.clear()
-        activeConversation.messages.forEach { message ->
-            if (message.role == "user" || message.role == "assistant") {
-                conversationRuntime.transcript += DemoTranscriptEntry(message.role, message.content)
-            }
-        }
-    }
-
     /** Reload turns appended by the process-owned delayed or urgent dispatcher. */
     private fun refreshActiveConversationFromStore() {
         if (!::activeConversation.isInitialized) return
@@ -2290,7 +2279,6 @@ class MainActivity : ComponentActivity() {
         activeConversation = latest
         conversationRuntime.session = createDemoAgentSession(latest)
         conversationRuntime.rememberSession(latest.id, session)
-        syncTranscript()
         renderConversation()
     }
 
@@ -2302,7 +2290,6 @@ class MainActivity : ComponentActivity() {
             latest.messages == activeConversation.messages
         ) return
         activeConversation = latest
-        syncTranscript()
         renderConversation()
     }
 
@@ -2345,7 +2332,6 @@ class MainActivity : ComponentActivity() {
         if (::inputField.isInitialized) {
             inputField.setText("")
         }
-        syncTranscript()
         renderConversation()
         updateCapabilityBanner()
     }
@@ -2376,7 +2362,6 @@ class MainActivity : ComponentActivity() {
         if (::inputField.isInitialized) {
             inputField.setText("")
         }
-        syncTranscript()
         renderConversation()
     }
 

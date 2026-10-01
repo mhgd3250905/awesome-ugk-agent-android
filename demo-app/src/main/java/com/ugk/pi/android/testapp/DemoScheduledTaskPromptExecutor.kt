@@ -5,8 +5,8 @@ import com.ugk.pi.android.AgentEvent
 import com.ugk.pi.android.AgentRunInput
 import com.ugk.pi.android.AgentRunSource
 import com.ugk.pi.android.AgentRuntime
-import com.ugk.pi.android.AgentTask
-import com.ugk.pi.android.AgentTaskAction
+import com.ugk.pi.schedule.skill.AgentTask
+import com.ugk.pi.schedule.skill.AgentTaskAction
 import com.ugk.pi.android.AgentToolDecorator
 import com.ugk.pi.task.runtime.AgentTaskActionExecutionResult
 import com.ugk.pi.task.runtime.AgentTaskPromptExecutor

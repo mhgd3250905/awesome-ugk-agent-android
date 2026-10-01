@@ -57,10 +57,7 @@ class DemoConversationRuntime private constructor(
     internal var appliedRuntimeConfig: DemoRuntimeConfig? = null
 
     val sessions: MutableMap<String, AgentSession> = mutableMapOf()
-    val transcript: MutableList<DemoTranscriptEntry> = mutableListOf()
 
-    var accessibilityPromptShown: Boolean = false
-    var overlayPromptShown: Boolean = false
     var activeContextWindow: String? = null
     var activeAutoCompaction: Boolean = true
     var activeCompactionThreshold: Double = ContextCompactor.DEFAULT_THRESHOLD
@@ -80,7 +77,6 @@ class DemoConversationRuntime private constructor(
     fun clearActiveConversation() {
         activeConversationId = null
         session = null
-        transcript.clear()
         draft = ""
     }
 
@@ -93,9 +89,3 @@ class DemoConversationRuntime private constructor(
         const val MAX_SESSION_CACHE = 30
     }
 }
-
-/** Compatibility transcript entry retained for the runtime's existing transcript model. */
-data class DemoTranscriptEntry(
-    val role: String,
-    val text: String
-)

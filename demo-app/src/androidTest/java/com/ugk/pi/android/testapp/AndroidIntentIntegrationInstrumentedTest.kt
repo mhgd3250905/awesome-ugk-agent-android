@@ -9,8 +9,8 @@ import com.ugk.pi.android.AgentEvent
 import com.ugk.pi.android.AgentMessage
 import com.ugk.pi.android.AgentRuntime
 import com.ugk.pi.android.AgentSession
-import com.ugk.pi.android.AndroidAppIntentTool
-import com.ugk.pi.android.AndroidIntentAgentPlugin
+import com.ugk.pi.system.skill.AndroidAppIntentTool
+import com.ugk.pi.system.skill.AndroidIntentAgentPlugin
 import com.ugk.pi.android.LLMProvider
 import com.ugk.pi.android.ModelRequest
 import com.ugk.pi.android.ModelResponse

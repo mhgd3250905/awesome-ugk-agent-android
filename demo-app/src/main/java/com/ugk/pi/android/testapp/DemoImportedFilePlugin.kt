@@ -4,8 +4,8 @@ import com.ugk.pi.android.AgentCapabilityPlugin
 import com.ugk.pi.android.AndroidSkill
 import com.ugk.pi.android.AndroidSkillMethod
 import com.ugk.pi.android.AgentTool
-import com.ugk.pi.android.AppFileReadTool
-import com.ugk.pi.android.AppFileStatTool
+import com.ugk.pi.file.skill.AppFileReadTool
+import com.ugk.pi.file.skill.AppFileStatTool
 import java.io.File
 
 /**

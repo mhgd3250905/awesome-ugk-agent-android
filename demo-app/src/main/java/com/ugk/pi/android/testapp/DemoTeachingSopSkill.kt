@@ -3,8 +3,8 @@ package com.ugk.pi.android.testapp
 import android.content.Context
 import com.ugk.pi.android.AndroidSkill
 import com.ugk.pi.android.AndroidSkillPromptBuilder
-import com.ugk.pi.android.SkillManifestParseResult
-import com.ugk.pi.android.SkillManifestParser
+import com.ugk.pi.agent.skill.runtime.SkillManifestParseResult
+import com.ugk.pi.agent.skill.runtime.SkillManifestParser
 import kotlinx.coroutines.CancellationException
 
 /** One bundled skill snapshot shared by every phase of a teaching compilation. */
