@@ -600,7 +600,7 @@ MODULE pi-file-skill-android          tests=13  failures=0 errors=0 skipped=1
 - 背景：§34、§35 均声明设备通道未运行。2026-10-01 经用户同意，在日用 MIUI 真机 `QSG6Q8IFDMDELVGQ` 上补跑 `:demo-app:connectedDebugAndroidTest` 与 `am instrument`，共五轮独立尝试（三次 gradle connected、两次直接 `am instrument`，其中一轮关闭全部系统动画校准）。
 - 结果定性：设备环境阻塞，非本轮代码回归。① 首轮运行期间发生一次对在用应用的卸载重装，应用私有数据被清空（五份教学记录与 API 配置；事故与教训登记于版本台账 2026-10-01 节）；② 用户手动开启 MIUI「显示悬浮窗」后 `Settings.canDrawOverlays()` 守卫通过，证明该开关在 MIUI 上不受 AOSP `appops set SYSTEM_ALERT_WINDOW allow` 影响；③ `DemoDialogTestHostActivity` 45 秒无法达到 idle（事件队列零空闲），关闭 window/transition/animator 三个动画缩放后依旧复现，属设备系统 UI 级重绘，FloatingConversation、NoteStyle、PermissionGuide、DemoDelayedTaskDialog 等依赖该宿主 Activity 的用例系统性超时；④ `PermissionGuideInstrumentedTest.settingsEntry...SurvivesRecreation` 三轮挂起（§33 已登记该用例首跑偶发，本机为常态）。
 - 影响边界：失败用例与本轮合并代码（教学编译器、终端本地 HTTP 运行时）无文件交集，不构成第九/十轮修复的回归或假绿证据；通过类与失败类的完整清单留在 `/tmp/am-instrument-run*.log`（未入库）。
-- 结论与后续：UI 仪器套件的通过性验收只在 AVD 上执行（§33 惯例）；日用手机禁止直跑 connected/instrumented，确需时先 `run-as` tar 备份 `files/` 与 `shared_prefs/` 到 PC，跑完恢复并核对哈希。另登记两条操作教训：TaskStop gradle connected 会触发其清理阶段异步卸载主应用与 test APK（重装须用同钥 APK 并重授权限）；结果目录的孤儿 UTP JVM 进程不终止时，Gradle 因无法哈希 `.lck`/logcat 文件而拒绝执行 connected 任务
+- 结论与后续：UI 仪器套件的通过性验收只在 AVD 上执行（§33 惯例）；日用手机禁止直跑 connected/instrumented，确需时先 `run-as` tar 备份 `files/` 与 `shared_prefs/` 到 PC，跑完恢复并核对哈希。另登记两条操作教训：TaskStop gradle connected 会触发其清理阶段异步卸载主应用与 test APK（重装须用同钥 APK 并重授权限）；结果目录的孤儿 UTP JVM 进程不终止时，Gradle 因无法哈希 `.lck`/logcat 文件而拒绝执行 connected 任务。
 
 ## 37. 第十一轮 P0 审查修复（分支 `fix/p0-review-round11-20261002`，基线 `main@710d567`，2026-10-02）
 
@@ -614,8 +614,8 @@ MODULE pi-file-skill-android          tests=13  failures=0 errors=0 skipped=1
 - 交付态代码提交 `87f9bbd`（第三轮整改；其后只有文字提交 `d8e2f8d` 与本节的口径订正）同一命令独占实跑：**`917 tests / 3 skipped / 0 failures / 0 errors`**，`BUILD SUCCESSFUL in 50s`，194 actionable tasks 全执行，134 份 XML 的 `timestamp` 全部落在 `2026-10-01T21:46:47Z … 21:47:30Z`。日志 `build/review-evidence/delivery-final2-r11.log`，逐模块差值 `delivery-final2-r11-aggregate.txt`。中途一次同口径独占运行（代码态 `4a3da1c`）得 `912/3/0`，日志 `delivery-final-r11.log`，保留为过程证据。
 - 净增 59 项：Core +25（`StreamedResponseTransportContractTest` 25 项）、`pi-attention-skill-android` 0→11、`pi-agent-skill-runtime-android` +6、`pi-schedule-skill-android` +6、`demo-app` +11；其余五个模块计数不变。`skipped=3` 来源不变（File Skill 1、Agent Skill Runtime 2 的 Windows symlink 既有用例）。
 - **`:pi-attention-skill-android` 的 `NO-SOURCE` 缺口本轮关闭**（第九轮曾把它明示为「永远不可能变红的把关」）。同时订正两处「跑全量」清单：`AGENTS.md` 的模块数说明，以及 `HANDOVER.md` 第 5 节命令——该命令此前漏列本模块，照它执行不会跑到新用例。
-- 变异取证合并写在 `build/review-evidence/mutation-matrix-final3.txt`（28 行、全部 OK，逐行只回退本轮写下去的那一处语义，并逐行核对 XML 时间戳不与上一行相同）；基线复现另有 `r1-f1-baseline-red.log`（F1 族 6 红/8 对照绿）、`run-f2-baseline-repro.sh`（attention 5 红/3 对照绿）、`r5-baseline-skillred2.log`、`r5-baseline-schedule-red.log`、`mutation-matrix-b1.txt`。
-- 过程失败登记：① 两次把未提交的改动留在跑变异脚本的工作树里，被脚本收尾的 `git checkout --` 抹掉（一次丢修复、一次丢测试），此后规则固化为「先 commit 再派线程/跑变异」；② 一次 `z50` 行读到上一行的陈旧 XML（demo 主源码编译失败时测试任务不产出新 XML），靠逐行比对 `timestamp` 发现，脚本已把该检查写成硬条件；③ 一次 `true && <cond>` 被当成变异，它语义等价于不改，红集合为空才暴露——变异必须换掉那一行的语义；④ 探针脚本把临时文件写进仓库根目录（25 个 `.ts`），已删除并在收尾核对 `git status --porcelain` 为 0。
+- 变异取证合并写在 `build/review-evidence/mutation-matrix-final3.txt`（28 行、全部 OK，逐行只回退本轮写下去的那一处语义，并逐行核对 XML 时间戳不与上一行相同）；基线复现另有 `r1-f1-baseline-red.log`（该类 6 项中 3 红、3 条对照绿）、`r1-f2-baseline-red.log`（attention 8 项中 5 红、3 条对照绿，取数脚本 `run-f2-baseline-repro.sh`）、`r5-baseline-skillred2.log` 与 `r5-baseline-schedule-red.log`（各 3 项中 1 红——这两条取自「一个用例覆盖多个落点」的拆分前形态）、`mutation-matrix-b1.txt`。
+- 过程失败登记：① 两次把未提交的改动留在跑变异脚本的工作树里，被脚本收尾的 `git checkout --` 抹掉（一次丢修复、一次丢测试），此后规则固化为「先 commit 再派线程/跑变异」；② 一次 `z50` 行读到上一行的陈旧 XML（demo 主源码编译失败时测试任务不产出新 XML），靠逐行比对 `timestamp` 发现，脚本已把该检查写成硬条件；③ 一次 `true && <cond>` 被当成变异，它语义等价于不改，红集合为空才暴露——变异必须换掉那一行的语义；④ 变异取证脚本的判决段自己会把 `{行号}.ts` 时间戳标记写进当前目录（`run-mutations-final3.sh` 里 `open(f'{mid}.ts', 'w')`，运行时 cwd 就是仓库根），于是一次运行就把时间戳标记留在仓库根（本轮最后一次全绿矩阵跑完后实测 `git status --porcelain` 列出 27 个未跟踪 `.ts`）；已删除并核对 `git status --porcelain` 为 0，`run-mutations-round5.sh` 起不再写该标记。
 
 ### 实证缺陷与修复
 
@@ -627,10 +627,13 @@ MODULE pi-file-skill-android          tests=13  failures=0 errors=0 skipped=1
 5. **F5（P2）文档事实源里有真 NUL 字节**。§35 在记录「带 U+0000 的 URL 不答话」时把那个字节直接写进了正文：Git 因此把该文件判为非文本（`git ls-files --eol` → `i/-text`），**ripgrep 对 §35/§36 的检索返回零命中**（修前实测 `No matches found`，修后命中 2 行），GNU grep 只回 `Binary file … matches` 而不给正文；`git grep` 不受影响（字节在第 84578 位，超出其 8 KB 采样窗）。本仓与审查纪律都要求「文档里声称的把关者必须 grep 核实」，而这份恰是 grep 不到的那一份。已改为字面转义写法。
 6. **契约与代码不一致的两处（P2，同族第 6/7 轮反复出现）**：两个 attention 工具声明 `additionalProperties: false` 却在**顶层**完全不设防（嵌套 items 反而逐个筛键，同仓 `demo_delay_propose` 也答 `Unknown timer proposal field.`）——现两个工具都拒陌生顶层键，且「允许的键集」由 schema 自己核对；`agent_task_create/agent_task_update` 的 schema **没有任何 required 列表**，代码却拒缺失的 title/schedule/action/taskId（同参数名的 `agent_task_cancel` 反而声明了），现补齐并双向断言「schema 声明的必填 == 工具真正拒绝缺失的那些」。
 
-### 独立复核（本轮实跑 2 轮 × 2 路只读；立案一律在当前字节复跑后才处置）
+### 独立复核（本轮实跑 4 轮只读；第 1 轮两路并行，其后每轮专审上一轮写下去的整改；立案一律在当前字节复跑后才处置）
 
 - 第 1 轮（两路并行，一路审修复面、一路审取证面）在整改里抓出 F4 的三个自引入缺陷、F2 的 `error.message` 对象形状、假件死设置、永真式断言、以及「折叠只覆盖了臂的一半」。
-- 第 2 轮专审第 1 轮的整改，抓出 F3 在另外四个模块的 7 个同族落点（`overwrite`、`stringList`、`schedule/action`、`offset/includeImages`、`repeating`）、attention 顶层 `additionalProperties` 装饰化、`required` 列表缺失、以及「一个测试里跑 for 循环 → 第一处红遮住后面所有行」这一取证形态问题（已拆成每个落点一条用例）。
+- 第 2 轮专审第 1 轮的整改，抓出 F3 在另外四个模块的 7 个同族落点（`overwrite`、`stringList`、`schedule/action`、`offset/includeImages`、`repeating`）、attention 顶层 `additionalProperties` 装饰化、`required` 列表缺失、以及「一个测试里跑 for 循环 → 第一处红遮住后面所有行」这一取证形态问题。
+- 第 3 轮专审第 2 轮的整改（提交 `87f9bbd` 承接），抓出四条由整改自己写进去的问题：① 陌生键守卫按「键是否出现」判定，把 F3 在「非交互宿主 + `actions: null`」这条路径上重新破坏；② 「允许的键集」是手抄清单且已经漂移——通知工具拿紧急工具的键集校验，`accent` 照旧被接受；③ 首行嗅探未 `trimStart`，而 provider 侧读取会 `trim`，制表符开头的流被误判成文档；④ `error.message` 为空串时报出 `Anthropic API error: `（尾随空原因）。同轮把「for 循环遮蔽后续落点」这条形态问题落到 attention / skill / demo 三个文件。
+- 第 4 轮专审第 3 轮的整改与本节的文字口径，抓出：① 两条**恒真断言**——`undeclaredArgumentNamesAreVisibleToBothTools` 拿生产 schema 派生的键集去比生产 schema 自己，生产是自己的 oracle，永远不可能失败（真正承载权重的是同文件里的字面量钉），已改为三张形状各自的字面量期望，并删掉只为喂这条恒真断言而存在的 `notificationSchema()`；② 本节把 `r1-f1-baseline-red.log` 的数字写错了（写作「6 红/8 对照绿」，该日志实为 6 项中 3 红、3 绿），并把 attention 的基线复现指向 `run-f2-baseline-repro.sh`（脚本本身不含数字，日志是 `r1-f2-baseline-red.log`）；③「每个落点都有主干红用例」在 skill/schedule/demo 上名不副实——现存日志取自拆分前的合并用例（各 3 项中 1 红），拆分后未按落点重取；④ 本节声称 §34–§36 按历史快照保留，但 §36 末行的句号在编辑时被挪到了文件末尾成为孤行（`。`），已把 §36 复原、孤行删除，现 §34–§36 与基线的唯一差异是 F5 那一处 NUL 字节改写（本轮唯一有意就地订正的历史行，理由见 F5）。
+- 第 4 轮被否掉的立案（附处置依据）：① 「可选键以 null 出现时不再被陌生键守卫拒绝」被指为「一个没人实现的参数看起来被 honoring」——这条正是 F3 的规则本身（网关把每个未填的可选键都发成 null），null 值键不构成声明，双向用例 `undeclaredArgumentNamesAreVisibleToBothTools` 已覆盖，判为按设计；② `textOrNull` 把空串读成缺失，使 provider 的原始负载兜底分支更容易被走到，而 `malformedSseEvent` 有意截到 200 字符——判为无后果：响应体长度已由传输层 `maxResponseBytes`/文档上限约束，且 6 处落点中只有 `fullBodyApiErrorMessageOrNull` 对空串敏感，其 null 分支仍会经 `parseResponse` 的 body 兜底抛出；③ `event:`/`id:`/`retry:` 前缀嗅探为事件流但永不置位 `sawUnderstoodEvent`，此类响应以「响亮失败」收场而非回落缓冲——本轮修复前该路径同样是失败，方向一致，登记不修。
 - 被否掉的立案（附复测命令）：① `LocalHttpServerTools.runToolCall` 的 `catch (Exception)` 吞取消——`block` 非挂起、`controller.start()` 阻塞、`withContext` 的取消异常发生在 `try` 之外，宿主无法从这条路径抛 `CancellationException`，判为已核查不可达；② `LocalHttpServerStatusTool.description` 的「不 start/stop/signal」——`status()` 只 forget 确认已死的记录，与同文件 KDoc「never signals, stops, or rewrites a live service」一致，判为文字正确；③ §34/§35 里「`pi-attention-skill-android` 仍 NO-SOURCE」按「带轮次时间戳的历史快照」保留，不改写历史，只在本节记录关闭时点。复测命令均在 `build/review-evidence/` 脚本内。
 
 ### 已核查不修 / 遗留风险
@@ -648,4 +651,3 @@ MODULE pi-file-skill-android          tests=13  failures=0 errors=0 skipped=1
 - **未提交的改动绝不能和 `git checkout` 类脚本同处一个工作树**：本轮两次被自己的还原逻辑抹掉成果。动作：任何线程/脚本派发前先 commit 冻结。
 - **文档里的把关者要 grep 核实，而 grep 本身要验能被检索**：本轮第一次 `grep -rn docs/` 就因一个 NUL 字节漏掉了整份事实源。动作：接手文档密集的仓库先跑一次「tracked 文本文件含控制字节」扫描（`git ls-files --eol` 里的 `-text` 即线索）。
 - **行尾/属性卫生**：`git ls-files --eol` 显示 3 个 Kotlin 文件各含 1 行 CRLF（`DemoWorkflowActionGateway.kt`、`DemoWorkflowRunner.kt`、`DemoWorkflowRunnerTest.kt`），且无 `.gitattributes`。本轮未改（无可证后果，属同一陷阱的潜伏形态），建议下一轮以「加 `.gitattributes` 并把 `*.kt text eol=lf` 与 `*.bat text eol=crlf` 钉住」一次性收口。
-。
