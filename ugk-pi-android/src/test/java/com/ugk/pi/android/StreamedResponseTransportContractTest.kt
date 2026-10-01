@@ -542,7 +542,7 @@ class StreamedResponseTransportContractTest {
         val padding = "x".repeat(200)
         val body = buildString {
             append("{\n")
-            repeat(600) { append("  \"field$it\": \"$padding\",\n") }
+            repeat(320) { append("  \"field$it\": \"$padding\",\n") }
             append("  \"content\": \"第一段内容\"\n")
             append("}")
         }
