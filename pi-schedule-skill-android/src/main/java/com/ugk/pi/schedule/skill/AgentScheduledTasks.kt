@@ -11,6 +11,7 @@ import kotlinx.coroutines.CancellationException
 import kotlinx.serialization.SerialName
 import kotlinx.serialization.Serializable
 import kotlinx.serialization.json.JsonElement
+import kotlinx.serialization.json.JsonNull
 import kotlinx.serialization.json.JsonObject
 import kotlinx.serialization.json.JsonPrimitive
 import kotlinx.serialization.json.booleanOrNull
@@ -408,17 +409,19 @@ class AgentTaskUpdateTool(
         }
 
         val now = clock.nowMillis()
-        val schedule = if (call.input["schedule"] != null) {
-            when (val parsed = parseSchedule(call.input["schedule"], now)) {
+        val declaredSchedule = call.input.optionalElement("schedule")
+        val schedule = if (declaredSchedule != null) {
+            when (val parsed = parseSchedule(declaredSchedule, now)) {
                 is ScheduleParseResult.Error -> return errorResult(call, name, parsed.code, parsed.message)
                 is ScheduleParseResult.Success -> parsed.schedule
             }
         } else {
             existing.schedule
         }
-        val action = if (call.input["action"] != null) {
+        val declaredAction = call.input.optionalElement("action")
+        val action = if (declaredAction != null) {
             when (val parsed = parseAction(
-                call.input["action"],
+                declaredAction,
                 supportsBackgroundPromptExecution
             )) {
                 is ActionParseResult.Error -> return errorResult(call, name, parsed.code, parsed.message)
@@ -693,6 +696,16 @@ private fun taskResult(call: ToolCall, toolName: String, task: AgentTask, conten
         }
     )
 }
+
+/**
+ * An optional argument a gateway serialized as JSON null carries the same intent
+ * as one the model left out. `JsonNull` is a value, so a Kotlin null test on
+ * `this[key]` reads it as "the model sent something here" and refuses it - which
+ * for `agent_task_update` meant a title-only edit being rejected over fields the
+ * model never filled in.
+ */
+private fun JsonObject.optionalElement(key: String): JsonElement? =
+    this[key]?.takeUnless { it is JsonNull }
 
 private fun errorResult(call: ToolCall, toolName: String, code: String, message: String): ToolResult {
     return ToolResult(
