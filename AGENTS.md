@@ -72,11 +72,15 @@ API 内容不得复制进源码、文档或提交；Release 默认不嵌入 API 
 
 # 发布到本地 Maven（供外部项目消费）
 .\gradlew.bat :ugk-pi-android:publishReleasePublicationToMavenLocal --console=plain
+# 可选的提醒 AAR 同样有独立 publication（坐标见下）
+.\gradlew.bat :pi-attention-skill-android:publishReleasePublicationToMavenLocal --console=plain
 ```
 
 外部项目通过 mavenLocal 消费：
 ```kotlin
 implementation("com.ugk.pi:ugk-pi-android:0.1.0")
+// 可选：即时通知与整屏重要提醒（独立 AAR，版本独立演进）
+implementation("com.ugk.pi:pi-attention-skill-android:0.3.0")
 ```
 
 ## 技术栈
