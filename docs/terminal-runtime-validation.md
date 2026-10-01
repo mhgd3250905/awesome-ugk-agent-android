@@ -611,10 +611,10 @@ MODULE pi-file-skill-android          tests=13  failures=0 errors=0 skipped=1
 ### 门禁口径（只认日志内 `EXIT=` 行与 JUnit XML 汇总 + 时间戳窗口）
 
 - 基线 `main@710d567` 独占 `--rerun-tasks --no-build-cache`：**`858 tests / 3 skipped / 0 failures / 0 errors`**，`BUILD SUCCESSFUL in 1m 27s`，191 actionable tasks 全执行，全部 XML `timestamp` 落在 `2026-10-01T19:04:59Z … 19:05:52Z`。日志 `build/review-evidence/baseline-710d567.log`，汇总 `baseline-710d567-summary.txt`。
-- 交付态 `4a3da1c`（其后仅本文档与 `AGENTS.md`/`HANDOVER.md` 的文字提交）同一命令独占实跑：**`912 tests / 3 skipped / 0 failures / 0 errors`**，`BUILD SUCCESSFUL in 58s`，194 actionable tasks 全执行，134 份 XML 的 `timestamp` 全部落在 `2026-10-01T21:12:40Z … 21:13:33Z`。日志 `build/review-evidence/delivery-final-r11.log`，逐模块差值 `delivery-final-r11-aggregate.txt`。
-- 净增 54 项：Core +23（`StreamedResponseTransportContractTest`）、`pi-attention-skill-android` 0→11、`pi-agent-skill-runtime-android` +6、`pi-schedule-skill-android` +5、`demo-app` +9；其余五个模块计数不变。`skipped=3` 来源不变（File Skill 1、Agent Skill Runtime 2 的 Windows symlink 既有用例）。
+- 交付态代码提交 `87f9bbd`（第三轮整改；其后只有文字提交 `d8e2f8d` 与本节的口径订正）同一命令独占实跑：**`917 tests / 3 skipped / 0 failures / 0 errors`**，`BUILD SUCCESSFUL in 50s`，194 actionable tasks 全执行，134 份 XML 的 `timestamp` 全部落在 `2026-10-01T21:46:47Z … 21:47:30Z`。日志 `build/review-evidence/delivery-final2-r11.log`，逐模块差值 `delivery-final2-r11-aggregate.txt`。中途一次同口径独占运行（代码态 `4a3da1c`）得 `912/3/0`，日志 `delivery-final-r11.log`，保留为过程证据。
+- 净增 59 项：Core +25（`StreamedResponseTransportContractTest` 25 项）、`pi-attention-skill-android` 0→11、`pi-agent-skill-runtime-android` +6、`pi-schedule-skill-android` +6、`demo-app` +11；其余五个模块计数不变。`skipped=3` 来源不变（File Skill 1、Agent Skill Runtime 2 的 Windows symlink 既有用例）。
 - **`:pi-attention-skill-android` 的 `NO-SOURCE` 缺口本轮关闭**（第九轮曾把它明示为「永远不可能变红的把关」）。同时订正两处「跑全量」清单：`AGENTS.md` 的模块数说明，以及 `HANDOVER.md` 第 5 节命令——该命令此前漏列本模块，照它执行不会跑到新用例。
-- 变异取证合并写在 `build/review-evidence/mutation-matrix-final.txt`（23 行，逐行只回退本轮写下去的那一处语义，红集合与预期完全一致）；基线复现另有 `r1-f1-baseline-red.log`（F1 族 6 红/8 对照绿）、`run-f2-baseline-repro.sh`（attention 5 红/3 对照绿）、`r5-baseline-skillred2.log`、`r5-baseline-schedule-red.log`、`mutation-matrix-b1.txt`。
+- 变异取证合并写在 `build/review-evidence/mutation-matrix-final3.txt`（28 行、全部 OK，逐行只回退本轮写下去的那一处语义，并逐行核对 XML 时间戳不与上一行相同）；基线复现另有 `r1-f1-baseline-red.log`（F1 族 6 红/8 对照绿）、`run-f2-baseline-repro.sh`（attention 5 红/3 对照绿）、`r5-baseline-skillred2.log`、`r5-baseline-schedule-red.log`、`mutation-matrix-b1.txt`。
 - 过程失败登记：① 两次把未提交的改动留在跑变异脚本的工作树里，被脚本收尾的 `git checkout --` 抹掉（一次丢修复、一次丢测试），此后规则固化为「先 commit 再派线程/跑变异」；② 一次 `z50` 行读到上一行的陈旧 XML（demo 主源码编译失败时测试任务不产出新 XML），靠逐行比对 `timestamp` 发现，脚本已把该检查写成硬条件；③ 一次 `true && <cond>` 被当成变异，它语义等价于不改，红集合为空才暴露——变异必须换掉那一行的语义；④ 探针脚本把临时文件写进仓库根目录（25 个 `.ts`），已删除并在收尾核对 `git status --porcelain` 为 0。
 
 ### 实证缺陷与修复
