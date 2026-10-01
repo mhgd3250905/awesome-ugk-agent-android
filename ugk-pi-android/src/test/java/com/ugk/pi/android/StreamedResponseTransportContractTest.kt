@@ -276,6 +276,69 @@ class StreamedResponseTransportContractTest {
         }
     }
 
+    /**
+     * A connection that closes before `message_stop` is a truncated answer, not
+     * an unreadable shape: what it did deliver stays the answer. This is the
+     * legitimate side of the framing failure guard, and the only case that tells
+     * "no SSE framing at all" apart from "framing seen, stream cut short".
+     */
+    @Test
+    fun anthropicKeepsTheAccumulatedAnswerWhenTheStreamEndsBeforeMessageStop() {
+        val truncated = anthropicSseBody.substringBefore("event: message_stop")
+        ScriptedEndpoint(truncated, contentType = "text/event-stream").use { endpoint ->
+            val chunks = runBlocking {
+                AnthropicMessagesProvider(
+                    apiKey = "test-key",
+                    model = "claude-3-7-sonnet",
+                    baseUrl = endpoint.baseUrl,
+                    transport = JavaNetHttpTransport(connectTimeoutMillis = 5_000, readTimeoutMillis = 5_000)
+                ).generateStream(request()).toList()
+            }
+            assertEquals("第一段内容", chunks.completedOrNull()?.content)
+        }
+    }
+
+    /**
+     * Pins the shape each mode has to produce, not just the parsed answer.
+     *
+     * Selecting the document mode for everything would also make the parsed
+     * content assertions above pass, because [asSseLines] re-splits a buffered
+     * body into lines: only the emission shape distinguishes a transport that
+     * still streams an event response from one that has silently started
+     * buffering it.
+     */
+    @Test
+    fun shippedTransportFramesAnEventStreamByLineAndABodyWithoutOneByEmission() {
+        ScriptedEndpoint(anthropicSseBody, contentType = "text/event-stream").use { endpoint ->
+            val emissions = runBlocking {
+                JavaNetHttpTransport(connectTimeoutMillis = 5_000, readTimeoutMillis = 5_000)
+                    .postStream(HttpRequest(endpoint.url, emptyMap(), "{}"))
+                    .toList()
+            }
+            assertTrue(
+                "an event stream must arrive as several emissions, got ${emissions.size}",
+                emissions.size > 1
+            )
+            assertTrue(
+                "no emission may carry a line of its own past a line terminator",
+                emissions.none { it.contains('\n') || it.contains('\r') }
+            )
+        }
+        ScriptedEndpoint(anthropicPrettyJson, contentType = "application/json").use { endpoint ->
+            val emissions = runBlocking {
+                JavaNetHttpTransport(connectTimeoutMillis = 5_000, readTimeoutMillis = 5_000)
+                    .postStream(HttpRequest(endpoint.url, emptyMap(), "{}"))
+                    .toList()
+            }
+            assertEquals(
+                "a non-event response must be handed over as one document",
+                1,
+                emissions.size
+            )
+            assertTrue(emissions.single().contains('\n'))
+        }
+    }
+
     @Test
     fun onlyAnEventStreamMediaTypeSelectsLineFraming() {
         val cases = listOf(
