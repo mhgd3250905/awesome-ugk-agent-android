@@ -250,3 +250,33 @@
 - 决策：每次 start 由 Manager 用 `SecureRandom` 生成 16 字节 token（无填充 URL-safe Base64，22 字符，自研编码器因 `java.util.Base64` 需 API 26 且 `android.util.Base64` 无法在 JVM 单测调用），并把固定 handler 脚本（`token_http_handler.py`，仅标准库，每次 start 覆写）写入 managedServiceDirectory 后经 session launcher 启动。脚本基于 `SimpleHTTPRequestHandler`：请求路径第一段不等于 token 一律 404（不 403，避免探测确认），等于则剥掉 token 段继续服务（目录列表与文件下载都在 token 前缀下工作）；对映射出的本地路径做 `os.path.realpath` 校验，不在服务根 realpath 之下则 404（阻断 symlink 逃逸）；只绑定 `127.0.0.1`。持久化 metadata 新增 token 字段，无 token 的旧记录按 legacy 处理（URL 维持旧形态 `http://127.0.0.1:port/`，reload 不报错）；status/stop 返回的 URL 一律来自 `urlFor(port, token)`，新形态为 `http://127.0.0.1:<port>/<token>/`。复用 RUNNING 记录但请求 directory 不同时抛 `PORT_IN_USE`（"already serving a different directory"），不再静默成功。SDK runtime `AGENTS.md` 的 URL 契约段同步更新。
 - 原因：可达性是功能需求（浏览器必须能打开），可枚举性不是；把"任意可达"收敛为"持 token 可达"在保留浏览器可用性的同时消除同设备其他 App 的未授权读取面。404 而非 403 让无 token 探测无法与不存在路径区分。
 - 影响：URL 形态变化对模型/宿主可见（工具结果、AGENTS.md 契约与 demo 仪器测试断言同步更新）；旧持久化记录按 legacy 兼容，升级前已运行的旧服务不受影响，新 start 一律带 token；token 生成、URL 拼接、handler 脚本结构（含可选主机 python `py_compile` 冒烟，无 python 自动跳过）与复用错误路径由 `ugk-terminal-runtime-android` 新增 JVM 测试（`LocalHttpServerManagerTest`）锁定。
+
+## D-029：本地 HTTP 服务遏制补全：硬链接、目录 index 与判定链
+
+- 日期：2026-10-01
+- 背景：D-028 用 `os.path.realpath()` 把符号链接挡在服务根之外，但硬链接不是符号链接：两个名字都是真实路径，realpath 把它解析成服务树内自己的名字，遏制判定恒为真。第十轮在本机 CPython 3.14.2 上直接跑随包 handler 脚本实测：`ln <secret> site/index-copy.txt` 后经 token URL 返回 200 且响应体就是被链接的文件内容，即同 UID 任意文件（`shared_prefs` 里的 API key、agent-memory 库）可被挂进本地 HTTP 服务目录。第一轮整改又暴露两处同形缺口：`send_head()` 在 `translate_path()` 之后自行把目录请求解析成 `<dir>/index.html`，只判 translate_path 返回值的规则永远看不到真正被打开的文件；而 `lstat()` 对符号链接返回 `S_ISLNK`，`ln secret real && ln -s real alias` 这条链上从未检查过链接数。另外，这条安全边界此前唯一的"把关"是对脚本源码做 `script.contains(...)` 文本断言：把遏制条件改成 `if False and ...` 后该类 16 项测试全部保持绿色，属于假绿门禁。
+- 决策：handler 的遏制改为判"这个请求最终会读到哪个 inode"：先按 realpath 确认解析结果仍在服务根内（保留 D-028 前缀比较带 `os.sep` 的写法），再对该解析结果做 `os.stat()`（跟随链接链，而非 `lstat` 停在第一个名字），若是常规文件且 `st_nlink > 1` 一律 404；目录请求额外按 handler 类自带的 `index_pages`（缺失时回退常量）逐个预判候选 index 文件，名字不另抄一份。拒绝理由以固定常量文案回显（仅 token 持有者可读到，无路径外泄），无 token 时仍是不带细节的 404。测试侧新增 `LocalHttpServerHandlerContainmentTest`：把 `TOKEN_HTTP_HANDLER_SCRIPT` 原样字节写盘、用宿主 CPython 起真服务、用真 HTTP 请求问它答什么，拒绝一律断言显式 `404`（"非 200"会被连接中断、超时或文件不存在满足）；D-028 遗留的文本断言降级为"结构冒烟"并在注释里写明它能被语义破坏骗过。同文件里"宿主没有 python 就 return"的 py_compile 冒烟改为 JUnit skip，不再把从未执行的检查记成通过。
+- 原因：约束必须落在危害真正发生的那一层——危害是"某个文件被 open() 后发出去"，所以判定对象必须是那个 inode，而不是某个 URL 映射出的名字。宿主可跑的 interpreter 驱动比任何正则或文本断言都更接近设备真实行为，且脚本本身是纯标准库、跨平台。
+- 影响：token 持有者拿到的仍是 404（新增两种固定 reason 文案），合法单链接文件、目录列表、`curl`/浏览器路径均不受影响；工作区内被刻意做成硬链接的文件不再可服务，这是有意收紧。设备侧 CPython 3.14.6 行为未实测（见验证文档"未证实项"），宿主证据只覆盖同一份脚本字节在 3.14.2 上的判定。
+
+## D-030：本地 HTTP 服务生命周期口径统一与 spawn 时关闭子进程 stdin
+
+- 日期：2026-10-01
+- 背景：三处状态判定用了两把尺子：`status()` 问 `server.process == null`，`stop()`/`stopAll()` 问 `server.process?.let(::isAlive) != true`。`status()` 在只"没探到端口"（100 ms connect 超时）时就删除记录及其 `.properties` 文件，而该文件是已签发 token 的唯一存留处——调用者从此既无法描述也无法停止这个可能在跑的服务，端口还永久占用；`stop()` 对同一条记录返回 `state = "stopped"`，却一个信号都没发。工具对模型的契约同时写着本调用"read-only / 不改变服务"。另外 `NativeExecutableProcess` 与 `LocalHttpServerManager.start()` 各自 `ProcessBuilder.start()` 后从不关闭子进程 stdin：父进程仍持有的管道永远不会报 EOF，任何读 stdin 的命令（`read`、`cat`、`python -`、`openssl passwd -stdin`）都会耗尽整段调用超时并返回空输出，与 `terminal_bash_execute` 自称"非交互脚本"的契约直接矛盾。
+- 决策：新增 `queryDisposition` / `stopDisposition` 两张纯判定表，输入统一为"本进程启动的那个进程是否还活着"（句柄存在与否不算归属证据），`status()`、`stop()`、`stopAll()`、`start()` 的复用与容量清理全部读同一张表。查询不再删除无法归属的记录，而是保留并上报新状态 `unattributable`；`stop()` 对同一条记录返回 `unattributable` 而不是 `stopped`，只有真正终止过或进程组已确证消失才报 `stopped`。发信号的前置条件保持 D-028 时代的保守立场：归属存疑时宁可不杀（接受泄漏一个可能属于我们自己的孤儿进程组，并在注释与工具契约里写明这是已实测的取舍），并把 `stopAll()` 返回值继续定义为"真正终止的数量"。`start()` 的容量清理改为释放"任何非 REPORT 行"，否则 status() 不再遗忘了旧记录之后会出现 `MAX_MANAGED_SERVERS` 永久占满。两处 spawn 收敛到 `NativeExecutableProcess.spawnWithStdinClosed()`，启动后立即关闭 `process.outputStream`，关闭失败被吸收而不是升级为启动失败；新增 `TerminalSpawnSiteTest` 扫描入库源码，任何绕过该 helper 的 spawn（含 `Runtime.exec`）判红。
+- 原因：假绿的状态报告比缺状态更坏——模型据此宣称服务已停；而"同一条规则三把尺子"正是第十轮复核里被逐条抓出来的形态。把判定收敛成表是能在宿主 JVM 上钉死的唯一办法（周边路径需要 Android Context 与真进程）。
+- 影响：`local_http_server_status`/`stop` 的返回状态集合多一个 `unattributable`，SDK runtime `AGENTS.md`、skill `resultSemantics`、`LocalHttpServerTools` 注释与架构/排障文档同步改口径，"read-only/只读"措辞全部撤下；demo 仪器用例断言的是"宽限期内真停"的路径，仍为 `stopped`，不受影响。`spawnWithStdinClosed` 的 `starter` 参数只是测试缝隙，生产默认值仍是 `ProcessBuilder.start()`；该测试证明规则在 helper 内成立，调用点是否走 helper 由源码扫描那条用例把关。
+
+## D-029 / D-030 追加订正（第十轮第二批复核后，2026-10-01）
+
+第二遍只读复核专审第一遍整改后落地的那些句子，发现两节的「决策 / 影响」各有一句比代码能做的说得多，另有一处安全规则本身仍不完整。按本仓「已提交记录不改写、就地登记订正」的惯例在此追加，不回改上文。
+
+1. **D-029 的遏制还漏两类，已补**：
+   - `%00` 这类路径：`realpath()`/`stat()` 抛的是 `ValueError` 不是 `OSError`，它会绕过 `except ServedRootEscape` 直接把连接关掉、**一个响应都不发**。变异实测原文即证据：`expected:<[404]> but was:<[]>`（空状态）。现在这类路径显式回 404。同一原因，本模块所有「必须被拒绝」的断言一律改成要求 `404`，不再接受「非 200」——连接中断、超时、文件不存在都能冒充拒绝。
+   - `st_nlink > 1` 是**无条件**拒绝，不看第二个名字在服务树内还是树外；`assets/ugk/AGENTS.md` 原先写成「与树外的名字共享 inode」，比代码窄，已按代码实况改写，并明确不要往服务目录里 link。
+2. **D-030 的两处失实**：
+   - `stopDisposition` 的注释声称「只在还能看见本进程启动的进程、或端口说服务在跑时才发信号」，但代码里 `if (!pastStaleGrace) return SIGNAL` 排在端口探测之前——未过期的宽限期本身也被当作归属证据。行为保持（这是 D-028 起的既有保守立场，且 `start()` 失败会立刻自我回滚，未过期记录不会是无主组），**注释按代码实况重写**，把三条归属证据一条条列出来。`BashCommandTool` 的 stop 契约那句「绝不杀非托管进程」同时改成「只杀本 Runtime 记录、且能归属于该服务的进程组」。
+   - `stopAll()` 的注释声称返回计数是「宿主据此判断自己的服务是否全部停净」——grep 无任何消费者：`stopAllLocalHttpServers()` 只透传，`close()` 直接丢弃。已改成如实描述（计数只包含真正终止掉的组，不含只删记录的）。
+3. **D-030 决策里"四个落点读同一张表"当时并未做到**：`start()` 被接成了「先 `discardRecord()`（连带删 `.properties`，即已签发 token 的唯一存留处）→ 再 `isPortListening` 判 `PORT_IN_USE` 并抛出」。一次抖动的 100 ms 探针就会让一个仍在服务的应用失去唯一记录，`status()`/`stop()` 从此 `not_found`，端口在本进程生命周期内不可再用——正是 F4 要消灭的状态，被本轮自己的修法复刻。现已改为「先确认端口不再应答、再删记录」，并把拒绝文案改成能读出成因的一支。
+4. **归属证据换了来源**：`NativeProcessGroupControl.processGroupExists` 有意把 `EPERM` 当作「存在」，因此进程组被任何其他所有者复用后，记录仍然"看起来活着"；而 `status()` 的正分支此前只看一次裸 connect。App 重启 + 端口被别人占用时，`status()` 会报 `running` 并附上一个没有人在服务的 token URL，`start()` 还会直接复用该端口——类里早就有为归因写的 `isTokenServed`，这条路却没用。现在：没有进程内句柄的记录一律用 `isTokenServed(port, token)` 判定「这个端口是否以本记录的 token 应答」，有句柄的仍用便宜的 connect（句柄即归属证据）。
+5. **登记一条测试面局限（不假装已把关）**：第 3、4 两条都改在需要 Android Context 与真进程的路径上，宿主 JVM 无法判红；本轮的变异探针 `m4c-stop-wrapper-wiring` 为绿，正说明「纯判定表用例看不见调用点装配」。合并前必须在仪器面复跑：`:demo-app:connectedDebugAndroidTest --tests "*LocalHttpServerManagerInstrumentedTest*"`，并扩展一条「外来监听者不得被报成 running」的断言。

@@ -74,10 +74,19 @@ prebuilt Runtime-managed Tool when the task needs a persistent service.
   the SDK's process-session manager, binds only to `127.0.0.1`, records its
   process group and log, and requires the normal user confirmation flow.
 - Use `local_http_server_status` after starting and before claiming that the
-  site is available. This is a read-only check and does not require user
-  confirmation.
+  site is available. It does not start, stop, or signal any service and does
+  not require user confirmation; it only forgets records whose process group is
+  confirmed gone, which frees their port. A state of `unattributable` means the
+  Runtime kept the record but can no longer prove the process group behind it is
+  the server it started: the site may still be up, and this Runtime cannot stop
+  it.
 - Use `local_http_server_stop` when the user asks to stop the service. It only
   stops a service owned and recorded by this Runtime and requires confirmation.
+- The served directory is narrowed to what that directory itself publishes. A
+  link out of it answers 404, and so does any regular file whose inode carries
+  more than one link name anywhere - the second name does not have to be outside
+  the served tree. Do not treat the served directory as a way to expose another
+  app-private path, and do not link one in.
 - The returned URL has the form `http://127.0.0.1:<port>/<token>/`, where the
   token path segment is random and created by each start. Use the complete URL
   exactly as returned by the tool, without editing or shortening it. The URL is

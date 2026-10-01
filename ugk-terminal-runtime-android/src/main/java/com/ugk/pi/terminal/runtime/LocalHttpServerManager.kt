@@ -70,8 +70,11 @@ class LocalHttpServerException(
  * loopback port space, so plain `python -m http.server` would let every
  * other App read the whole served tree. The handler rejects every path that
  * does not carry the token (404, not 403, so the tree cannot be probed) and
- * refuses local paths whose realpath escapes the served root, which blocks
- * symlink escapes planted inside the workspace.
+ * then applies two containment rules to what a token holder may read: a
+ * local path whose realpath escapes the served root is refused, which blocks
+ * symlink escapes planted inside the workspace, and a regular file carrying
+ * more than one link is refused, because a hard link resolves to its own
+ * served-tree name and would otherwise publish any same-UID file.
  */
 class LocalHttpServerManager(
     private val runtime: BashRuntime
@@ -92,13 +95,32 @@ class LocalHttpServerManager(
 
             records[request.port]?.let { existing ->
                 val existingStatus = statusFor(existing)
-                if (existingStatus.state in RUNNING_STATES && !isStaleNonListening(existing)) {
+                // Reuse only what this call can still attribute to the server
+                // it is describing; an unattributable row is rebuilt, not reused.
+                val attributable = queryDispositionFor(existing) == QueryDisposition.REPORT
+                if (existingStatus.state in RUNNING_STATES && attributable) {
                     directoryReuseError(request.port, existing.directory, directory)?.let { failure ->
                         throw failure
                     }
                     return existingStatus
                 }
-                discardRecord(existing)
+                // Nothing answers this port as our server, so honouring the
+                // request means taking the port over - but only once that is
+                // established. Dropping the record first deletes the persisted
+                // metadata, the only surviving copy of the issued token, and the
+                // port check below can still refuse the start; that ordering
+                // leaves a live server with no record at all, which is exactly
+                // the state status() was changed away from. An earlier shape of
+                // this method did it in that order.
+                if (isPortListening(request.port)) {
+                    throw LocalHttpServerException(
+                        code = ERROR_PORT_IN_USE,
+                        message = "Port ${request.port} is answering on 127.0.0.1 but the record for " +
+                            "${existing.directory.absolutePath} can no longer be attributed to a server " +
+                            "this Runtime can describe. Stop it first or choose another port."
+                    )
+                }
+                removeRecord(existing)
             }
 
             if (isPortListening(request.port)) {
@@ -108,15 +130,18 @@ class LocalHttpServerManager(
                 )
             }
             if (records.size >= MAX_MANAGED_SERVERS) {
-                // After an app restart the records reload from disk and only
-                // status() pruned dead ones — a host that starts a new server
+                // After an app restart the records reload from disk and only a
+                // lifecycle call prunes them - a host that starts a new server
                 // without calling status() first would deterministically hit
-                // this cap on records whose servers are long dead. Drop only
-                // records whose process group is gone (nothing left to
-                // orphan, no signal is sent); a recycled-but-alive group id
-                // stays, matching the safety stance of stop()/stopAll().
+                // this cap on records whose servers are long dead. Free every
+                // record this call cannot attribute to a live service, and do
+                // it through the same disposition status()/stop() read: an
+                // earlier shape pruned only "process group gone" rows, and once
+                // status() stopped forgetting unattributable ones that left the
+                // cap permanently full. Dropping is bookkeeping only - no
+                // signal is sent to a group that may belong to somebody else.
                 records.values.toList().forEach { candidate ->
-                    if (!hasProcess(candidate)) {
+                    if (queryDispositionFor(candidate) != QueryDisposition.REPORT) {
                         removeRecord(candidate)
                     }
                 }
@@ -160,15 +185,18 @@ class LocalHttpServerManager(
                 "--directory",
                 directory.absolutePath
             )
+            val builder = ProcessBuilder(command)
+                .directory(directory)
+                .redirectErrorStream(true)
+                .apply {
+                    environment().clear()
+                    environment().putAll(processEnvironment)
+                }
             val process = try {
-                ProcessBuilder(command)
-                    .directory(directory)
-                    .redirectErrorStream(true)
-                    .apply {
-                        environment().clear()
-                        environment().putAll(processEnvironment)
-                    }
-                    .start()
+                // Same spawn helper as Bash: this child is a server, never an
+                // interactive reader, and an open stdin pipe is a descriptor
+                // the parent would otherwise hold for the server's whole life.
+                NativeExecutableProcess.spawnWithStdinClosed(builder)
             } catch (error: Exception) {
                 throw LocalHttpServerException(
                     code = ERROR_START_FAILED,
@@ -241,17 +269,19 @@ class LocalHttpServerManager(
                 .filter { port == null || it.port == port }
                 .toList()
             return selected.mapNotNull { server ->
-                if (!hasProcess(server)) {
-                    removeRecord(server)
-                    null
-                } else if (isStaleNonListening(server) && server.process == null) {
-                    // The persisted process-group id most likely died and was
-                    // recycled. status() stays read-only, so drop the dead
-                    // record without signaling and let start() rebuild.
-                    removeRecord(server)
-                    null
-                } else {
-                    statusFor(server)
+                when (queryDispositionFor(server)) {
+                    QueryDisposition.FORGET_CONFIRMED_DEAD -> {
+                        removeRecord(server)
+                        null
+                    }
+                    QueryDisposition.REPORT_UNATTRIBUTABLE ->
+                        // A query must not forget what it only failed to
+                        // observe: dropping the record here would delete the
+                        // persisted metadata, so the token that the caller was
+                        // handed would exist nowhere and the port could never
+                        // be stopped or described again.
+                        unattributableStatusFor(server)
+                    QueryDisposition.REPORT -> statusFor(server)
                 }
             }
         }
@@ -262,24 +292,34 @@ class LocalHttpServerManager(
             ensureMetadataLoaded()
             validatePort(port)
             val server = records[port] ?: return LocalHttpServerStatus.notFound(port)
-            if (isUnattributableStaleRecord(server)) {
-                // The recorded process-group id can no longer be attributed to
-                // this server and may since have been recycled to an unrelated
-                // group, so signaling it could kill innocent processes. Only
-                // drop the dead record so the port can be rebuilt.
-                removeRecord(server)
-            } else {
-                val stopped = stopRecord(server)
-                if (!stopped) {
-                    throw LocalHttpServerException(
-                        code = ERROR_STOP_FAILED,
-                        message = "Unable to terminate the managed HTTP server process group ${server.processGroupId}."
-                    )
+            val reported = when (stopDispositionFor(server)) {
+                StopDisposition.DROP_CONFIRMED_DEAD -> {
+                    // Nothing is running under that process-group id, so
+                    // "stopped" is a claim this call can actually support.
+                    removeRecord(server)
+                    STATE_STOPPED
                 }
-                removeRecord(server)
+                StopDisposition.DROP_UNATTRIBUTABLE -> {
+                    // The recorded id may have been recycled by an unrelated
+                    // group, so signalling it could kill innocent processes.
+                    // Dropping the record is the safe half; claiming the
+                    // service is down is not, because it may well be up.
+                    removeRecord(server)
+                    STATE_UNATTRIBUTABLE
+                }
+                StopDisposition.SIGNAL_PROCESS_GROUP -> {
+                    if (!stopRecord(server)) {
+                        throw LocalHttpServerException(
+                            code = ERROR_STOP_FAILED,
+                            message = "Unable to terminate the managed HTTP server process group ${server.processGroupId}."
+                        )
+                    }
+                    removeRecord(server)
+                    STATE_STOPPED
+                }
             }
             return LocalHttpServerStatus(
-                state = STATE_STOPPED,
+                state = reported,
                 port = server.port,
                 directory = server.directory.absolutePath,
                 url = urlFor(server.port, server.token),
@@ -295,21 +335,26 @@ class LocalHttpServerManager(
             val servers = records.values.toList()
             var stopped = 0
             servers.forEach { server ->
-                // stopAll()/close() must keep exactly the same process-group
-                // recycling safety semantics as stop(): an unattributable
-                // stale record (no live handle, aged, and no longer listening)
-                // is only dropped without signaling, because its persisted
-                // process-group id may already belong to an unrelated group.
-                if (isUnattributableStaleRecord(server)) {
-                    discardRecord(server)
-                    return@forEach
-                }
-                // Keep the record for a group that survived the kill window:
-                // dropping it would orphan a live process group that the tool
-                // can no longer see or stop. This mirrors stop()'s contract.
-                if (stopRecord(server)) {
-                    stopped++
-                    removeRecord(server)
+                when (stopDispositionFor(server)) {
+                    // Both drop-without-signalling rows: the group is either
+                    // provably gone or no longer attributable, and in neither
+                    // case may stopAll() signal it. Neither is counted in the
+                    // returned total, because nothing was terminated here - the
+                    // total is the number of groups this call actually brought
+                    // down, so a caller must not read "stopped N" as "N records
+                    // were cleared". No caller today consumes it.
+                    StopDisposition.DROP_CONFIRMED_DEAD,
+                    StopDisposition.DROP_UNATTRIBUTABLE -> removeRecord(server)
+                    StopDisposition.SIGNAL_PROCESS_GROUP -> {
+                        // Keep the record for a group that survived the kill
+                        // window: dropping it would orphan a live process group
+                        // that the tool can no longer see or stop. This mirrors
+                        // stop()'s contract, which raises STOP_FAILED instead.
+                        if (stopRecord(server)) {
+                            stopped++
+                            removeRecord(server)
+                        }
+                    }
                 }
             }
             return stopped
@@ -342,7 +387,7 @@ class LocalHttpServerManager(
 
     private fun statusFor(server: ManagedServer): LocalHttpServerStatus {
         val processAlive = hasProcess(server)
-        val portListening = isPortListening(server.port)
+        val portListening = answersAsOurServer(server)
         val state = when {
             processAlive && portListening -> STATE_RUNNING
             processAlive -> STATE_STARTING
@@ -358,51 +403,79 @@ class LocalHttpServerManager(
         )
     }
 
+    /**
+     * Description of a record this call already probed and could not
+     * attribute. Deliberately not built through [statusFor]: that helper re-runs
+     * the process-group and port probes that [queryDisposition] has just paid
+     * for, so each unattributable row would cost a second pair of probes.
+     */
+    private fun unattributableStatusFor(server: ManagedServer): LocalHttpServerStatus {
+        return LocalHttpServerStatus(
+            state = STATE_UNATTRIBUTABLE,
+            port = server.port,
+            directory = server.directory.absolutePath,
+            url = urlFor(server.port, server.token),
+            logFile = server.logFile.absolutePath,
+            processGroupId = server.processGroupId
+        )
+    }
+
     private fun hasProcess(server: ManagedServer): Boolean {
         val processAlive = server.process?.let(::isAlive) == true
         return processAlive || NativeProcessGroupControl.processGroupExists(server.processGroupId)
     }
 
     /**
-     * Lazy liveness cross-check for records whose existence is only inferred
-     * from a persisted process-group id. kill(-pgid, 0) cannot distinguish a
-     * dead server from an unrelated group that later recycled the same id, so
-     * an aged record that is still not listening is treated as dead. A normal
-     * start listens within seconds (and a start that never listens is rolled
-     * back immediately), so the grace period never overlaps a real starting
-     * phase. No timer or thread is introduced: this runs inside the existing
-     * start()/status()/stop() check paths.
+     * Whether the responder on this port is this record's own server.
+     *
+     * A bare connect only proves something holds the port. For a record this
+     * process did not start there is no other attribution available: the
+     * process-group probe cannot do it either, because
+     * [NativeProcessGroupControl.processGroupExists] deliberately treats
+     * `EPERM` as "exists", so a group recycled to any other owner keeps the
+     * record looking alive. Only the token-gated handler can identify itself,
+     * and this is the same helper start() uses to attribute a server it just
+     * launched - without it a foreign listener makes status() report `running`
+     * with a token URL nobody is serving, and start() reuses that port.
+     *
+     * A record this process started is attributed by the handle alone: its
+     * process-group id came from our own session launcher, so a plain connect
+     * is enough and stays cheap on the hot status path.
      */
-    private fun isStaleNonListening(server: ManagedServer): Boolean {
-        if (System.currentTimeMillis() - server.startedAtMillis < STALE_RECORD_GRACE_MILLIS) return false
-        return !isPortListening(server.port)
-    }
-
-    /**
-     * True when a record can no longer be attributed to its persisted
-     * process-group id: it has no live in-process handle, it is past the
-     * stale grace period, and its port is not listening. The recorded group
-     * id may since have been recycled to an unrelated group, so signaling it
-     * could kill innocent processes — such a record must only be dropped,
-     * never signaled. stop(), stopAll() and close() must all preserve this
-     * pgid-recycling safety semantics, so they share this one predicate.
-     */
-    private fun isUnattributableStaleRecord(server: ManagedServer): Boolean {
-        return isStaleNonListening(server) && server.process?.let(::isAlive) != true
-    }
-
-    /**
-     * Removes a record that must not be reused. A record that still owns a
-     * live in-process handle cannot have a recycled process-group id, so its
-     * group is terminated through the normal stop path. A handle-less
-     * (reloaded) record is dropped without signaling for the reason above.
-     */
-    private fun discardRecord(server: ManagedServer) {
-        if (server.process?.let(::isAlive) == true) {
-            stopRecord(server)
+    private fun answersAsOurServer(server: ManagedServer): Boolean {
+        return if (server.process != null) {
+            isPortListening(server.port)
+        } else {
+            isTokenServed(server.port, server.token)
         }
-        removeRecord(server)
     }
+
+    /**
+     * One of the two observations the disposition tables need. The grace period
+     * exists because kill(-pgid, 0) cannot distinguish a dead server from an
+     * unrelated group that later recycled the same id: a normal start listens
+     * within seconds, and a start that never listens is rolled back at once, so
+     * a record that is still deaf after this long is no longer evidence of a
+     * server this Runtime owns. Kept separate from the port probe so
+     * [queryDisposition] and [stopDisposition] can skip the socket connect
+     * entirely for a record that has not aged.
+     */
+    private fun isPastStaleGrace(server: ManagedServer): Boolean =
+        System.currentTimeMillis() - server.startedAtMillis >= STALE_RECORD_GRACE_MILLIS
+
+    private fun queryDispositionFor(server: ManagedServer): QueryDisposition = queryDisposition(
+        processHandleAlive = server.process?.let(::isAlive) == true,
+        processGroupExists = { NativeProcessGroupControl.processGroupExists(server.processGroupId) },
+        pastStaleGrace = isPastStaleGrace(server),
+        portListening = { answersAsOurServer(server) }
+    )
+
+    private fun stopDispositionFor(server: ManagedServer): StopDisposition = stopDisposition(
+        processHandleAlive = server.process?.let(::isAlive) == true,
+        processGroupExists = { NativeProcessGroupControl.processGroupExists(server.processGroupId) },
+        pastStaleGrace = isPastStaleGrace(server),
+        portListening = { answersAsOurServer(server) }
+    )
 
     private fun stopRecord(server: ManagedServer): Boolean {
         var groupStopped = !NativeProcessGroupControl.processGroupExists(server.processGroupId)
@@ -599,8 +672,6 @@ class LocalHttpServerManager(
         }
     }
 
-    private fun urlFor(port: Int): String = "http://$LOOPBACK_HOST:$port/"
-
     private class ManagedServer(
         val port: Int,
         val directory: File,
@@ -662,6 +733,84 @@ class LocalHttpServerManager(
         const val STATE_STARTING = "starting"
         const val STATE_STOPPED = "stopped"
         const val STATE_NOT_FOUND = "not_found"
+
+        /**
+         * A record the Runtime can no longer attribute to a process it started:
+         * the persisted process-group id is still taken, but it may have been
+         * recycled by an unrelated group, so signalling it could kill innocent
+         * processes. The Runtime has dropped or kept the record without
+         * terminating anything, and the service may still be up. Reporting
+         * `stopped` here would tell the model a loopback file server is down
+         * when it might be serving its workspace to the token URL right now.
+         */
+        const val STATE_UNATTRIBUTABLE = "unattributable"
+
+        /**
+         * What status() may conclude about one record from four observations.
+         *
+         * The ruler is whether a process this instance still holds is alive, not
+         * whether a handle object merely exists: once our own session leader has
+         * been reaped, its process-group id is on its way back to the kernel's
+         * pool and no longer says anything about our server.
+         *
+         * Split out because deciding it needs no Android Context and no live
+         * process, while every surrounding path needs both: this is the only
+         * place the rule can be pinned with a host test.
+         *
+         * The two probes are lazy on purpose - the truth table is asserted with
+         * a counter for how often each runs.
+         */
+        internal fun queryDisposition(
+            processHandleAlive: Boolean,
+            processGroupExists: () -> Boolean,
+            pastStaleGrace: Boolean,
+            portListening: () -> Boolean
+        ): QueryDisposition {
+            if (!processHandleAlive && !processGroupExists()) return QueryDisposition.FORGET_CONFIRMED_DEAD
+            if (processHandleAlive) return QueryDisposition.REPORT
+            if (!pastStaleGrace) return QueryDisposition.REPORT
+            return if (portListening()) {
+                QueryDisposition.REPORT
+            } else {
+                // Nothing we started is demonstrably running behind that id, and it
+                // has been deaf past the grace period: the group id behind it
+                // may belong to somebody else now. Report that honestly and
+                // keep the record - a query that deletes it would destroy the
+                // only place the issued token still exists.
+                QueryDisposition.REPORT_UNATTRIBUTABLE
+            }
+        }
+
+        /**
+         * What stop() and stopAll() may do to one record, on the same ruler
+         * status() reads from.
+         *
+         * Three things grant attribution, and any one is enough: a process this
+         * instance started is still running; the record is younger than the
+         * grace period (its metadata was written during a start that either
+         * succeeded or rolled itself back, so the group is recent enough to be
+         * ours by history); or the port still answers this record's own token
+         * path. When none of them hold - an aged, deaf record rehydrated from
+         * disk - the persisted id may have been recycled to an unrelated group,
+         * so it is dropped rather than signalled. That leaks a process group in
+         * the case where it really was our own orphan, which is the cheaper of
+         * the two failures and the stance this class has taken since D-028.
+         */
+        internal fun stopDisposition(
+            processHandleAlive: Boolean,
+            processGroupExists: () -> Boolean,
+            pastStaleGrace: Boolean,
+            portListening: () -> Boolean
+        ): StopDisposition {
+            if (processHandleAlive) return StopDisposition.SIGNAL_PROCESS_GROUP
+            if (!pastStaleGrace) return StopDisposition.SIGNAL_PROCESS_GROUP
+            if (portListening()) return StopDisposition.SIGNAL_PROCESS_GROUP
+            return if (processGroupExists()) {
+                StopDisposition.DROP_UNATTRIBUTABLE
+            } else {
+                StopDisposition.DROP_CONFIRMED_DEAD
+            }
+        }
         const val ERROR_PORT_IN_USE = "PORT_IN_USE"
         const val ERROR_TOO_MANY_SERVERS = "TOO_MANY_SERVERS"
         const val ERROR_START_FAILED = "START_FAILED"
@@ -833,28 +982,61 @@ class LocalHttpServerManager(
         /**
          * Fixed handler served by the managed Python process. Requirements:
          * standard library only; bind 127.0.0.1; answer 404 unless the first
-         * URL path segment equals the per-start token; reject paths whose
-         * realpath leaves the served root (symlink containment).
+         * URL path segment equals the per-start token; and refuse any file the
+         * request would actually open whose realpath leaves the served root or
+         * which shares its inode with another name - covering both symlink and
+         * hard-link containment, and the index file `send_head()` selects for a
+         * directory request after `translate_path()` has already run.
+         *
+         * Locked by [LocalHttpServerHandlerContainmentTest], which runs these
+         * exact bytes under a real interpreter. The text assertions in
+         * LocalHttpServerManagerTest are a structural smoke check only: they
+         * stay green when the logic below is semantically broken (measured,
+         * see the round report).
          */
         internal const val TOKEN_HTTP_HANDLER_SCRIPT = """# Token-gated static HTTP server for the UGK Android Terminal Runtime.
 #
 # Standard library only. Every request URL must begin with the per-start
 # random token path segment created by the Runtime; any other path answers
 # 404, so other apps on the shared loopback interface cannot enumerate the
-# served tree. A path whose mapped local file resolves outside the served
-# root, for example through a symlink, is rejected with 404 as well.
+# served tree. A request that carries the token is then narrowed to what this
+# root may actually publish, by judging the file that would really be opened:
+#
+#   * it must resolve inside the served root, which blocks a symlink planted
+#     in the workspace pointing at any other app-private file; and
+#   * it must not share its inode with another name, which blocks a hard link,
+#     because a hard link resolves to its own served-tree name and realpath
+#     cannot tell it apart from the file it was made from.
+#
+# Both rules follow the link chain: a symlink inside the root that lands on a
+# multi-link file is refused too, and a directory request is judged again for
+# the index file the standard library picks on its own.
+#
+# Known limit, stated rather than papered over: the decision is taken on the
+# resolved path before open(), so a process already running as this same UID
+# could swap the path for a link in between. That racer can read and copy the
+# file directly, so the window adds no capability this UID does not already
+# have - the boundary being protected here is another app's, not this app's.
 
 import argparse
 import os
+import stat
 import urllib.parse
 from functools import partial
 from http.server import SimpleHTTPRequestHandler, ThreadingHTTPServer
 
 BIND_HOST = "127.0.0.1"
+# Used only if the standard library stops exposing index_pages; it is then a
+# floor rather than a full account of what the handler may open.
+FALLBACK_INDEX_PAGES = ("index.html", "index.htm")
+
+SYMLINK_ESCAPE_MESSAGE = "Path resolves outside the served root"
+HARD_LINK_MESSAGE = "Multiple-link file refused"
+MALFORMED_PATH_MESSAGE = "Path could not be resolved"
 
 
-class SymlinkEscape(Exception):
-    # Raised when a requested path resolves outside the served root.
+class ServedRootEscape(Exception):
+    # Raised when a mapped local path must not be published by this root.
     pass
 
 
@@ -877,28 +1059,70 @@ class TokenGatedRequestHandler(SimpleHTTPRequestHandler):
 
     def do_GET(self):
         if not self.token_matches():
-            self.send_error(404)
+            self.refuse()
             return
         try:
             super().do_GET()
-        except SymlinkEscape:
-            self.send_error(404)
+        except ServedRootEscape as error:
+            self.refuse(error)
 
     def do_HEAD(self):
         if not self.token_matches():
-            self.send_error(404)
+            self.refuse()
             return
         try:
             super().do_HEAD()
-        except SymlinkEscape:
-            self.send_error(404)
+        except ServedRootEscape as error:
+            self.refuse(error)
 
-    def translate_path(self, path):
-        local = super().translate_path(self.path_without_token(path))
+    def refuse(self, error=None):
+        if error is None:
+            # No detail: an unauthenticated probe must not be able to tell an
+            # absent path from a refused one, so the tree cannot be probed.
+            self.send_error(404)
+        else:
+            # Only a token holder reaches this branch, so naming the cause is
+            # safe and keeps the bounded server log attributable. Both
+            # messages are fixed constants: no requested path reaches the response.
+            self.send_error(404, str(error))
+
+    def require_publishable(self, local):
+        # realpath() and stat() raise ValueError - not OSError - for a path
+        # carrying an embedded NUL, and an exception escaping from here aborts
+        # the connection with no answer at all. A refusal is the honest shape,
+        # which is why the tests insist on 404 rather than merely "not 200".
+        try:
+            self.require_publishable_name(local)
+        except ValueError:
+            raise ServedRootEscape(MALFORMED_PATH_MESSAGE)
+
+    def require_publishable_name(self, local):
         root = os.path.realpath(self.directory)
         resolved = os.path.realpath(local)
         if resolved != root and not resolved.startswith(root + os.sep):
-            raise SymlinkEscape(path)
+            raise ServedRootEscape(SYMLINK_ESCAPE_MESSAGE)
+        # stat(), not lstat(): the link chain has just been resolved, and what
+        # matters is the inode open() would read. A dangling name cannot leak
+        # content, so a failure to stat is left to the standard library's 404.
+        try:
+            opened = os.stat(resolved)
+        except OSError:
+            return
+        if stat.S_ISREG(opened.st_mode) and opened.st_nlink > 1:
+            raise ServedRootEscape(HARD_LINK_MESSAGE)
+
+    def translate_path(self, path):
+        local = super().translate_path(self.path_without_token(path))
+        self.require_publishable(local)
+        # send_head() resolves a directory request to its index file itself,
+        # after translate_path() returns, so that candidate has to be judged
+        # here. The names come from the handler class rather than a copy of
+        # them, and only where the standard library would really pick one.
+        if os.path.isdir(local):
+            for name in getattr(self, "index_pages", FALLBACK_INDEX_PAGES):
+                candidate = os.path.join(local, name)
+                if os.path.isfile(candidate):
+                    self.require_publishable(candidate)
         return local
 
 
@@ -919,5 +1143,11 @@ if __name__ == "__main__":
 """
     }
 }
+
+/** What a status() query may conclude, and may therefore do to, one record. */
+internal enum class QueryDisposition { REPORT, REPORT_UNATTRIBUTABLE, FORGET_CONFIRMED_DEAD }
+
+/** What stop()/stopAll() may do to one record. */
+internal enum class StopDisposition { SIGNAL_PROCESS_GROUP, DROP_UNATTRIBUTABLE, DROP_CONFIRMED_DEAD }
 
 const val DEFAULT_LOCAL_HTTP_SERVER_PORT: Int = 8_765

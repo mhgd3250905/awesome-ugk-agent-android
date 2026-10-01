@@ -535,3 +535,62 @@ Core API/JVM 边界：
 - 独立复核否掉/证伪的假设（附复跑命令，避免下一轮重复劳动）：`flow {}` 内在 `withTimeoutOrNull` 中 `emit` 会抛（实跑证明 1/2/3 正常送达、超时返回标记 `IllegalStateException`）；`STREAM_INCOMPLETE` 映射有缺陷（实测正常）；`compilationStatus="compiling"` 守卫是死的（`grep` 证明有写入与清除）；`AgentRuntime` 并发执行 toolCall 导致每轮证据预算竞争（源码为 `toolCalls.forEach` 顺序执行）；`fragmentContext` 可能收到非 JSON 证据（所有 part 都由 `buildJsonObject{}.toString()` 产生）；容量异常逃出工具会杀掉无关对话运行（`executeTool` 捕获 `Throwable` 转 `isError` 结果）。复跑：`gate/run-jvm-gate.sh`、`gate/run-targeted.sh <类名>`（本机绝对路径，输出 tee 到 `build/reviewlogs/`）。
 - 设备通道未运行（未证实）：宿主 C 盘 100% 满、可用 1.9GB，按既定纪律不启动 AVD。合并前应在真机/AVD 上执行：`:demo-app:assembleDebug`；`:demo-app:connectedDebugAndroidTest`（先 `:app:installDebug` 再用 appops 授 `SYSTEM_ALERT_WINDOW`）；并人工复验短/长教学整理、取消后重试、旧经验读取，以及“记录达到容量后仍能结束教学并保存经验”。
 - 本轮登记不修的遗留：`DemoWorkflowCompiler` 与 `DemoOperationStepReviewer` 仍是原图字节预算（单请求最坏约 16,777,216 字符），前者有明确的用户可读预算报错、后者上限为两帧；`loadImages` 会在整个整理期间保留至多 12MB 原图的 Base64 字符串（约 32MB UTF-16），改成按请求惰性编码可消除但未验证；`DemoTeachingHost` 的容量分支与 `Activity` 的整理协程只能由读码+夹具形状证明，Android 侧未实跑。
+
+## 35. 第十轮 P0 审查修复（分支 `fix/p0-review-round10-20261001`，基线 `main@88b05e0`，2026-10-01）
+
+验证日期：2026-10-01；宿主 Windows 10.0.26200 / Git Bash，JDK 17.0.11（`E:\Android\Android Studio\jbr`），Android SDK `E:\Android\SDK`，`GRADLE_USER_HOME=E:\DevCaches\gradle`，宿主 CPython 3.14.2。本轮不改变 Terminal v1 scope、原生载荷或权限边界（D-029 属安全边界收紧）。
+
+### 门禁口径（只认日志 `EXIT=` 行与 JUnit XML 汇总）
+
+独占 `--rerun-tasks` 全量实跑，代码状态 = 分支 HEAD `04eefe0`，`git status --porcelain` 为 0 项，运行窗口 `2026-09-30T20:18:32Z … 20:19:12Z`，全部 JUnit XML 的 `timestamp` 落在该窗口内（最晚 `2026-09-30T20:19:11.700Z`）：
+
+```
+EXIT=0
+TOTAL tests=844 failures=0 errors=0 skipped=3
+MODULE ugk-terminal-runtime-android   tests=50  failures=0 errors=0 skipped=0
+MODULE pi-terminal-skill-android      tests=44  failures=0 errors=0 skipped=0
+MODULE demo-app                       tests=318 failures=0 errors=0 skipped=0
+MODULE ugk-pi-android                 tests=211 failures=0 errors=0 skipped=0
+MODULE pi-agent-skill-runtime-android tests=89  failures=0 errors=0 skipped=2
+MODULE ugk-agent-task-runtime-android tests=49  failures=0 errors=0 skipped=0
+MODULE pi-system-skill-android        tests=50  failures=0 errors=0 skipped=0
+MODULE pi-schedule-skill-android      tests=20  failures=0 errors=0 skipped=0
+MODULE pi-file-skill-android          tests=13  failures=0 errors=0 skipped=1
+```
+
+基线对照：同一台机器、同一命令在 `main@88b05e0` 上独占实跑为 `821 / 3 skipped / 0 failure`。本轮净增 23 项，全部落在 `ugk-terminal-runtime-android`（27 → 50）：`LocalHttpServerHandlerContainmentTest` 8、`LocalHttpServerRecordDispositionTest` 11、`NativeExecutableProcessStdinTest` 3、`TerminalSpawnSiteTest` 1。`3 skipped` 的来源本轮不再唯一：新增 interpreter 用例在宿主无 python 或无链接权限时各自产生 skip（本机全部不 skip，所以仍为 3，且全部来自 agent-skill/file 两个模块）。`pi-attention-skill-android` 仍 `NO-SOURCE`（第九轮已在 `AGENTS.md` 明示为已登记缺口，本轮未变）。
+
+证据文件为 gitignore 的 `build/reviewlogs/`（本机可复核，合并后看不到）：`main-baseline.log`（基线 821）、`delivery-final-rerun.log`（中途态 843）、`delivery-final-r10.log`（交付态 844，本节数字来源）、`mut-*.log`、`probe-matrix-round2.txt`、`probe-matrix-round3.txt`。关键输出原文已抄进本节与 D-029 / D-030。
+
+另登记一次判废取数：`delivery-final-1`（`EXIT=0`、`tests=840`）未加 `--rerun-tasks`，聚合里混用了上一轮 targeted 跑留下的模块 XML 且分模块行缺一项，已作废，改用独占 `--rerun-tasks` 重跑。
+
+### 实证缺陷与修复
+
+1. **D-028 遏制可被硬链接绕过（P0 安全）**。`os.path.realpath` 对硬链接恒解析为服务树内自己的名字。宿主 CPython 实测：`ln <secret> site/index-copy.txt` 后经 token URL 返回 `200`，响应体即 `API_KEY=sk-should-never-be-served`。修复见 D-029。第一轮整改后复核又实测到两处同形缺口（`send_head()` 自行解析目录 `index.html`；`lstat` 对符号链接跳过链接数判定），均已在宿主复现为 `200` + 泄密正文后修掉。
+2. **该安全边界唯一的"把关"是假绿（P0）**。`LocalHttpServerManagerTest` 只用 `script.contains(...)` 断言脚本文本。宿主实测：把遏制条件改成 `if False and ...`（保留全部被 grep 的子串）后该类 16 项测试全部绿色，而同期新增的 interpreter 驱动用例判红。同文件 py_compile 冒烟在"宿主无 python"时直接 `return`，把从未执行的检查计成通过。修复：新增 `LocalHttpServerHandlerContainmentTest`（写盘原样字节 → 起真服务 → 真 HTTP 问它答什么，拒绝一律断言显式 `404`），文本断言降级为结构冒烟并在注释里写明其可被语义破坏骗过，py_compile 改判 JUnit skip。
+3. **子进程 stdin 从不关闭（P1）**。`NativeExecutableProcess` 与 `LocalHttpServerManager.start()` 各自 `start()` 后不触碰子进程 stdin；父进程持有的管道永不报 EOF，读 stdin 的命令（`read`/`cat`/`python -`/`openssl passwd -stdin`）会耗尽整段超时并返回空输出，与 `terminal_bash_execute` 自述"非交互脚本"矛盾。全仓 `src/main` 只有这两处 spawn，已收敛到一个 helper；新增源码扫描用例钉住"不许绕过"。
+4. **`status()` 删除它只是没探到的记录，`stop()` 对未发信号的记录报 `stopped`（P1）**，且 `status()`/`stop()`/`stopAll()` 用两把尺子问同一件事。修复：一张归属判定表（口径统一为"本进程启动的进程是否还活着"）供四处读取；新增 `unattributable` 状态并同步五处对模型的契约文字。
+5. **已核查不可达 / 已登记不修**：`LocalHttpServerManager` 内私有单参 `urlFor(port)`（返回无 token URL）全仓零调用点 → 直接删除；`stopDisposition` 归属存疑时不杀进程组，接受"可能泄漏一个我们自己的孤儿进程组"，这是两种失败里更便宜的一种，已在 KDoc 与 D-030 写明。
+
+6. **本轮第一版整改又引入一条：`start()` 会销毁它随后拒绝接管的记录（P1）**。第一版把 `start()` 的复用条件接到 `queryDisposition` 之后，顺序变成「先 `discardRecord(existing)`（连带删 `.properties`）→ 再 `isPortListening` 判 PORT_IN_USE 并抛出」。于是一次抖动的 100 ms 探针就能让一个**在跑的服务**失去唯一记录：`status()`/`stop()` 从此报 `not_found`，端口永久不可复用——正是 F4 要消灭的那个状态，被本轮自己的修法在生产路径上复刻。现已改为「先确认端口不再应答，再删记录」，并把错误文案改成能读出成因的一支。**局限如实登记**：该顺序在宿主不可判红（`start()` 需要 Android Context 与真进程），`probe m4c` 亦为绿说明纯表用例看不见调用点装配；证据为代码路径推演 + 主仓仪器面复跑（见未证实项）。
+7. **对外来监听者的错误归属（P1）**。`NativeProcessGroupControl.processGroupExists` 有意把 `EPERM` 当作"存在"，所以进程组被任何别的所有者复用后记录仍"活着"；`status()` 的正分支又只看一次裸 connect。结果 App 重启 + 端口被别的进程占用时，`status()` 会返回 `running` 并附上一个**没有任何人在服务**的 token URL，`start()` 还会直接复用该端口——而类里早就有为归因写的 `isTokenServed` 却没被这条路用。修复：无进程内句柄的记录一律用 `isTokenServed(port, token)` 判"这个端口是不是我们自己的服务在应答"，有句柄的仍用便宜的 connect（句柄即归属证据）。
+8. **带 NUL 的 URL 不答话（P2）**。`realpath()`/`stat()` 对含 ` ` 的路径抛的是 `ValueError` 而非 `OSError`，它会逃出 `except ServedRootEscape`，连接被直接关闭、**没有任何响应**。变异 `m6-nul-guard-removed` 的实测原文即为证据：`expected:<[404]> but was:<[]>`（空状态）。这同时说明本轮此前所有"非 200 即拒绝"的断言形状是错的——连接中断、超时、文件不存在都能冒充拒绝，故本节新增/改写的所有拒绝断言一律要求显式 `404`。
+
+### 独立复核两轮的实际结果与处置
+
+第 1 轮专审本轮整改，抓出 2 条阻塞级（F1b 两处仍在出密、F4 的杀无辜 + 容量死锁），全部落地修复并配判别用例。第 2 轮专审第 1 轮的整改，再抓出 3 条（F6 `start()` 顺序复刻了 F4 的危害、F7 外来监听者被误归因为"我们的服务在跑"、F8 NUL 路径无响应）与 4 处**注释/契约文字比代码能做的说得多**：`stopDisposition` 的"只在能看见本进程启动的进程时才发信号"（代码还看宽限期）、`stopAll()` 返回计数的消费者（grep 无任何调用者消费该 Int）、`BashCommandTool` 的 stop 契约"绝不杀非托管进程"、`assets/ugk/AGENTS.md` 对硬链接规则"名字在服务树外"（代码是无条件 `st_nlink > 1`）。四条文字全部按代码实况改写。
+
+第 2 轮另报「`spawnWithStdinClosed` 的 `starter` 缝隙 + 注释声称的把关不成立」，本轮据此把 `TerminalSpawnSiteTest` 的谓词从裸 `.start()` 收窄为"能创建子进程的调用"，并补 `m5c`（`worker.start()` 不得误红）；豁免行改为按内容匹配，避免无关重排把它变红。
+
+第 2 轮复核者自报的正面结论也被本轮采信前复核过：31 条 URL × 2 种根目录形态（普通目录、`--directory` 本身是符号链接）在宿主 CPython 3.14.2 上 0 泄漏。
+
+- 「`stop()` 应在句柄已死但进程组仍在时仍发信号，因为该组确由本进程创建」——第十轮第一版整改就是这样写的，复核后由本轮回滚：会话领导者被回收后 pgid 会回到内核池，可能已被同 UID 无关进程组复用，`kill(-pgid, 0)`/信号都可能打死无辜进程。复测：`bash gate/run-targeted-r10.sh m ugk-terminal-runtime-android --tests "*LocalHttpServerRecordDispositionTest"`（`stopNeverSignalsAGroupWhoseOwnLeaderHasBeenReaped` 钉住现口径）。
+- 「`lstat` 换成 `stat` 是遏制弱化」——变异实测 `m1c-judge-link-not-target` 显示功能面确有红，但方向是**变严**：`stat` 跟随链接后可能拒掉一个合法的根内符号链接。现口径为 `realpath` 定根 + 对解析结果 `stat()`，两者都不是靠 `lstat`。
+
+### 未证实项（合并前应跑的命令）
+
+1. 设备侧 CPython 3.14.6 上 handler 的实际行为（宿主证据只覆盖同一份脚本字节在 3.14.2 上的判定；`st_nlink`、`index_pages`、目录重定向语义在 Android 上未实测）。合并前：`:demo-app:connectedDebugAndroidTest --tests "*LocalHttpServerManagerInstrumentedTest*"`（需先 `:app:installDebug`，端口 18765）。
+2. `unattributable` 新状态在真机生命周期（重启后宽限期已过）下的实际出现路径：同上仪器类扩展一条断言。
+3. `spawnWithStdinClosed` 两个调用点在真机上确实关闭了 stdin：`terminal_bash_execute` 跑 `read x; echo got-eof` 应在 1 秒级返回 `got-eof` 而不是耗尽超时。
+4. `m4c-stop-wrapper-wiring` 变异为绿：纯表用例看不见调用点装配，句柄口径若在 wrapper 处被改错不会在宿主变红——已登记为本轮测试面的已知局限，只能靠第 1/2 条仪器用例补。
+5. 本轮**未运行任何设备/仪器门禁**（宿主 C 盘曾长期满盘；本轮只在 JVM 面取数）。§33/§34 记录的设备数字不得当作当前门禁。
