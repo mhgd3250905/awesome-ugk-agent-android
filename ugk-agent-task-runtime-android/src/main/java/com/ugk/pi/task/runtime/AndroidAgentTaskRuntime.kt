@@ -17,14 +17,14 @@ import android.net.Uri
 import android.os.Build
 import android.os.PersistableBundle
 import android.util.Log
-import com.ugk.pi.android.AgentTask
-import com.ugk.pi.android.AgentTaskAction
-import com.ugk.pi.android.AgentTaskClock
-import com.ugk.pi.android.AgentTaskScheduler
-import com.ugk.pi.android.AgentTaskStatus
-import com.ugk.pi.android.AgentTaskStore
-import com.ugk.pi.android.SystemAgentTaskClock
-import com.ugk.pi.android.nextRunAtMillis
+import com.ugk.pi.schedule.skill.AgentTask
+import com.ugk.pi.schedule.skill.AgentTaskAction
+import com.ugk.pi.schedule.skill.AgentTaskClock
+import com.ugk.pi.schedule.skill.AgentTaskScheduler
+import com.ugk.pi.schedule.skill.AgentTaskStatus
+import com.ugk.pi.schedule.skill.AgentTaskStore
+import com.ugk.pi.schedule.skill.SystemAgentTaskClock
+import com.ugk.pi.schedule.skill.nextRunAtMillis
 import kotlinx.coroutines.CancellationException
 import kotlinx.coroutines.CoroutineStart
 import kotlinx.coroutines.CoroutineScope
@@ -424,7 +424,7 @@ internal fun AgentTask.afterExecution(
     val nextRun = schedule.nextRunAtMillis(anchorMillis + 1L)
     return copy(
         status = when {
-            schedule is com.ugk.pi.android.AgentTaskSchedule.OneShot -> AgentTaskStatus.COMPLETED
+            schedule is com.ugk.pi.schedule.skill.AgentTaskSchedule.OneShot -> AgentTaskStatus.COMPLETED
             nextRun == null -> AgentTaskStatus.EXPIRED
             else -> AgentTaskStatus.SCHEDULED
         },
@@ -445,7 +445,7 @@ internal fun AgentTask.afterExecution(
  * TaskRun/lease layer rather than this adapter.
  */
 internal fun AgentTask.afterDeliveryFailure(now: Long, deliveryEndMillis: Long = now): AgentTask {
-    if (schedule is com.ugk.pi.android.AgentTaskSchedule.OneShot) {
+    if (schedule is com.ugk.pi.schedule.skill.AgentTaskSchedule.OneShot) {
         return copy(
             status = AgentTaskStatus.FAILED,
             updatedAtMillis = now,
@@ -640,7 +640,7 @@ class AndroidAgentTaskRuntime(
                                 "当前宿主尚未安装后台 Agent Prompt 执行器。"
                             )
                         notifySuccessfulPrompt = execution.success &&
-                            action.notifyPolicy == com.ugk.pi.android.AgentTaskNotifyPolicy.ALWAYS_NOTIFY
+                            action.notifyPolicy == com.ugk.pi.schedule.skill.AgentTaskNotifyPolicy.ALWAYS_NOTIFY
                         execution
                     }
                 }

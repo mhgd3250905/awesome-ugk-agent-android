@@ -3,8 +3,8 @@ package com.ugk.pi.android.testapp
 import android.system.Os
 import androidx.test.ext.junit.runners.AndroidJUnit4
 import androidx.test.platform.app.InstrumentationRegistry
-import com.ugk.pi.android.SkillReadTool
-import com.ugk.pi.android.SkillRepository
+import com.ugk.pi.agent.skill.runtime.SkillReadTool
+import com.ugk.pi.agent.skill.runtime.SkillRepository
 import com.ugk.pi.android.ToolCall
 import com.ugk.pi.android.ToolExecutionContext
 import java.io.File

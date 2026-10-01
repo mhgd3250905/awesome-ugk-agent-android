@@ -2,7 +2,7 @@ package com.ugk.pi.android.testapp
 
 import android.app.Application
 import android.util.Log
-import com.ugk.pi.android.AgentTaskStatus
+import com.ugk.pi.schedule.skill.AgentTaskStatus
 import com.ugk.pi.task.runtime.AlarmManagerAgentTaskScheduler
 import com.ugk.pi.task.runtime.AndroidAgentTaskStore
 import java.io.File

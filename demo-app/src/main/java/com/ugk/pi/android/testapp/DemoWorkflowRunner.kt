@@ -1,6 +1,10 @@
 package com.ugk.pi.android.testapp
 
 import com.ugk.pi.android.*
+import com.ugk.pi.system.skill.ScreenVisualAutomationBackend
+import com.ugk.pi.system.skill.ScreenUiSnapshot
+import com.ugk.pi.system.skill.ScreenUiElement
+import com.ugk.pi.system.skill.ScreenAutomationBackend
 import kotlinx.coroutines.currentCoroutineContext
 import kotlinx.coroutines.CancellationException
 import kotlinx.coroutines.ensureActive

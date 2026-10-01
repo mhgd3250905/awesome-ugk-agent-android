@@ -2,8 +2,8 @@ package com.ugk.pi.android.testapp
 
 import androidx.test.ext.junit.runners.AndroidJUnit4
 import androidx.test.platform.app.InstrumentationRegistry
-import com.ugk.pi.android.FileBackedSkillProvider
-import com.ugk.pi.android.SkillRepository
+import com.ugk.pi.agent.skill.runtime.FileBackedSkillProvider
+import com.ugk.pi.agent.skill.runtime.SkillRepository
 import java.io.File
 import org.junit.Assert.assertTrue
 import org.junit.Test

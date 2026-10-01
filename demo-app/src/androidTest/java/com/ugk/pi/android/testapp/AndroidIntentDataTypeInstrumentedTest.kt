@@ -2,7 +2,7 @@ package com.ugk.pi.android.testapp
 
 import android.content.Intent
 import androidx.test.ext.junit.runners.AndroidJUnit4
-import com.ugk.pi.android.AndroidAppIntentSpec
+import com.ugk.pi.system.skill.AndroidAppIntentSpec
 import org.junit.Assert.assertEquals
 import org.junit.Assert.assertNull
 import org.junit.Test

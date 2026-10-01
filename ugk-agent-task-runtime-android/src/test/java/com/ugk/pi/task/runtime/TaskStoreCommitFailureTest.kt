@@ -3,10 +3,10 @@ package com.ugk.pi.task.runtime
 import android.content.Context
 import android.content.ContextWrapper
 import android.content.SharedPreferences
-import com.ugk.pi.android.AgentTask
-import com.ugk.pi.android.AgentTaskAction
-import com.ugk.pi.android.AgentTaskSchedule
-import com.ugk.pi.android.AgentTaskStatus
+import com.ugk.pi.schedule.skill.AgentTask
+import com.ugk.pi.schedule.skill.AgentTaskAction
+import com.ugk.pi.schedule.skill.AgentTaskSchedule
+import com.ugk.pi.schedule.skill.AgentTaskStatus
 import java.lang.reflect.Proxy
 import kotlinx.coroutines.runBlocking
 import org.junit.Assert.assertEquals

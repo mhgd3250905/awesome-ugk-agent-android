@@ -5,11 +5,11 @@ import android.content.Context
 import android.content.Intent
 import androidx.test.ext.junit.runners.AndroidJUnit4
 import androidx.test.platform.app.InstrumentationRegistry
-import com.ugk.pi.android.AndroidAccessibilityServiceState
-import com.ugk.pi.android.AndroidAccessibilitySettingsTool
-import com.ugk.pi.android.AndroidAccessibilityStatusTool
-import com.ugk.pi.android.AndroidAppCatalogTool
-import com.ugk.pi.android.AndroidLaunchAppTool
+import com.ugk.pi.system.skill.AndroidAccessibilityServiceState
+import com.ugk.pi.system.skill.AndroidAccessibilitySettingsTool
+import com.ugk.pi.system.skill.AndroidAccessibilityStatusTool
+import com.ugk.pi.system.skill.AndroidAppCatalogTool
+import com.ugk.pi.system.skill.AndroidLaunchAppTool
 import com.ugk.pi.android.ToolCall
 import com.ugk.pi.android.ToolExecutionContext
 import kotlinx.coroutines.runBlocking

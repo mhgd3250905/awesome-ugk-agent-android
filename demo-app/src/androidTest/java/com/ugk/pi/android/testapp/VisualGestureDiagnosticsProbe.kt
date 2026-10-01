@@ -8,11 +8,11 @@ import android.widget.Button
 import android.widget.FrameLayout
 import androidx.test.ext.junit.runners.AndroidJUnit4
 import androidx.test.platform.app.InstrumentationRegistry
-import com.ugk.pi.android.AccessibilityScreenAutomationBackend
-import com.ugk.pi.android.AccessibilityServiceProvider
-import com.ugk.pi.android.ScreenAutomationErrorCodes
-import com.ugk.pi.android.ScreenVisualGestureRequest
-import com.ugk.pi.android.ScreenVisualTarget
+import com.ugk.pi.system.skill.AccessibilityScreenAutomationBackend
+import com.ugk.pi.system.skill.AccessibilityServiceProvider
+import com.ugk.pi.system.skill.ScreenAutomationErrorCodes
+import com.ugk.pi.system.skill.ScreenVisualGestureRequest
+import com.ugk.pi.system.skill.ScreenVisualTarget
 import kotlinx.coroutines.delay
 import kotlinx.coroutines.runBlocking
 import kotlinx.coroutines.withTimeout

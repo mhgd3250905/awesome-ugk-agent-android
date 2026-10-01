@@ -1,6 +1,20 @@
 package com.ugk.pi.android.testapp
 
 import com.ugk.pi.android.*
+import com.ugk.pi.system.skill.ScreenVisualObservation
+import com.ugk.pi.system.skill.ScreenVisualGestureRequest
+import com.ugk.pi.system.skill.ScreenVisualCaptureResult
+import com.ugk.pi.system.skill.ScreenVisualAutomationBackend
+import com.ugk.pi.system.skill.ScreenUiSnapshot
+import com.ugk.pi.system.skill.ScreenUiElement
+import com.ugk.pi.system.skill.ScreenReadResult
+import com.ugk.pi.system.skill.ScreenOperationResult
+import com.ugk.pi.system.skill.ScreenKeyRequest
+import com.ugk.pi.system.skill.ScreenGlobalActionRequest
+import com.ugk.pi.system.skill.ScreenGestureRequest
+import com.ugk.pi.system.skill.ScreenBounds
+import com.ugk.pi.system.skill.ScreenAutomationBackend
+import com.ugk.pi.system.skill.ScreenActionRequest
 import kotlinx.coroutines.runBlocking
 import kotlinx.coroutines.yield
 import kotlinx.serialization.json.*
