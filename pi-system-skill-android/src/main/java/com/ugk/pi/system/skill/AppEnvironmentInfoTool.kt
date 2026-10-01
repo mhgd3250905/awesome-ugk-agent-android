@@ -12,9 +12,6 @@ import android.os.PowerManager
 import kotlinx.serialization.json.JsonObject
 import kotlinx.serialization.json.JsonPrimitive
 import kotlinx.serialization.json.buildJsonObject
-import kotlinx.serialization.json.contentOrNull
-import kotlinx.serialization.json.jsonArray
-import kotlinx.serialization.json.jsonPrimitive
 import kotlinx.serialization.json.put
 import kotlinx.serialization.json.putJsonArray
 import kotlinx.serialization.json.putJsonObject
@@ -42,11 +39,11 @@ class AppEnvironmentInfoTool(
         call: ToolCall,
         context: ToolExecutionContext
     ): ToolResult {
-        val requestedPermissions = call.input["permissions"]
-            ?.jsonArray
-            ?.mapNotNull { it.jsonPrimitive.contentOrNull }
-            ?.takeIf { it.isNotEmpty() }
-            ?: AndroidPermissionCatalog.defaultRuntimePermissions()
+        // One reading of `permissions` for the whole module: absent or JSON null is
+        // the documented default set, a declared non-list is refused. This site used
+        // to have its own copy of the expression, and `?.jsonArray` threw on the
+        // null a Pojo gateway emits for an unfilled optional.
+        val requestedPermissions = call.permissionsOrDefault() ?: return call.unusablePermissions(name)
 
         val result = buildJsonObject {
             put("packageName", this@AppEnvironmentInfoTool.context.packageName)

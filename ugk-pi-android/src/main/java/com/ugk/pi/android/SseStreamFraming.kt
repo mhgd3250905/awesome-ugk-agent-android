@@ -20,7 +20,7 @@ import kotlinx.serialization.json.JsonPrimitive
  */
 internal fun JsonObject.textOrNull(key: String): String? =
     (this[key] as? JsonPrimitive)
-        ?.takeIf { it.isString }?.content?.takeIf { it.isNotEmpty() }
+        ?.takeIf { it.isString }?.content?.takeIf { it.isNotBlank() }
 
 /**
  * Splits any emission that carries several lines into one emission per line.

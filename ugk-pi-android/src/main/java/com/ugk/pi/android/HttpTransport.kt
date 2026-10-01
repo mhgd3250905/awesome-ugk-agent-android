@@ -33,8 +33,11 @@ import java.net.URL
  * media type is also missing falls through to the document branch: the answer is
  * still read correctly (the reader re-splits the buffered body) but it arrives in
  * one emission, and a body over `maxResponseBytes` then fails loudly instead of
- * streaming. That boundary is pinned by a test rather than fixed, because buffering
- * is the only way to hand a document over intact.
+ * streaming. Both halves are pinned by name rather than by intent, in
+ * `StreamedResponseTransportContractTest`
+ * (`streamWithABlankFirstLineAndNoContentTypeIsBufferedButStillAnswered` and
+ * `bufferedDocumentOverTheCapFailsLoudlyInsteadOfBeingHandedOverTruncated`), because
+ * buffering is the only way to hand a document over intact.
  */
 internal fun isEventStreamContentType(contentType: String?): Boolean =
     contentType?.substringBefore(';')?.trim()?.equals(EVENT_STREAM_MEDIA_TYPE, ignoreCase = true) == true

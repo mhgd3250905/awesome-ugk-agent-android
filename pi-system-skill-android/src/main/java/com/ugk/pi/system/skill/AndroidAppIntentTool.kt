@@ -15,7 +15,6 @@ import kotlinx.serialization.json.JsonElement
 import kotlinx.serialization.json.JsonPrimitive
 import kotlinx.serialization.json.buildJsonObject
 import kotlinx.serialization.json.contentOrNull
-import kotlinx.serialization.json.jsonObject
 import kotlinx.serialization.json.jsonPrimitive
 import kotlinx.serialization.json.put
 import kotlinx.serialization.json.putJsonArray
@@ -69,21 +68,10 @@ class AndroidAppIntentTool(
         context: ToolExecutionContext
     ): ToolResult {
         val target = (call.input["target"] as? JsonPrimitive)?.contentOrNull.orEmpty()
-        val parameters = call.input["parameters"]
-            ?.jsonObject
-            ?.stringParameters()
-            ?: call.input
-                .filterKeys { it != "target" }
-                .stringParameters()
-        val intent = AndroidAppIntentFactory.intentFor(target, parameters) ?: return ToolResult(
-            toolCallId = call.id,
-            name = name,
-            content = buildJsonObject {
-                put("error", "invalid_target_or_parameters")
-                put("target", target)
-            }.toString(),
-            isError = true
-        )
+        val parameters = call.input.appIntentParameters()
+            ?: return invalidTargetOrParameters(call, name, target)
+        val intent = AndroidAppIntentFactory.intentFor(target, parameters)
+            ?: return invalidTargetOrParameters(call, name, target)
 
         val resolvedPackage = resolveActivity?.invoke(intent)
         if (resolveActivity != null && resolvedPackage == null) {
@@ -140,12 +128,45 @@ class AndroidAppIntentTool(
         }
     }
 
-    private fun Map<String, JsonElement>.stringParameters(): Map<String, String> {
-        return mapNotNull { (key, value) ->
-            (value as? JsonPrimitive)?.contentOrNull?.let { key to it }
-        }.toMap()
-    }
 }
+
+
+/**
+ * The parameters one call declares.
+ *
+ * `parameters: null` from a gateway that fills every optional is *absence*, and
+ * absence has always meant "take the flat arguments instead" here; `?.jsonObject`
+ * turned that shape into a thrown serialization error. A value that is declared and
+ * is not an object returns null so the caller refuses it, rather than quietly
+ * dispatching an Intent built from arguments nobody supplied correctly.
+ *
+ * Read as a function because this Tool needs an Android [Context]: the half that is
+ * not covered on the host is that `execute` routes this answer into
+ * [AndroidAppIntentFactory].
+ */
+internal fun JsonObject.appIntentParameters(): Map<String, String>? {
+    val declared = optionalElement("parameters")
+        ?: return this.filterKeys { it != "target" }.stringParameters()
+    val value = declared as? JsonObject ?: return null
+    return value.stringParameters()
+}
+
+private fun Map<String, JsonElement>.stringParameters(): Map<String, String> {
+    return mapNotNull { (key, value) ->
+        (value as? JsonPrimitive)?.contentOrNull?.let { key to it }
+    }.toMap()
+}
+
+private fun invalidTargetOrParameters(call: ToolCall, toolName: String, target: String): ToolResult =
+    ToolResult(
+        toolCallId = call.id,
+        name = toolName,
+        content = buildJsonObject {
+            put("error", "invalid_target_or_parameters")
+            put("target", target)
+        }.toString(),
+        isError = true
+    )
 
 object AndroidAppIntentFactory {
     val supportedTargets: Set<String> = linkedSetOf(

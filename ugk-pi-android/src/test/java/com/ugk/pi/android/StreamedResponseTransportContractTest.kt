@@ -495,6 +495,76 @@ class StreamedResponseTransportContractTest {
     }
 
     /**
+     * Whitespace is as empty as `""` here: an endpoint that sends
+     * `"message": "   "` has said nothing, and reporting
+     * `Anthropic API error:    ` leaves the reader with a reason that is only
+     * spaces. Same rule as the case above, different input shape, so it is its own
+     * test rather than a second assert inside it.
+     */
+    @Test
+    fun anthropicFallsBackToTheErrorTypeWhenTheMessageIsOnlySpaces() {
+        val body = """
+            {
+              "type": "error",
+              "error": {
+                "type": "overloaded_error",
+                "message": "   "
+              }
+            }
+        """.trimIndent()
+        ScriptedEndpoint(body, contentType = "application/json").use { endpoint ->
+            val failure = assertThrows(Exception::class.java) {
+                runBlocking {
+                    AnthropicMessagesProvider(
+                        apiKey = "test-key",
+                        model = "claude-3-7-sonnet",
+                        baseUrl = endpoint.baseUrl,
+                        transport = JavaNetHttpTransport(connectTimeoutMillis = 5_000, readTimeoutMillis = 5_000)
+                    ).generateStream(request()).toList()
+                }
+            }
+            assertTrue(
+                "expected the error type, got: ${failure.message}",
+                failure.message?.contains("Anthropic API error: overloaded_error") == true
+            )
+        }
+    }
+
+    /**
+     * The other half of the buffered-document arm: over the cap the body is
+     * *reported*, not handed over. [isEventStreamContentType]'s KDoc points here, so
+     * this case is what keeps that sentence true - a document branch that quietly
+     * truncated would hand a provider half a JSON body and read it as a complete
+     * answer.
+     */
+    @Test
+    fun bufferedDocumentOverTheCapFailsLoudlyInsteadOfBeingHandedOverTruncated() {
+        val padding = "x".repeat(200)
+        val body = buildString {
+            append("{\n")
+            repeat(600) { append("  \"field$it\": \"$padding\",\n") }
+            append("  \"content\": \"第一段内容\"\n")
+            append("}")
+        }
+        assertTrue("the fixture must outgrow the cap it tests", body.length > 64 * 1024)
+        ScriptedEndpoint(body, contentType = "application/json").use { endpoint ->
+            val failure = assertThrows(Exception::class.java) {
+                runBlocking {
+                    JavaNetHttpTransport(
+                        connectTimeoutMillis = 5_000,
+                        readTimeoutMillis = 5_000,
+                        maxResponseBytes = 64 * 1024
+                    ).postStream(HttpRequest(endpoint.url, emptyMap(), "{}")).toList()
+                }
+            }
+            assertTrue(
+                "expected the document cap to be named, got: ${failure.message}",
+                failure.message?.contains("exceeds maxResponseBytes") == true
+            )
+        }
+    }
+
+    /**
      * Both providers refuse to read an `error` body as a blank answer - but the
      * check runs on the whole body as one line, so a pretty-printed error
      * document used to slip past it and the turn ended as a successful empty

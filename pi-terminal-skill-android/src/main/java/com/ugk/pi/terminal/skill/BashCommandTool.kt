@@ -29,6 +29,8 @@ import kotlinx.coroutines.runInterruptible
 import kotlinx.coroutines.supervisorScope
 import kotlinx.coroutines.sync.Semaphore
 import kotlinx.coroutines.sync.withPermit
+import kotlinx.serialization.json.JsonElement
+import kotlinx.serialization.json.JsonNull
 import kotlinx.serialization.json.JsonObject
 import kotlinx.serialization.json.JsonPrimitive
 import kotlinx.serialization.json.buildJsonObject
@@ -261,8 +263,12 @@ class BashCommandTool(
         }
         // A wrong-typed timeoutMillis (object/array/boolean or a non-numeric
         // string) must surface as INVALID_TIMEOUT instead of silently running
-        // with the default timeout the model never chose.
-        val timeoutMillis = when (val rawTimeout = call.input["timeoutMillis"]) {
+        // with the default timeout the model never chose. A JSON null is not a
+        // wrong type: a Java/Pojo gateway emits `"timeoutMillis": null` for the
+        // optional it did not fill, and `JsonNull` is a `JsonPrimitive`, so reading
+        // the raw map made that default look like a refusal of a value the model
+        // never named.
+        val timeoutMillis = when (val rawTimeout = call.input.optionalElement("timeoutMillis")) {
             null -> policy.defaultTimeoutMillis
             is JsonPrimitive -> rawTimeout.longOrNull
                 ?: return error(
@@ -291,7 +297,7 @@ class BashCommandTool(
                 "workingDirectory must be a relative path inside the terminal workspace, " +
                     "must not contain . or .., and must not contain a NUL character."
             )
-        val environment = parseEnvironment(call.input["environment"])
+        val environment = parseEnvironment(call.input.optionalElement("environment"))
             ?: return error(
                 call,
                 "INVALID_ENVIRONMENT",
@@ -368,7 +374,7 @@ class BashCommandTool(
         return directory.takeIf { it.isDirectory }
     }
 
-    private fun parseEnvironment(value: kotlinx.serialization.json.JsonElement?): Map<String, String>? {
+    private fun parseEnvironment(value: JsonElement?): Map<String, String>? {
         if (value == null) return emptyMap()
         val environment = value as? JsonObject ?: return null
         if (environment.size > MAX_ENVIRONMENT_ENTRIES) return null
@@ -437,6 +443,17 @@ class BashCommandTool(
 
     private fun JsonObject.string(name: String): String? =
         (this[name] as? JsonPrimitive)?.contentOrNull
+
+    /**
+     * The value an argument declares for [key], or null when nobody filled it in.
+     *
+     * `parseEnvironment` and the `timeoutMillis` arm both read this instead of the
+     * raw map: `JsonNull` is a `JsonPrimitive`, so `this[key]` cannot tell an
+     * endpoint's unfilled optional apart from a value the model chose, and treating
+     * it as one refused calls that should have taken the documented default.
+     */
+    private fun JsonObject.optionalElement(key: String): JsonElement? =
+        this[key]?.takeUnless { it is JsonNull }
 
     private class ExecutionState {
         private var worker: Job? = null
