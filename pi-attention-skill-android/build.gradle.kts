@@ -41,4 +41,6 @@ afterEvaluate {
 
 dependencies {
     api(project(":ugk-pi-android"))
+
+    testImplementation("junit:junit:4.13.2")
 }

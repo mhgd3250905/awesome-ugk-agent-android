@@ -7,6 +7,8 @@ import com.ugk.pi.android.AndroidSkillMethod
 import com.ugk.pi.android.ToolCall
 import com.ugk.pi.android.ToolExecutionContext
 import com.ugk.pi.android.ToolResult
+import kotlinx.serialization.json.JsonElement
+import kotlinx.serialization.json.JsonNull
 import kotlinx.serialization.json.JsonObject
 import kotlinx.serialization.json.JsonArray
 import kotlinx.serialization.json.JsonPrimitive
@@ -122,9 +124,17 @@ private class ShowUrgentMessageTool(
                 ?: return invalidInput(call)
         } ?: UrgentAccent.AMBER
         val blocks = call.input.readUrgentBlocks() ?: return invalidInput(call)
-        if (!supportsInteractions && ("actions" in call.input || "form" in call.input)) return invalidInput(call)
+        if (!supportsInteractions &&
+            (call.input.declaresControl("actions") || call.input.declaresControl("form"))
+        ) {
+            return invalidInput(call)
+        }
         val actions = call.input.readUrgentActions() ?: return invalidInput(call)
-        val form = if ("form" in call.input) call.input.readUrgentForm() ?: return invalidInput(call) else null
+        val form = if (call.input.declaresControl("form")) {
+            call.input.readUrgentForm() ?: return invalidInput(call)
+        } else {
+            null
+        }
         if (form != null && actions.any { it.id == form.id }) return invalidInput(call)
         val presentationId = UUID.randomUUID().toString()
         val delivery = publisher.publish(message)
@@ -176,10 +186,27 @@ private fun JsonObject.readMessage(): AttentionMessage? {
 }
 
 private fun JsonObject.stringValue(key: String): String? =
-    (this[key] as? JsonPrimitive)?.takeIf { it.isString }?.content
+    (optionalElement(key) as? JsonPrimitive)?.takeIf { it.isString }?.content
 
-private fun JsonObject.readUrgentBlocks(): List<UrgentContentBlock>? {
-    val value = this["blocks"] ?: return emptyList()
+/**
+ * An optional argument a gateway serialized as JSON `null` means the same thing
+ * as one the model left out. POJO/Jackson-style endpoints emit `"blocks":null`
+ * and `"offset":null` for fields they do not fill in, and the providers in this
+ * SDK already read that shape as absent - a presence test written against the
+ * raw map treats it as a request instead, and rejects the whole call.
+ */
+private fun JsonObject.optionalElement(key: String): JsonElement? =
+    this[key]?.takeUnless { it is JsonNull }
+
+/**
+ * Optional ordered content for the urgent screen.
+ *
+ * Internal so the argument table can be executed by a host-side unit test: the
+ * Tools that read it need an [AndroidNotificationPublisher], and that needs an
+ * Android [android.content.Context].
+ */
+internal fun JsonObject.readUrgentBlocks(): List<UrgentContentBlock>? {
+    val value = optionalElement("blocks") ?: return emptyList()
     val array = value as? JsonArray ?: return null
     if (array.size > MAX_URGENT_BLOCKS) return null
     return array.map { element ->
@@ -195,8 +222,9 @@ private fun JsonObject.readUrgentBlocks(): List<UrgentContentBlock>? {
     }
 }
 
-private fun JsonObject.readUrgentActions(): List<UrgentAction>? {
-    val value = this["actions"] ?: return emptyList()
+/** See [readUrgentBlocks] for why this is internal. */
+internal fun JsonObject.readUrgentActions(): List<UrgentAction>? {
+    val value = optionalElement("actions") ?: return emptyList()
     val array = value as? JsonArray ?: return null
     if (array.size > MAX_URGENT_ACTIONS) return null
     val actions = array.map { element ->
@@ -211,14 +239,21 @@ private fun JsonObject.readUrgentActions(): List<UrgentAction>? {
     return actions.takeIf { items -> items.map { it.id }.toSet().size == items.size }
 }
 
-private fun JsonObject.readUrgentForm(): UrgentForm? {
-    val item = this["form"] as? JsonObject ?: return null
+/**
+ * See [readUrgentBlocks] for why this is internal.
+ *
+ * A `null` and a wrong-shaped value both read as "no form" here; which of the
+ * two it was is the caller's decision, made with [declaresControl], so a
+ * declared-but-unusable form is refused rather than quietly dropped.
+ */
+internal fun JsonObject.readUrgentForm(): UrgentForm? {
+    val item = optionalElement("form") as? JsonObject ?: return null
     if (item.keys.any { it !in setOf("id", "label", "placeholder", "submitLabel") }) return null
     val id = item.stringValue("id")?.takeIf(::validControlId) ?: return null
     val label = item.stringValue("label")?.trim()
         ?.takeIf { it.isNotEmpty() && it.length <= MAX_FORM_LABEL_CHARS }
         ?: return null
-    val placeholder = if ("placeholder" in item) {
+    val placeholder = if (item.declaresControl("placeholder")) {
         item.stringValue("placeholder")?.trim()
             ?.takeIf { it.length <= MAX_FORM_PLACEHOLDER_CHARS } ?: return null
     } else ""
@@ -228,7 +263,14 @@ private fun JsonObject.readUrgentForm(): UrgentForm? {
     return UrgentForm(id, label, placeholder, submitLabel)
 }
 
-private fun validControlId(id: String): Boolean =
+/**
+ * True when the model actually asked for this optional control, as opposed to an
+ * endpoint filling the key with `null`.
+ */
+internal fun JsonObject.declaresControl(key: String): Boolean = optionalElement(key) != null
+
+/** See [readUrgentBlocks] for why this is internal. */
+internal fun validControlId(id: String): Boolean =
     id.length in 1..MAX_CONTROL_ID_CHARS &&
         (id[0] in 'A'..'Z' || id[0] in 'a'..'z') &&
         id.drop(1).all { char ->
