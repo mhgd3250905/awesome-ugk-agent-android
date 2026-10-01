@@ -243,19 +243,14 @@ class AlarmManagerAgentTaskScheduler(context: Context) : AgentTaskScheduler, Ter
 
     private fun scheduleNotificationAlarm(taskId: String, nextRunAt: Long) {
         val trigger = pendingIntent(taskId)
-        if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.M) {
-            // This is intentionally not an exact alarm. A reminder may be
-            // delayed by Doze, while no special exact-alarm permission is
-            // needed for the ordinary persistent-task path.
-            alarmManager.setAndAllowWhileIdle(
-                AlarmManager.RTC_WAKEUP,
-                nextRunAt,
-                trigger
-            )
-        } else {
-            @Suppress("DEPRECATION")
-            alarmManager.set(AlarmManager.RTC_WAKEUP, nextRunAt, trigger)
-        }
+        // This is intentionally not an exact alarm. A reminder may be
+        // delayed by Doze, while no special exact-alarm permission is
+        // needed for the ordinary persistent-task path.
+        alarmManager.setAndAllowWhileIdle(
+            AlarmManager.RTC_WAKEUP,
+            nextRunAt,
+            trigger
+        )
     }
 
     private fun scheduleAgentJob(task: AgentTask, nextRunAt: Long) {
@@ -292,12 +287,7 @@ class AlarmManagerAgentTaskScheduler(context: Context) : AgentTaskScheduler, Ter
 
     private fun pendingIntent(taskId: String): PendingIntent {
         val intent = AgentTaskAlarmReceiver.fireIntent(appContext, taskId)
-        val flags = PendingIntent.FLAG_UPDATE_CURRENT or
-            if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.M) {
-                PendingIntent.FLAG_IMMUTABLE
-            } else {
-                0
-            }
+        val flags = PendingIntent.FLAG_UPDATE_CURRENT or PendingIntent.FLAG_IMMUTABLE
         return PendingIntent.getBroadcast(
             appContext,
             stableRequestCode(taskId),
@@ -373,12 +363,7 @@ object DefaultAgentTaskNotificationSink : AgentTaskNotificationSink {
                 appContext,
                 task.id.hashCode() and Int.MAX_VALUE,
                 it,
-                PendingIntent.FLAG_UPDATE_CURRENT or
-                    if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.M) {
-                        PendingIntent.FLAG_IMMUTABLE
-                    } else {
-                        0
-                    }
+                PendingIntent.FLAG_UPDATE_CURRENT or PendingIntent.FLAG_IMMUTABLE
             )
         }
         builder

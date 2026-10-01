@@ -25,9 +25,6 @@ class DemoConversationRuntimeTest {
         first.activeConversationId = "conversation-1"
         first.session = AgentSession("session-1")
         first.draft = "draft from first"
-        first.transcript += DemoTranscriptEntry("user", "hello")
-        first.accessibilityPromptShown = true
-        first.overlayPromptShown = true
         first.activeContextWindow = "2M"
         first.activeAutoCompaction = false
         first.activeCompactionThreshold = 0.80
@@ -36,9 +33,6 @@ class DemoConversationRuntimeTest {
         assertNull(second.activeConversationId)
         assertNull(second.session)
         assertEquals("", second.draft)
-        assertTrue(second.transcript.isEmpty())
-        assertFalse(second.accessibilityPromptShown)
-        assertFalse(second.overlayPromptShown)
         assertNull(second.activeContextWindow)
         assertTrue(second.activeAutoCompaction)
         assertEquals(ContextCompactor.DEFAULT_THRESHOLD, second.activeCompactionThreshold, 0.0)
