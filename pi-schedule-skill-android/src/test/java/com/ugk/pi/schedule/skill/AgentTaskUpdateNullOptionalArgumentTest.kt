@@ -38,46 +38,51 @@ class AgentTaskUpdateNullOptionalArgumentTest {
         put("message", JsonPrimitive("该喝水了"))
     }
 
+    /**
+     * One key at a time: nulling both would let the first refusal hide the second,
+     * and they are two separate landing points in the tool.
+     */
     @Test
-    fun nullScheduleAndActionKeepTheExistingTask() = runBlocking {
-        val store = InMemoryAgentTaskStore()
-        val created = AgentTaskCreateTool(
-            store,
-            NoopAgentTaskScheduler,
-            FixedClock(1_000L),
-            SequentialTaskIdGenerator("task")
-        ).execute(
-            call(
-                "agent_task_create",
-                "title" to JsonPrimitive("喝水提醒"),
-                "schedule" to oneShotSchedule(),
-                "action" to notifyAction()
-            ),
-            context()
-        )
-        assertFalse("the create itself must succeed: ${created.content}", created.isError)
-        val existing = store.get("task_1") ?: error("task not stored")
+    fun nullScheduleOrActionKeepsTheExistingTask() = runBlocking {
+        for (key in listOf("schedule", "action")) {
+            val store = InMemoryAgentTaskStore()
+            val created = AgentTaskCreateTool(
+                store,
+                NoopAgentTaskScheduler,
+                FixedClock(1_000L),
+                SequentialTaskIdGenerator("task")
+            ).execute(
+                call(
+                    "agent_task_create",
+                    "title" to JsonPrimitive("喝水提醒"),
+                    "schedule" to oneShotSchedule(),
+                    "action" to notifyAction()
+                ),
+                context()
+            )
+            assertFalse("the create itself must succeed: ${created.content}", created.isError)
+            val existing = store.get("task_1") ?: error("task not stored")
 
-        val updated = AgentTaskUpdateTool(store, NoopAgentTaskScheduler, FixedClock(2_000L)).execute(
-            call(
-                "agent_task_update",
-                "taskId" to JsonPrimitive("task_1"),
-                "title" to JsonPrimitive("补水提醒"),
-                "schedule" to JsonNull,
-                "action" to JsonNull
-            ),
-            context()
-        )
+            val updated = AgentTaskUpdateTool(store, NoopAgentTaskScheduler, FixedClock(2_000L)).execute(
+                call(
+                    "agent_task_update",
+                    "taskId" to JsonPrimitive("task_1"),
+                    "title" to JsonPrimitive("补水提醒"),
+                    key to JsonNull
+                ),
+                context()
+            )
 
-        assertFalse(
-            "a null schedule is the model not changing it, not an invalid one: ${updated.content}",
-            updated.isError
-        )
-        val stored = store.get("task_1")!!
-        assertEquals("补水提醒", stored.title)
-        assertEquals(existing.schedule, stored.schedule)
-        assertEquals(existing.action, stored.action)
-        assertEquals(existing.nextRunAtMillis, stored.nextRunAtMillis)
+            assertFalse(
+                "a null $key is the model not changing it, not an invalid one: ${updated.content}",
+                updated.isError
+            )
+            val stored = store.get("task_1")!!
+            assertEquals("补水提醒", stored.title)
+            assertEquals(existing.schedule, stored.schedule)
+            assertEquals(existing.action, stored.action)
+            assertEquals(existing.nextRunAtMillis, stored.nextRunAtMillis)
+        }
     }
 
     /** The other direction: a declared replacement still replaces. */
