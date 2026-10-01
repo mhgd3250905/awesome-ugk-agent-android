@@ -308,12 +308,12 @@ class AgentAttentionOptionalArgumentTest {
         )
         assertEquals(
             "a non-interactive urgent host has no controls to accept",
-            setOf("title", "body", "reason", "blocks"),
+            setOf("title", "body", "reason", "accent", "blocks"),
             messageArgumentKeys(withReason = true, withInteractions = false)
         )
         assertEquals(
             "an interactive urgent host adds exactly actions and form",
-            setOf("title", "body", "reason", "blocks", "actions", "form"),
+            setOf("title", "body", "reason", "accent", "blocks", "actions", "form"),
             messageArgumentKeys(withReason = true, withInteractions = true)
         )
     }
