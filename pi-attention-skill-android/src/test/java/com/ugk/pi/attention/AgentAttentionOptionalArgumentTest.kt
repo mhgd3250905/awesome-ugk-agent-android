@@ -29,8 +29,9 @@ import org.junit.Test
  * The readers are exercised directly because the Tools that call them need an
  * [AndroidNotificationPublisher], and that needs an Android
  * [android.content.Context]. The cost of that seam is stated rather than hidden:
- * these cases pin what a reader answers, not that the Tool calls it - which is
- * why each reader is reached by exactly one mutation row in the review evidence.
+ * these cases pin what a reader answers and which keys the Tools look at, not that
+ * a Tool routes a given key through a given reader - that half needs the device
+ * side.
  */
 class AgentAttentionOptionalArgumentTest {
 
@@ -227,36 +228,110 @@ class AgentAttentionOptionalArgumentTest {
 
     /**
      * The optional keys are read off the tool's own schema rather than a list
-     * written next to this test, so a new optional argument arrives with a null
+     * written next to this test, so a new optional argument arrives with a reader
      * case already waiting for it - and the expected set is pinned too, otherwise
      * a schema edit could quietly shrink the fold to nothing.
+     *
+     * Each key is asserted through *its own reader*: `declaresControl` alone does
+     * not care which key it is handed, so a per-key loop over that function would
+     * pass for any string.
      */
     @Test
     fun everyOptionalArgumentOfTheUrgentSchemaReadsNullAsAbsent() {
         val schema = urgentMessageSchema()
         val properties = (schema["properties"] as JsonObject).keys
         val required = (schema["required"] as JsonArray).map { (it as JsonPrimitive).content }
-        val optional = properties - required.toSet()
+        val readersByKey: Map<String, (JsonObject) -> Any?> = mapOf(
+            "accent" to { it.readUrgentAccent() },
+            "blocks" to { it.readUrgentBlocks() },
+            "actions" to { it.readUrgentActions() },
+            "form" to { it.readUrgentForm() }
+        )
         assertEquals(
             "the urgent-message tool's optional arguments",
-            setOf("accent", "blocks", "actions", "form"),
-            optional
+            readersByKey.keys,
+            properties - required.toSet()
         )
-        assertTrue("the fold must not be empty", optional.isNotEmpty())
-        for (key in optional) {
+        for ((key, read) in readersByKey) {
+            val nullArgument = buildJsonObject { put(key, JsonNull) }
+            val expected = when (key) {
+                "accent" -> UrgentAccent.AMBER
+                "blocks" -> emptyList<UrgentContentBlock>()
+                "actions" -> emptyList<UrgentAction>()
+                else -> null
+            }
+            assertEquals(
+                "$key serialized as null must read as the default, not a refusal",
+                expected,
+                read(nullArgument)
+            )
+            assertFalse(
+                "$key: a null is not a request for that control",
+                nullArgument.declaresControl(key)
+            )
             assertFalse(
                 "$key: absent must not declare",
                 buildJsonObject {}.declaresControl(key)
-            )
-            assertFalse(
-                "$key: JsonNull must not declare",
-                buildJsonObject { put(key, JsonNull) }.declaresControl(key)
             )
             assertTrue(
                 "$key: a value must declare",
                 buildJsonObject { put(key, "value") }.declaresControl(key)
             )
         }
+    }
+
+    /**
+     * Both tools publish `additionalProperties: false`. A key outside the schema is
+     * therefore something the model was told not to send, and silently ignoring it
+     * lets an argument nobody implemented look honoured to the caller.
+     */
+    @Test
+    fun undeclaredArgumentNamesAreVisibleToBothTools() {
+        val notificationOnly = buildJsonObject {
+            put("title", "标题")
+            put("body", "正文")
+        }
+        assertFalse(notificationOnly.declaresUndeclaredArgument(messageArgumentKeys(withInteractions = false)))
+        assertTrue(
+            "an urgency knob is not an argument of this tool",
+            buildJsonObject {
+                put("title", "标题")
+                put("body", "正文")
+                put("urgency", "critical")
+            }.declaresUndeclaredArgument(messageArgumentKeys(withInteractions = false))
+        )
+
+        val urgentWithoutInteractions = buildJsonObject {
+            put("title", "标题")
+            put("body", "正文")
+            put("reason", "理由")
+            put("accent", "red")
+            put("blocks", JsonArray(emptyList()))
+        }
+        assertFalse(urgentWithoutInteractions.declaresUndeclaredArgument(messageArgumentKeys(withInteractions = false)))
+        assertTrue(
+            "a non-interactive host must not see actions as a declared argument",
+            buildJsonObject {
+                put("title", "标题")
+                put("body", "正文")
+                put("reason", "理由")
+                put("actions", JsonArray(emptyList()))
+            }.declaresUndeclaredArgument(messageArgumentKeys(withInteractions = false))
+        )
+        assertFalse(
+            "an interactive host accepts actions",
+            buildJsonObject {
+                put("title", "标题")
+                put("body", "正文")
+                put("reason", "理由")
+                put("actions", JsonArray(emptyList()))
+            }.declaresUndeclaredArgument(messageArgumentKeys(withInteractions = true))
+        )
+        assertEquals(
+            "the declared keys must be exactly what the schema lists",
+            (urgentMessageSchema()["properties"] as JsonObject).keys,
+            messageArgumentKeys(withInteractions = true)
+        )
     }
 
     @Test

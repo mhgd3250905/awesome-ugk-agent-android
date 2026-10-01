@@ -84,7 +84,7 @@ class DemoDelayedTaskProposalArgumentsTest {
     }
 
     @Test
-    fun requiredUnknownAndBlankFieldsKeepTheirOwnRefusals() {
+    fun missingDelaySecondsIsRefusedEvenWhenRepeatingIsNull() {
         val missingDelay = readDelayProposalArguments(
             buildJsonObject {
                 put("instruction", JsonPrimitive("提醒我喝水"))
@@ -95,7 +95,10 @@ class DemoDelayedTaskProposalArgumentsTest {
             "delaySeconds must be an integer.",
             (missingDelay as DelayProposalArguments.Refused).message
         )
+    }
 
+    @Test
+    fun unknownFieldIsRefused() {
         val unknown = readDelayProposalArguments(
             buildJsonObject {
                 put("delaySeconds", JsonPrimitive(60))
@@ -105,7 +108,10 @@ class DemoDelayedTaskProposalArgumentsTest {
             }
         )
         assertEquals("Unknown timer proposal field.", (unknown as DelayProposalArguments.Refused).message)
+    }
 
+    @Test
+    fun blankInstructionIsRefused() {
         val blank = readDelayProposalArguments(
             buildJsonObject {
                 put("delaySeconds", JsonPrimitive(60))
@@ -116,6 +122,49 @@ class DemoDelayedTaskProposalArgumentsTest {
         assertEquals(
             "instruction must contain 1 to 2000 characters.",
             (blank as DelayProposalArguments.Refused).message
+        )
+    }
+
+    /**
+     * The check order is what the model reads, so it is part of the behaviour: the
+     * extraction must not reorder it. `repeating` is judged before `instruction`,
+     * and the interval range before `repeating`.
+     */
+    @Test
+    fun checkOrderIsUnchangedWhenSeveralFieldsAreBad() {
+        val repeatingAndInstruction = readDelayProposalArguments(
+            buildJsonObject {
+                put("delaySeconds", JsonPrimitive(60))
+                put("instruction", JsonPrimitive(""))
+                put("repeating", JsonPrimitive("yes"))
+            }
+        )
+        assertEquals(
+            "repeating must be a boolean.",
+            (repeatingAndInstruction as DelayProposalArguments.Refused).message
+        )
+
+        val rangeAndRepeating = readDelayProposalArguments(
+            buildJsonObject {
+                put("delaySeconds", JsonPrimitive(0))
+                put("instruction", JsonPrimitive("提醒我喝水"))
+                put("repeating", JsonPrimitive("yes"))
+            }
+        )
+        assertEquals(
+            "The timer accepts intervals from 1 second to 24 hours.",
+            (rangeAndRepeating as DelayProposalArguments.Refused).message
+        )
+
+        val unknownAndDelay = readDelayProposalArguments(
+            buildJsonObject {
+                put("instruction", JsonPrimitive("提醒我喝水"))
+                put("cron", JsonPrimitive("0 8 * * *"))
+            }
+        )
+        assertEquals(
+            "Unknown timer proposal field.",
+            (unknownAndDelay as DelayProposalArguments.Refused).message
         )
     }
 }

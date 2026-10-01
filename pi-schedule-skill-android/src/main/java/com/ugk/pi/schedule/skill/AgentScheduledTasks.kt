@@ -769,6 +769,19 @@ private fun taskInputSchema(requireTaskId: Boolean): JsonObject = buildJsonObjec
             put("type", "object")
         }
     }
+    // The arguments the tool refuses when they are missing. Advertising no required
+    // list at all told the model everything was optional, so a call written from the
+    // schema came back as MISSING_TASK_ID / MISSING_TITLE - and `agent_task_cancel`
+    // on the same argument already declared it, so the two schemas disagreed.
+    putJsonArray("required") {
+        if (requireTaskId) {
+            add(JsonPrimitive("taskId"))
+        } else {
+            add(JsonPrimitive("title"))
+            add(JsonPrimitive("schedule"))
+            add(JsonPrimitive("action"))
+        }
+    }
 }
 
 private fun taskIdSchema(): JsonObject = buildJsonObject {

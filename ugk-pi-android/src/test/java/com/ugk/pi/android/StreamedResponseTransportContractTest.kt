@@ -129,7 +129,7 @@ class StreamedResponseTransportContractTest {
     }
 
     @Test
-    fun anthropicStillReceivesSseDeltasLineByLineFromTheShippedTransport() {
+    fun anthropicStillReceivesEverySseDeltaFromTheShippedTransport() {
         ScriptedEndpoint(anthropicSseBody, contentType = "text/event-stream").use { endpoint ->
             val chunks = runBlocking {
                 AnthropicMessagesProvider(
@@ -457,7 +457,8 @@ class StreamedResponseTransportContractTest {
             }
             assertTrue(
                 "expected the endpoint's own error text, got: ${failure.message}",
-                failure.message?.contains("Overloaded") == true
+                failure.message?.contains("Anthropic API error") == true &&
+                    failure.message?.contains("Overloaded") == true
             )
         }
     }
@@ -485,7 +486,8 @@ class StreamedResponseTransportContractTest {
             }
             assertTrue(
                 "expected the endpoint's own error text, got: ${failure.message}",
-                failure.message?.contains("quota exceeded") == true
+                failure.message?.contains("OpenAI") == true &&
+                    failure.message?.contains("quota exceeded") == true
             )
         }
     }
@@ -572,7 +574,7 @@ class StreamedResponseTransportContractTest {
     }
 
     @Test
-    fun openAiStillReceivesSseDeltasLineByLineFromTheShippedTransport() {
+    fun openAiStillReceivesEverySseDeltaFromTheShippedTransport() {
         ScriptedEndpoint(openAiSseBody, contentType = "text/event-stream").use { endpoint ->
             val chunks = runBlocking {
                 OpenAiChatCompletionsProvider(
@@ -762,8 +764,11 @@ class StreamedResponseTransportContractTest {
         filterIsInstance<ModelStreamChunk.Completed>().lastOrNull()?.response
 
     /**
-     * One-shot loopback endpoint on an ephemeral port, so it cannot collide with
-     * the documented managed-server ports.
+     * Loopback endpoint on an ephemeral port, so it cannot collide with the
+     * documented managed-server ports. It answers every connection handed to it
+     * until it is closed: a case that drives the transport and then a provider
+     * makes more than one request, and a one-shot server would fail that at the
+     * socket - a red that would read as a transport defect.
      */
     private class ScriptedEndpoint(body: String, contentType: String?) : Closeable {
         private val server = ServerSocket(0, 16, java.net.InetAddress.getLoopbackAddress())

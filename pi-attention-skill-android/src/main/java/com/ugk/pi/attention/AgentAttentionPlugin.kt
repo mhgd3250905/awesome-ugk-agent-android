@@ -89,6 +89,9 @@ private class SendNotificationTool(
     override val inputSchema: JsonObject = messageSchema()
 
     override suspend fun execute(call: ToolCall, context: ToolExecutionContext): ToolResult {
+        if (call.input.declaresUndeclaredArgument(messageArgumentKeys(withInteractions = false))) {
+            return invalidInput(call)
+        }
         val message = call.input.readMessage() ?: return invalidInput(call)
         val delivery = publisher.publish(message)
         return ToolResult(
@@ -114,6 +117,9 @@ private class ShowUrgentMessageTool(
     override val inputSchema: JsonObject = messageSchema(withReason = true, withInteractions = supportsInteractions)
 
     override suspend fun execute(call: ToolCall, context: ToolExecutionContext): ToolResult {
+        if (call.input.declaresUndeclaredArgument(messageArgumentKeys(withInteractions = supportsInteractions))) {
+            return invalidInput(call)
+        }
         val message = call.input.readMessage() ?: return invalidInput(call)
         if (message.body.length > MAX_URGENT_BODY_CHARS) return invalidInput(call)
         val reason = call.input.stringValue("reason")?.trim()
@@ -183,9 +189,13 @@ private fun JsonObject.readMessage(): AttentionMessage? {
 }
 
 /**
- * Reads a string field. A `null` is not screened here: every field reachable
- * through this reader is required by the schema, and an explicitly null
- * optional is refused one level up by [declaresControl] before it gets here.
+ * Reads a string field as a string, and nothing else: a number, an object or a
+ * JSON `null` all answer null.
+ *
+ * Callers decide what that means. The required fields treat it as a refusal; the
+ * two optional strings ([readUrgentAccent] and a form's placeholder) ask
+ * [declaresControl] first, so a field nobody filled in takes its default and a
+ * field filled in with garbage is refused instead of quietly recoloured.
  */
 private fun JsonObject.stringValue(key: String): String? =
     (this[key] as? JsonPrimitive)?.takeIf { it.isString }?.content
@@ -290,6 +300,24 @@ internal fun JsonObject.readUrgentAccent(): UrgentAccent? =
             UrgentAccent.entries.firstOrNull { it.name.equals(name, ignoreCase = true) }
         }
     }
+
+/**
+ * True when the arguments name a key the schema does not declare. Both tools
+ * publish `additionalProperties: false`, so a stray key is something the model was
+ * told it must not send; accepting it silently is how an argument nobody
+ * implemented looks honoured to the caller.
+ *
+ * See [readUrgentBlocks] for why this is internal.
+ */
+internal fun JsonObject.declaresUndeclaredArgument(allowed: Set<String>): Boolean =
+    keys.any { it !in allowed }
+
+/** The argument names [messageSchema] declares for one call shape. */
+internal fun messageArgumentKeys(withInteractions: Boolean): Set<String> =
+    if (withInteractions) MESSAGE_ARGUMENT_KEYS + INTERACTION_ARGUMENT_KEYS else MESSAGE_ARGUMENT_KEYS
+
+private val MESSAGE_ARGUMENT_KEYS = setOf("title", "body", "reason", "accent", "blocks")
+private val INTERACTION_ARGUMENT_KEYS = setOf("actions", "form")
 
 /** The schema the urgent-message Tool answers to, exposed so its optional keys can be enumerated. */
 internal fun urgentMessageSchema(): JsonObject = messageSchema(withReason = true, withInteractions = true)

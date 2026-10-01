@@ -35,41 +35,48 @@ class SkillSaveNullOptionalArgumentTest {
     private fun repository(): SkillRepository = SkillRepository(tempFolder.newFolder())
 
     /**
-     * One key at a time: a case that nulls all four would let the first refusal
-     * hide the other three, and each landing point is a separate line of code.
+     * One test per key: assertions inside a shared loop let the first refusal hide
+     * the later ones, and each key is a separate landing point of the rule.
      */
     @Test
-    fun nullOptionalArgumentsUseTheDeclaredDefaults() = runBlocking {
-        val optionalKeys = listOf("loadPolicy", "triggers", "embedFiles", "overwrite")
-        for ((index, key) in optionalKeys.withIndex()) {
-            val result = SkillSaveTool(repository()).execute(
-                call(
-                    "name" to JsonPrimitive("null-" + key.lowercase()),
-                    "description" to JsonPrimitive("A guide."),
-                    "body" to JsonPrimitive("Version one."),
-                    key to JsonNull
-                ),
-                context()
-            )
-            assertFalse(
-                "$index: a null $key is an unfilled $key, not a refusal: ${result.content}",
-                result.isError
-            )
-            assertTrue("$index: $key must create the skill", result.content.startsWith("Created skill"))
-        }
-        val defaults = SkillSaveTool(repository()).execute(
+    fun nullLoadPolicyUsesTheSchemaDefault() = runBlocking {
+        assertNullOptionalIsUnfilled("loadPolicy", "null-loadpolicy")
+    }
+
+    @Test
+    fun nullTriggersAreAnUnfilledList() = runBlocking {
+        assertNullOptionalIsUnfilled("triggers", "null-triggers")
+    }
+
+    @Test
+    fun nullEmbedFilesAreAnUnfilledList() = runBlocking {
+        assertNullOptionalIsUnfilled("embedFiles", "null-embedfiles")
+    }
+
+    @Test
+    fun nullOverwriteIsTheDefaultFalse() = runBlocking {
+        assertNullOptionalIsUnfilled("overwrite", "null-overwrite")
+    }
+
+    private suspend fun assertNullOptionalIsUnfilled(key: String, skillName: String) {
+        val result = SkillSaveTool(repository()).execute(
             call(
-                "name" to JsonPrimitive("null-loadpolicy"),
+                "name" to JsonPrimitive(skillName),
                 "description" to JsonPrimitive("A guide."),
                 "body" to JsonPrimitive("Version one."),
-                "loadPolicy" to JsonNull
+                key to JsonNull
             ),
             context()
         )
+        assertFalse(
+            "a null $key is an unfilled $key, not a refusal: ${result.content}",
+            result.isError
+        )
+        assertTrue("a null $key must still create the skill", result.content.startsWith("Created skill"))
         assertEquals(
-            "the schema default must be what a null resolves to",
+            "the schema default for a null $key",
             "triggered",
-            (defaults.metadata["loadPolicy"] as? JsonPrimitive)?.content
+            (result.metadata["loadPolicy"] as? JsonPrimitive)?.content
         )
     }
 
@@ -100,6 +107,11 @@ class SkillSaveNullOptionalArgumentTest {
             context()
         )
         assertTrue("a null overwrite must not replace an existing skill", refused.isError)
+        assertEquals(
+            "the refusal must name the argument it refused",
+            "SKILL_EXISTS",
+            (refused.metadata["code"] as? JsonPrimitive)?.content
+        )
 
         val allowed = SkillSaveTool(repository).execute(
             call(
@@ -118,10 +130,10 @@ class SkillSaveNullOptionalArgumentTest {
     @Test
     fun declaredGarbageOptionalsAreStillRefused() = runBlocking {
         val cases = listOf(
-            "loadPolicy as a number" to ("loadPolicy" to JsonPrimitive(5)),
-            "triggers as a number" to ("triggers" to JsonPrimitive(5)),
-            "embedFiles as a number" to ("embedFiles" to JsonPrimitive(5)),
-            "overwrite as a string" to ("overwrite" to JsonPrimitive("true"))
+            "loadPolicy as a number" to Triple("loadPolicy", JsonPrimitive(5), "INVALID_LOAD_POLICY"),
+            "triggers as a number" to Triple("triggers", JsonPrimitive(5), "INVALID_TRIGGERS"),
+            "embedFiles as a number" to Triple("embedFiles", JsonPrimitive(5), "INVALID_EMBED_FILES"),
+            "overwrite as a string" to Triple("overwrite", JsonPrimitive("true"), "INVALID_OVERWRITE")
         )
         cases.forEachIndexed { index, (label, argument) ->
             val result = SkillSaveTool(repository()).execute(
@@ -133,7 +145,14 @@ class SkillSaveNullOptionalArgumentTest {
                 ),
                 context()
             )
-            assertTrue("$label must be refused, got: ${result.content}", result.isError)
+            // Bare isError would also be satisfied by a bad name, a missing skill
+            // or any other refusal, so the code is the assertion that carries the
+            // meaning.
+            assertEquals(
+                "$label must be refused for its own reason, got: ${result.content}",
+                argument.third,
+                (result.metadata["code"] as? JsonPrimitive)?.content
+            )
         }
     }
 

@@ -78,12 +78,16 @@ private class ProposeDelayTool(
         if (arguments is DelayProposalArguments.Refused) {
             return error(call, arguments.message)
         }
-        arguments as DelayProposalArguments.Valid
+        // The refusal branch returned, so only Valid remains; the explicit cast is
+        // what the compiler cannot see across the sealed check here. A third
+        // subtype would surface as an error ToolResult, not a crash: the runtime
+        // catches Throwable out of every tool.
+        val accepted = arguments as DelayProposalArguments.Valid
         val proposed = controller.propose(
             context.sessionId,
-            arguments.instruction,
-            arguments.delaySeconds,
-            arguments.repeating
+            accepted.instruction,
+            accepted.delaySeconds,
+            accepted.repeating
         ).getOrElse { return error(call, it.message ?: "Unable to propose a delayed task.") }
         val description = if (proposed.repeating) {
             "请确认：每 ${proposed.delaySeconds} 秒执行「${proposed.instruction}」，直到手动停止；首次在确认后一个间隔执行。"
