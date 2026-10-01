@@ -423,4 +423,44 @@ class DemoTeachingCompilationLimitsTest {
         assertFalse("single-batch read-back must not advise switching batches: $page",
             page.contains("可换批次回查"))
     }
+
+    /**
+     * `offset` and `includeImages` are optional with defaults, and a Java/Pojo
+     * gateway serializes them as JSON null instead of omitting them. A raw
+     * presence test read that as "the model asked for a broken offset" and refused
+     * the read-back, so the Agent was told its own optional argument was invalid.
+     */
+    @Test fun evidenceReadBackTreatsNullOptionalArgumentsAsAbsent() = runBlocking {
+        val store = DemoTeachingStore(temporary.newFolder())
+        val id = UUID.randomUUID().toString(); store.create(id, "空参数")
+        val raw = ByteArray(2048) { (it % 251).toByte() }
+        val images = (1..2).map { store.saveImage(id, raw) }
+        store.update(id) { record -> record.copy(status = "finished", segments = listOf(
+            DemoTeachingSegment("s1", "指令", "completed", "回答", images.mapIndexed { index, name ->
+                DemoTeachingAction("a$index", "custom_observation", buildJsonObject { put("step", index) },
+                    "观察$index", isError = false, afterImage = name) })
+        )) }
+        val toolContent = mutableListOf<String>()
+        var reviewCalls = 0
+        val provider = object : LLMProvider {
+            override suspend fun generate(request: ModelRequest): ModelResponse {
+                if (stageOf(request) != DemoTeachingSopSkill.Stage.REVIEW_SOP) return respond(request, "笔记")
+                reviewCalls++
+                toolContent += request.messages.filterIsInstance<AgentMessage.Tool>().map { it.result.content }
+                return if (reviewCalls == 1) ModelResponse(content = "", toolCalls = listOf(ToolCall(
+                    "read-null-arguments", "read_teaching_evidence", buildJsonObject {
+                        put("index", 1); put("offset", JsonNull); put("includeImages", JsonNull)
+                    }))) else respond(request, "笔记")
+            }
+        }
+        runCatching { DemoTeachingCompiler({ provider }, store, ::skill).compile(store.read(id)!!) }
+        assertTrue("the null-argument read must still be answered: $reviewCalls", reviewCalls >= 2)
+        val page = toolContent.joinToString("\n")
+        // Only a read that ran can report where it started and how much it returned,
+        // and `includeImages` null has to mean the default: text without screenshots.
+        assertTrue("read-back payload must carry the served page: $page",
+            page.contains("\"offset\":0") && page.contains("\"returnedChars\""))
+        assertTrue("a null includeImages must not attach screenshots: $page",
+            page.contains("\"imagesSupplied\":0") && page.contains("\"imagesAvailable\":2"))
+    }
 }
