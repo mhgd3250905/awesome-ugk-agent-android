@@ -359,6 +359,69 @@ class StreamedResponseTransportContractTest {
         }
     }
 
+    /**
+     * Both providers refuse to read an `error` body as a blank answer - but the
+     * check runs on the whole body as one line, so a pretty-printed error
+     * document used to slip past it and the turn ended as a successful empty
+     * response instead of the named API failure.
+     */
+    @Test
+    fun anthropicReportsAnApiErrorFromAPrettyPrintedDocument() {
+        val body = """
+            {
+              "type": "error",
+              "error": {
+                "type": "overloaded_error",
+                "message": "Overloaded"
+              }
+            }
+        """.trimIndent()
+        ScriptedEndpoint(body, contentType = "application/json").use { endpoint ->
+            val failure = assertThrows(Exception::class.java) {
+                runBlocking {
+                    AnthropicMessagesProvider(
+                        apiKey = "test-key",
+                        model = "claude-3-7-sonnet",
+                        baseUrl = endpoint.baseUrl,
+                        transport = JavaNetHttpTransport(connectTimeoutMillis = 5_000, readTimeoutMillis = 5_000)
+                    ).generateStream(request()).toList()
+                }
+            }
+            assertTrue(
+                "expected the endpoint's own error text, got: ${failure.message}",
+                failure.message?.contains("Overloaded") == true
+            )
+        }
+    }
+
+    @Test
+    fun openAiReportsAnApiErrorFromAPrettyPrintedDocument() {
+        val body = """
+            {
+              "error": {
+                "message": "quota exceeded, top up to continue",
+                "type": "insufficient_quota"
+              }
+            }
+        """.trimIndent()
+        ScriptedEndpoint(body, contentType = "application/json").use { endpoint ->
+            val failure = assertThrows(Exception::class.java) {
+                runBlocking {
+                    OpenAiChatCompletionsProvider(
+                        apiKey = "test-key",
+                        model = "gpt-test",
+                        endpoint = endpoint.url,
+                        transport = JavaNetHttpTransport(connectTimeoutMillis = 5_000, readTimeoutMillis = 5_000)
+                    ).generateStream(request()).toList()
+                }
+            }
+            assertTrue(
+                "expected the endpoint's own error text, got: ${failure.message}",
+                failure.message?.contains("quota exceeded") == true
+            )
+        }
+    }
+
     private class PostOnlyTransport(private val response: HttpResponse) : HttpTransport {
         override suspend fun post(request: HttpRequest) = response
     }
