@@ -7,6 +7,7 @@ import com.ugk.pi.android.UserConfirmationRequiredTool
 
 import kotlinx.serialization.json.JsonArray
 import kotlinx.serialization.json.JsonElement
+import kotlinx.serialization.json.JsonNull
 import kotlinx.serialization.json.JsonObject
 import kotlinx.serialization.json.JsonPrimitive
 import kotlinx.serialization.json.add
@@ -84,7 +85,7 @@ class SkillSaveTool(
         val body = call.input.requiredString("body")
             ?: return errorResult(call, this.name, "MISSING_BODY", "body is required.")
 
-        val loadPolicyElement = call.input["loadPolicy"]
+        val loadPolicyElement = call.input.optionalElement("loadPolicy")
         val loadPolicyValue = when {
             loadPolicyElement == null -> "triggered"
             loadPolicyElement is JsonPrimitive && loadPolicyElement.isString ->
@@ -108,7 +109,7 @@ class SkillSaveTool(
             ?: return errorResult(call, this.name, "INVALID_TRIGGERS", "triggers must be strings.")
         val embedFiles = call.input.stringList("embedFiles")
             ?: return errorResult(call, this.name, "INVALID_EMBED_FILES", "embedFiles must be strings.")
-        val overwriteElement = call.input["overwrite"]
+        val overwriteElement = call.input.optionalElement("overwrite")
         val overwrite = when {
             overwriteElement == null -> false
             overwriteElement is JsonPrimitive && !overwriteElement.isString ->
@@ -211,6 +212,15 @@ private fun skillMetadata(
     put("path", "agent-skills/${manifest.name}/SKILL.md")
 }
 
+/**
+ * An optional argument a gateway serialized as JSON null carries the same intent
+ * as one the model left out. `JsonNull` is a value, so a raw map lookup reads it
+ * as "the model filled this in" and refuses the whole save - and for `overwrite`
+ * the only safe reading of "nobody said yes" is the documented default, false.
+ */
+private fun JsonObject.optionalElement(key: String): JsonElement? =
+    this[key]?.takeUnless { it is JsonNull }
+
 private fun JsonObject.requiredString(key: String): String? {
     val value = this[key] as? JsonPrimitive ?: return null
     if (!value.isString) return null
@@ -219,7 +229,7 @@ private fun JsonObject.requiredString(key: String): String? {
 
 /** Accept structured string arrays and the flat comma-separated form. */
 private fun JsonObject.stringList(key: String): List<String>? {
-    val element = this[key] ?: return emptyList()
+    val element = optionalElement(key) ?: return emptyList()
     return when (element) {
         is JsonArray -> {
             val values = mutableListOf<String>()
