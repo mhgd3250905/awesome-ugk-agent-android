@@ -165,6 +165,11 @@ class OpenAiChatCompletionsProvider(
         var lastActiveToolIndex: Int? = null
         var currentStopReason: String? = null
         var completedEmitted = false
+        // Whether anything in this response looked like SSE framing at all. A
+        // stream that never carried a `data:` line is not an empty answer; it is
+        // a response this parser was handed the wrong shape for, and completing
+        // it blank stores nothing as the model's final message.
+        var sawEventStreamFraming = false
         // Payload fragments of the event currently being read: one event may
         // carry its JSON across several `data:` lines.
         var pendingDataPayload: String? = null
@@ -226,6 +231,7 @@ class OpenAiChatCompletionsProvider(
             }
 
             val dataStr = line.removePrefix("data:").trim()
+            sawEventStreamFraming = true
             if (dataStr == "[DONE]") {
                 // An unfinished event must fail the stream instead of being
                 // swept into the completion emitted below.
@@ -356,6 +362,16 @@ class OpenAiChatCompletionsProvider(
         // never became parsable: that must fail the stream instead of falling
         // back to an answer built from the truncated prefix.
         pendingDataPayload?.let { throw malformedSseEvent(it) }
+
+        // Nothing in this response was SSE and nothing was a parsable document.
+        // Reporting that as a successful empty answer is how a framing failure
+        // becomes a blank transcript entry.
+        if (!completedEmitted && !sawEventStreamFraming) {
+            throw IllegalStateException(
+                "OpenAI response carried no SSE event and no parsable JSON document; " +
+                    "the endpoint answered a streaming request with a shape this client cannot read"
+            )
+        }
 
         // 流结束兜底
         if (!completedEmitted) {

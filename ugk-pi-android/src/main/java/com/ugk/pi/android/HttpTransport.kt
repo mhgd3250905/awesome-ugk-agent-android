@@ -18,6 +18,23 @@ import java.io.InputStream
 import java.net.HttpURLConnection
 import java.net.URL
 
+/**
+ * True when a response `Content-Type` declares an SSE event stream.
+ *
+ * This is the only signal a transport has for "line framing is the payload, and
+ * each line may be delivered as it arrives". Everything else is one document:
+ * an endpoint that ignores `stream` answers a whole JSON body, and handing that
+ * over line by line takes it apart before a provider can recognise the shape.
+ *
+ * Parameters are ignored (`text/event-stream; charset=utf-8` still is an event
+ * stream), and a missing or malformed value is treated as a document, which is
+ * the shape that has to stay intact.
+ */
+internal fun isEventStreamContentType(contentType: String?): Boolean =
+    contentType?.substringBefore(';')?.trim()?.equals(EVENT_STREAM_MEDIA_TYPE, ignoreCase = true) == true
+
+private const val EVENT_STREAM_MEDIA_TYPE = "text/event-stream"
+
 data class HttpRequest(
     val url: String,
     val headers: Map<String, String>,
@@ -39,6 +56,13 @@ interface HttpTransport {
      * Emitting the body as one emission would break every line-oriented parser:
      * an SSE event spanning several lines cannot be parsed as a single line, so
      * the caller would silently see an empty answer.
+     *
+     * The contract has a second half, and both implementations owe it: a response
+     * that is not an SSE event stream is one document and must be handed over
+     * unsplit. A host transport that implements only [post] inherits that from
+     * [asSseLines]; [JavaNetHttpTransport] applies the response media type,
+     * because the socket already delivers line boundaries the provider cannot
+     * reconstruct into a document once they have been emitted separately.
      */
     fun postStream(request: HttpRequest): Flow<String> = flow {
         val response = post(request)
@@ -92,19 +116,28 @@ class JavaNetHttpTransport(
                 }
 
                 BufferedInputStream(connection.inputStream, 8 * 1024).use { input ->
-                    var totalStreamedBytes = 0L
-                    while (true) {
-                        val line = input.readUtf8Line(maxResponseBytes) ?: break
-                        // The per-line cap above cannot bound a stream of many
-                        // small SSE events: only the SUM of all line bytes
-                        // does. A hostile or broken endpoint that pushes past
-                        // maxStreamedBytes fails here instead of accumulating
-                        // unbounded data in the host.
-                        totalStreamedBytes += line.byteCount
-                        if (totalStreamedBytes > maxStreamedBytes) {
-                            throw IOException("HTTP stream exceeds maxStreamedBytes=$maxStreamedBytes")
+                    if (isEventStreamContentType(connection.contentType)) {
+                        var totalStreamedBytes = 0L
+                        while (true) {
+                            val line = input.readUtf8Line(maxResponseBytes) ?: break
+                            // The per-line cap above cannot bound a stream of many
+                            // small SSE events: only the SUM of all line bytes
+                            // does. A hostile or broken endpoint that pushes past
+                            // maxStreamedBytes fails here instead of accumulating
+                            // unbounded data in the host.
+                            totalStreamedBytes += line.byteCount
+                            if (totalStreamedBytes > maxStreamedBytes) {
+                                throw IOException("HTTP stream exceeds maxStreamedBytes=$maxStreamedBytes")
+                            }
+                            send(line.text)
                         }
-                        send(line.text)
+                    } else {
+                        // The endpoint did not answer an event stream, so this body
+                        // is one document. Handing it over line by line would take
+                        // it apart before a provider can recognise the shape the
+                        // transport is required to preserve; it is read whole, under
+                        // the same byte cap the non-streaming post() applies.
+                        send(input.readUtf8(maxResponseBytes))
                     }
                 }
                 close()

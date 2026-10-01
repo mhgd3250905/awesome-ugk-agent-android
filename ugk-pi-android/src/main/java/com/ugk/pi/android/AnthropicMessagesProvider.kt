@@ -166,6 +166,11 @@ class AnthropicMessagesProvider(
         var currentToolName: String? = null
         val currentToolInputJson = StringBuilder()
         var completedEmitted = false
+        // Whether anything in this response looked like SSE framing at all. A
+        // stream that never carried a `data:` line is not an empty answer; it is
+        // a response this parser was handed the wrong shape for, and completing
+        // it blank stores nothing as the model's final message.
+        var sawEventStreamFraming = false
         // Payload fragments of the event currently being read: one event may
         // carry its JSON across several `data:` lines.
         var pendingDataPayload: String? = null
@@ -210,6 +215,7 @@ class AnthropicMessagesProvider(
             }
 
             val dataStr = line.removePrefix("data:").trim()
+            sawEventStreamFraming = true
             if (dataStr == "[DONE]") {
                 pendingDataPayload?.let { throw malformedSseEvent(it) }
                 return@collect
@@ -348,6 +354,16 @@ class AnthropicMessagesProvider(
         // prefix as the model's final answer is how a truncated response silently
         // enters the transcript.
         pendingDataPayload?.let { throw malformedSseEvent(it) }
+
+        // Nothing in this response was SSE and nothing was a parsable document.
+        // Reporting that as a successful empty answer is how a framing failure
+        // becomes a blank transcript entry.
+        if (!completedEmitted && !sawEventStreamFraming) {
+            throw IllegalStateException(
+                "Anthropic response carried no SSE event and no parsable JSON document; " +
+                    "the endpoint answered a streaming request with a shape this client cannot read"
+            )
+        }
 
         // 流正常完结兜底：如果服务端未正常发送 message_stop 便关闭了数据流
         if (!completedEmitted) {
