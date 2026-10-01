@@ -463,4 +463,33 @@ class DemoTeachingCompilationLimitsTest {
         assertTrue("a null includeImages must not attach screenshots: $page",
             page.contains("\"imagesSupplied\":0") && page.contains("\"imagesAvailable\":2"))
     }
+
+    /**
+     * The other side of that rule: a value the model did supply, in a shape it
+     * cannot mean, must still be refused. Reading null as absent may not degrade
+     * into reading garbage as the default offset.
+     */
+    @Test fun evidenceReadBackStillRefusesADeclaredMalformedOffset() = runBlocking {
+        val store = DemoTeachingStore(temporary.newFolder())
+        val id = UUID.randomUUID().toString(); store.create(id, "畸形偏移")
+        store.update(id) { it.copy(status = "finished", segments = listOf(segment(1, 1, 4000))) }
+        val toolContent = mutableListOf<String>()
+        var reviewCalls = 0
+        val provider = object : LLMProvider {
+            override suspend fun generate(request: ModelRequest): ModelResponse {
+                if (stageOf(request) != DemoTeachingSopSkill.Stage.REVIEW_SOP) return respond(request, "笔记")
+                reviewCalls++
+                toolContent += request.messages.filterIsInstance<AgentMessage.Tool>().map { it.result.content }
+                return if (reviewCalls == 1) ModelResponse(content = "", toolCalls = listOf(ToolCall(
+                    "read-malformed-offset", "read_teaching_evidence", buildJsonObject {
+                        put("index", 1); put("offset", buildJsonObject { put("from", 0) })
+                    }))) else respond(request, "笔记")
+            }
+        }
+        runCatching { DemoTeachingCompiler({ provider }, store, ::skill).compile(store.read(id)!!) }
+        assertTrue("the malformed read must reach the tool once: $reviewCalls", reviewCalls >= 2)
+        val page = toolContent.joinToString("\n")
+        assertFalse("a malformed offset must not be served as a page: $page", page.contains("\"returnedChars\""))
+        assertTrue("the refusal must name the field: $page", page.contains("offset"))
+    }
 }
