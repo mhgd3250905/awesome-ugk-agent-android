@@ -1,4 +1,5 @@
 package com.ugk.pi.system.skill
+import com.ugk.pi.android.USER_CONFIRMATION_DIALOG_TOOL_NAME
 import com.ugk.pi.android.AgentConfirmationPolicy
 import com.ugk.pi.android.AndroidSkill
 import com.ugk.pi.android.AndroidSkillMethod
@@ -7,7 +8,7 @@ import com.ugk.pi.android.ToolCall
 object AndroidSystemSkills {
     fun androidAutomationControl(requireUserConfirmation: Boolean = true): AndroidSkill {
         val confirmationInstruction = if (requireUserConfirmation) {
-            "Before every protected external action (`launch_android_app`, `launch_android_app_intent`, or `open_android_accessibility_settings`), call show_user_confirmation_dialog immediately before the protected Tool. Set the confirmation target.toolName to the exact next protected Tool name and target.input to the complete JSON input for that exact call. Invoke the next Tool with the identical name and input. selectedButtonId only records which dialog button the user chose; it does not authorize a protected Tool by itself, and a missing or mismatched target ticket must be treated as not authorized."
+            "Before every protected external action (`launch_android_app`, `launch_android_app_intent`, or `open_android_accessibility_settings`), call ${USER_CONFIRMATION_DIALOG_TOOL_NAME} immediately before the protected Tool. Set the confirmation target.toolName to the exact next protected Tool name and target.input to the complete JSON input for that exact call. Invoke the next Tool with the identical name and input. selectedButtonId only records which dialog button the user chose; it does not authorize a protected Tool by itself, and a missing or mismatched target ticket must be treated as not authorized."
         } else {
             AgentConfirmationPolicy.FULL_AUTHORIZATION_AGENT_INSTRUCTION
         }
@@ -78,7 +79,7 @@ object AndroidSystemSkills {
 
     fun clipboardControl(requireUserConfirmation: Boolean = true): AndroidSkill {
         val confirmationInstruction = if (requireUserConfirmation) {
-            "Before clipboard_read_text, clipboard_write_text, or clipboard_clear, call show_user_confirmation_dialog immediately before the exact next Tool. Set target.toolName to that Tool name and target.input to its complete JSON input, then invoke the Tool with identical input. Reading exposes clipboard content to the configured model; writing or clearing changes global device state. selectedButtonId only records which dialog button the user chose; it does not authorize a protected Tool by itself, and a missing or mismatched target ticket must be treated as not authorized."
+            "Before clipboard_read_text, clipboard_write_text, or clipboard_clear, call ${USER_CONFIRMATION_DIALOG_TOOL_NAME} immediately before the exact next Tool. Set target.toolName to that Tool name and target.input to its complete JSON input, then invoke the Tool with identical input. Reading exposes clipboard content to the configured model; writing or clearing changes global device state. selectedButtonId only records which dialog button the user chose; it does not authorize a protected Tool by itself, and a missing or mismatched target ticket must be treated as not authorized."
         } else {
             AgentConfirmationPolicy.FULL_AUTHORIZATION_AGENT_INSTRUCTION
         }
@@ -140,7 +141,7 @@ object AndroidSystemSkills {
                 if (requireUserConfirmation) {
                     add(
                         AndroidSkillMethod(
-                            toolName = "show_user_confirmation_dialog",
+                            toolName = USER_CONFIRMATION_DIALOG_TOOL_NAME,
                             purpose = "Confirms the exact clipboard Tool call and its privacy or state-change impact.",
                             whenToUse = "Immediately before clipboard_read_text, clipboard_write_text, or clipboard_clear.",
                             resultSemantics = "The confirmation target must match the next Tool name and complete JSON input; a button id alone is not authorization."
@@ -200,7 +201,7 @@ object AndroidSystemSkills {
 
     fun permissionSettingsControl(requireUserConfirmation: Boolean = true): AndroidSkill {
         val confirmationInstruction = if (requireUserConfirmation) {
-            "Before each protected call to request_android_runtime_permissions, open_android_settings_page, or launch_android_app_intent, call show_user_confirmation_dialog with clear title/message, explicit buttons, and a target object. Set target.toolName to the exact next Tool name and target.input to the complete JSON input for that exact call; then invoke the next Tool with the identical name and input. selectedButtonId only records which dialog button the user chose; it does not authorize a protected Tool by itself. Proceed only when the latest confirmation result also contains the matching host-issued ticket; a missing or mismatched target must be treated as not authorized."
+            "Before each protected call to request_android_runtime_permissions, open_android_settings_page, or launch_android_app_intent, call ${USER_CONFIRMATION_DIALOG_TOOL_NAME} with clear title/message, explicit buttons, and a target object. Set target.toolName to the exact next Tool name and target.input to the complete JSON input for that exact call; then invoke the next Tool with the identical name and input. selectedButtonId only records which dialog button the user chose; it does not authorize a protected Tool by itself. Proceed only when the latest confirmation result also contains the matching host-issued ticket; a missing or mismatched target must be treated as not authorized."
         } else {
             AgentConfirmationPolicy.FULL_AUTHORIZATION_AGENT_INSTRUCTION
         }
@@ -285,7 +286,7 @@ object AndroidSystemSkills {
                 if (requireUserConfirmation) {
                     add(
                         AndroidSkillMethod(
-                            toolName = "show_user_confirmation_dialog",
+                            toolName = USER_CONFIRMATION_DIALOG_TOOL_NAME,
                             purpose = "Shows a parameterized confirmation dialog and returns the selected button id to the agent loop.",
                             whenToUse = "Use before permission prompts, settings jumps, external intents, sharing, messaging, recording, camera, or other actions the user may not expect.",
                             resultSemantics = "The request must include target.toolName and target.input for the exact next protected Tool; selectedButtonId records the user's choice but does not authorize that Tool by itself."
@@ -306,7 +307,7 @@ object AndroidSystemSkills {
 
     fun appFacingIntentControl(requireUserConfirmation: Boolean = true): AndroidSkill {
         val confirmationInstruction = if (requireUserConfirmation) {
-            "Before any user-visible external action, call show_user_confirmation_dialog immediately before launch_android_app_intent. Set target.toolName to launch_android_app_intent and target.input to the complete JSON input for the exact next call, including the actual target and parameters values; then call launch_android_app_intent with the identical input. selectedButtonId only records which dialog button the user chose; it does not authorize a protected Tool by itself. Do not infer authorization from the button id when the target or its input is missing or changed; the host-issued ticket must match."
+            "Before any user-visible external action, call ${USER_CONFIRMATION_DIALOG_TOOL_NAME} immediately before launch_android_app_intent. Set target.toolName to launch_android_app_intent and target.input to the complete JSON input for the exact next call, including the actual target and parameters values; then call launch_android_app_intent with the identical input. selectedButtonId only records which dialog button the user chose; it does not authorize a protected Tool by itself. Do not infer authorization from the button id when the target or its input is missing or changed; the host-issued ticket must match."
         } else {
             AgentConfirmationPolicy.FULL_AUTHORIZATION_AGENT_INSTRUCTION
         }
@@ -355,7 +356,7 @@ object AndroidSystemSkills {
                 if (requireUserConfirmation) {
                     add(
                         AndroidSkillMethod(
-                            toolName = "show_user_confirmation_dialog",
+                            toolName = USER_CONFIRMATION_DIALOG_TOOL_NAME,
                             purpose = "Shows a parameterized confirmation dialog before a user-visible external Intent.",
                             whenToUse = "Use before opening a URL, launching an external app, sharing, messaging, dialing, recording, or using camera/media pickers.",
                             resultSemantics = "The request must include target.toolName and target.input for the exact next protected Tool; selectedButtonId records the user's choice but does not authorize that Tool by itself."

@@ -1,4 +1,5 @@
 package com.ugk.pi.system.skill
+import com.ugk.pi.android.USER_CONFIRMATION_DIALOG_TOOL_NAME
 import com.ugk.pi.android.AgentConfirmationPolicy
 import com.ugk.pi.android.AndroidSkill
 import com.ugk.pi.android.AndroidSkillMethod
@@ -10,9 +11,9 @@ object ScreenAutomationSkills {
     ): AndroidSkill {
         val confirmationInstruction = if (requireUserConfirmation) {
             if (includeVisualFallback) {
-                "screen_capture_visual sends a cross-app screenshot to the configured model, while screen_perform_action, screen_visual_gesture, screen_gesture, screen_press_key, and screen_global_action change visible state or navigation. Immediately before each protected call, use show_user_confirmation_dialog with target.toolName set to the exact next Tool name and target.input set to that Tool's complete JSON input. Invoke the next Tool with identical name and input. Do not treat selectedButtonId alone as authorization."
+                "screen_capture_visual sends a cross-app screenshot to the configured model, while screen_perform_action, screen_visual_gesture, screen_gesture, screen_press_key, and screen_global_action change visible state or navigation. Immediately before each protected call, use ${USER_CONFIRMATION_DIALOG_TOOL_NAME} with target.toolName set to the exact next Tool name and target.input set to that Tool's complete JSON input. Invoke the next Tool with identical name and input. Do not treat selectedButtonId alone as authorization."
             } else {
-                "screen_perform_action, screen_gesture, screen_press_key, and screen_global_action change visible state or navigation. Immediately before each call, use show_user_confirmation_dialog with target.toolName set to the exact next Tool name and target.input set to that Tool's complete JSON input. Invoke the next Tool with identical name and input. Do not treat selectedButtonId alone as authorization."
+                "screen_perform_action, screen_gesture, screen_press_key, and screen_global_action change visible state or navigation. Immediately before each call, use ${USER_CONFIRMATION_DIALOG_TOOL_NAME} with target.toolName set to the exact next Tool name and target.input set to that Tool's complete JSON input. Invoke the next Tool with identical name and input. Do not treat selectedButtonId alone as authorization."
             }
         } else {
             AgentConfirmationPolicy.FULL_AUTHORIZATION_AGENT_INSTRUCTION
@@ -193,7 +194,7 @@ object ScreenAutomationSkills {
                 },
                 if (requireUserConfirmation) {
                     AndroidSkillMethod(
-                        toolName = "show_user_confirmation_dialog",
+                        toolName = USER_CONFIRMATION_DIALOG_TOOL_NAME,
                         purpose = "Confirms the exact next mutating screen tool call.",
                         whenToUse = "Immediately before screen_capture_visual, screen_perform_action, screen_visual_gesture, screen_gesture, screen_press_key, or screen_global_action.",
                         resultSemantics = "The confirmation target must match the next tool name and complete JSON input; a button id without a matching ticket is not authorization."

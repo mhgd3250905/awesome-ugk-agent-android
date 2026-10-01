@@ -10,6 +10,14 @@ import kotlinx.serialization.json.put
 import kotlinx.serialization.json.putJsonArray
 import kotlinx.serialization.json.putJsonObject
 
+/**
+ * Model-visible name of the default confirmation dialog Tool. A host may rename it
+ * via the [UserConfirmationDialogTool] constructor, but every wrapping, policy and
+ * instruction that references the dialog by name must then agree on the same value —
+ * reference this constant instead of repeating the literal.
+ */
+const val USER_CONFIRMATION_DIALOG_TOOL_NAME: String = "show_user_confirmation_dialog"
+
 data class UserConfirmationDialogRequest(
     val title: String,
     val message: String,
@@ -42,7 +50,7 @@ interface UserConfirmationDialogPresenter {
 
 class UserConfirmationDialogTool(
     private val presenter: UserConfirmationDialogPresenter,
-    override val name: String = "show_user_confirmation_dialog",
+    override val name: String = USER_CONFIRMATION_DIALOG_TOOL_NAME,
     private val nowEpochMillis: () -> Long = System::currentTimeMillis,
     private val nonceGenerator: () -> String = { UserConfirmationTicket.randomNonce() }
 ) : AgentTool {

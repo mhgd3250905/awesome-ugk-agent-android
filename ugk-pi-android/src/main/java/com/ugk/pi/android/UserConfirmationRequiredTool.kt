@@ -17,9 +17,9 @@ class UserConfirmationRequiredTool(
     override val name: String = delegate.name
     override val description: String
         get() = if (shouldBypassConfirmation()) {
-            "${delegate.description} The host has enabled full authorization for this session; do not call show_user_confirmation_dialog before this Tool."
+            "${delegate.description} The host has enabled full authorization for this session; do not call ${USER_CONFIRMATION_DIALOG_TOOL_NAME} before this Tool."
         } else {
-            "${delegate.description} Requires a prior show_user_confirmation_dialog confirmation."
+            "${delegate.description} Requires a prior ${USER_CONFIRMATION_DIALOG_TOOL_NAME} confirmation."
         }
     override val inputSchema: JsonObject = delegate.inputSchema
 
@@ -44,7 +44,7 @@ class UserConfirmationRequiredTool(
                 content = when {
                     refusal -> {
                         "The user declined this exact operation ($name) at the confirmation " +
-                            "dialog. Do not call show_user_confirmation_dialog again for it " +
+                            "dialog. Do not call ${USER_CONFIRMATION_DIALOG_TOOL_NAME} again for it " +
                             "and do not retry it in this run; continue without it or ask the " +
                             "user a new question."
                     }
@@ -54,13 +54,13 @@ class UserConfirmationRequiredTool(
                     // dialog that just closed without an answer.
                     unanswered -> {
                         "The confirmation dialog for this operation ($name) closed without " +
-                            "a user decision. Do not call show_user_confirmation_dialog " +
+                            "a user decision. Do not call ${USER_CONFIRMATION_DIALOG_TOOL_NAME} " +
                             "again for it in this run; continue without it or report that " +
                             "the user could not be reached."
                     }
                     else -> {
                         "User confirmation required for this exact Tool input. Call " +
-                            "show_user_confirmation_dialog with target.toolName and the exact " +
+                            "${USER_CONFIRMATION_DIALOG_TOOL_NAME} with target.toolName and the exact " +
                             "target.input first, then retry only with an unexpired ticket and " +
                             "an accepted selectedButtonId from ${acceptedButtonIds.sorted()}."
                     }
@@ -85,7 +85,7 @@ class UserConfirmationRequiredTool(
 
         val result = (priorMessages[lastToolIndex] as? AgentMessage.Tool)?.result
             ?: return null
-        if (result.name != "show_user_confirmation_dialog" || result.isError) return null
+        if (result.name != USER_CONFIRMATION_DIALOG_TOOL_NAME || result.isError) return null
 
         // AgentRuntime appends the model's Assistant(toolCalls) envelope before
         // executing that response's ToolCall. It is transport context, not a

@@ -38,7 +38,7 @@ class LocalHttpServerStartTool(
             }
             putJsonObject("port") {
                 put("type", "integer")
-                put("description", "TCP port on 127.0.0.1. Defaults to 8765.")
+                put("description", "TCP port on 127.0.0.1. Defaults to $DEFAULT_LOCAL_HTTP_SERVER_PORT.")
                 put("default", DEFAULT_LOCAL_HTTP_SERVER_PORT)
             }
         }
