@@ -42,7 +42,9 @@ API 内容不得复制进源码、文档或提交；Release 默认不嵌入 API 
 # 构建原有无障碍 demo
 .\gradlew.bat :demo-app:assembleDebug --console=plain
 
-# 跑全部单元测试（十个 testDebugUnitTest：SDK、各 skill、terminal runtime、demo-app）
+# 跑全部单元测试（十个 testDebugUnitTest 任务，但只有九个模块贡献用例：
+# :pi-attention-skill-android 目前没有任何单元测试源码，Gradle 对它报 NO-SOURCE，
+# 该任务永远不会变红——这是已登记的缺口，不是把关）
 .\gradlew.bat `
   :ugk-pi-android:testDebugUnitTest `
   :pi-file-skill-android:testDebugUnitTest `
