@@ -594,3 +594,10 @@ MODULE pi-file-skill-android          tests=13  failures=0 errors=0 skipped=1
 3. `spawnWithStdinClosed` 两个调用点在真机上确实关闭了 stdin：`terminal_bash_execute` 跑 `read x; echo got-eof` 应在 1 秒级返回 `got-eof` 而不是耗尽超时。
 4. `m4c-stop-wrapper-wiring` 变异为绿：纯表用例看不见调用点装配，句柄口径若在 wrapper 处被改错不会在宿主变红——已登记为本轮测试面的已知局限，只能靠第 1/2 条仪器用例补。
 5. 本轮**未运行任何设备/仪器门禁**（宿主 C 盘曾长期满盘；本轮只在 JVM 面取数）。§33/§34 记录的设备数字不得当作当前门禁。
+
+## 36. 第十轮设备通道尝试与 MIUI 环境定性（2026-10-01）
+
+- 背景：§34、§35 均声明设备通道未运行。2026-10-01 经用户同意，在日用 MIUI 真机 `QSG6Q8IFDMDELVGQ` 上补跑 `:demo-app:connectedDebugAndroidTest` 与 `am instrument`，共五轮独立尝试（三次 gradle connected、两次直接 `am instrument`，其中一轮关闭全部系统动画校准）。
+- 结果定性：设备环境阻塞，非本轮代码回归。① 首轮运行期间发生一次对在用应用的卸载重装，应用私有数据被清空（五份教学记录与 API 配置；事故与教训登记于版本台账 2026-10-01 节）；② 用户手动开启 MIUI「显示悬浮窗」后 `Settings.canDrawOverlays()` 守卫通过，证明该开关在 MIUI 上不受 AOSP `appops set SYSTEM_ALERT_WINDOW allow` 影响；③ `DemoDialogTestHostActivity` 45 秒无法达到 idle（事件队列零空闲），关闭 window/transition/animator 三个动画缩放后依旧复现，属设备系统 UI 级重绘，FloatingConversation、NoteStyle、PermissionGuide、DemoDelayedTaskDialog 等依赖该宿主 Activity 的用例系统性超时；④ `PermissionGuideInstrumentedTest.settingsEntry...SurvivesRecreation` 三轮挂起（§33 已登记该用例首跑偶发，本机为常态）。
+- 影响边界：失败用例与本轮合并代码（教学编译器、终端本地 HTTP 运行时）无文件交集，不构成第九/十轮修复的回归或假绿证据；通过类与失败类的完整清单留在 `/tmp/am-instrument-run*.log`（未入库）。
+- 结论与后续：UI 仪器套件的通过性验收只在 AVD 上执行（§33 惯例）；日用手机禁止直跑 connected/instrumented，确需时先 `run-as` tar 备份 `files/` 与 `shared_prefs/` 到 PC，跑完恢复并核对哈希。另登记两条操作教训：TaskStop gradle connected 会触发其清理阶段异步卸载主应用与 test APK（重装须用同钥 APK 并重授权限）；结果目录的孤儿 UTP JVM 进程不终止时，Gradle 因无法哈希 `.lck`/logcat 文件而拒绝执行 connected 任务。
