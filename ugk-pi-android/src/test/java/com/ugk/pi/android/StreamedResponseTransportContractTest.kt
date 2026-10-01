@@ -342,6 +342,21 @@ class StreamedResponseTransportContractTest {
             assertEquals("the framing must not invent or drop a line", anthropicSseBody.lines(), emissions)
         }
         ScriptedEndpoint(anthropicSseBody, contentType = "application/json").use { endpoint ->
+            val emissions = runBlocking {
+                JavaNetHttpTransport(connectTimeoutMillis = 5_000, readTimeoutMillis = 5_000)
+                    .postStream(HttpRequest(endpoint.url, emptyMap(), "{}"))
+                    .toList()
+            }
+            // An endpoint that forgets the media type still has to stream, line by
+            // line: without the first-line signal the answer arrives in one burst
+            // at EOF and a long stream falls under the document size cap. The
+            // parsed content cannot tell these apart, because the reader re-splits
+            // a buffered body.
+            assertEquals(
+                "a mislabelled event stream must still arrive one line at a time",
+                anthropicSseBody.lines().size,
+                emissions.size
+            )
             val chunks = runBlocking {
                 AnthropicMessagesProvider(
                     apiKey = "test-key",
@@ -350,9 +365,6 @@ class StreamedResponseTransportContractTest {
                     transport = JavaNetHttpTransport(connectTimeoutMillis = 5_000, readTimeoutMillis = 5_000)
                 ).generateStream(request()).toList()
             }
-            // An endpoint that forgets the media type still has to stream: without
-            // the first-line signal its answer arrives in one burst at EOF, and a
-            // long answer would fall under the document size cap.
             assertEquals(
                 listOf("第一段", "内容"),
                 chunks.filterIsInstance<ModelStreamChunk.ContentDelta>().map { it.delta }
@@ -695,6 +707,40 @@ class StreamedResponseTransportContractTest {
             assertTrue(
                 "a serialization internal must not replace the endpoint's reason: ${failure.message}",
                 failure.message?.contains("is not a JsonPrimitive") == false
+            )
+        }
+    }
+
+    /**
+     * Anthropic carries the document's own refusal too: an error object without a
+     * string `message` or `type` is refused by the parser, and the reader must say
+     * so instead of blaming the framing.
+     */
+    @Test
+    fun anthropicNamesTheDocumentCauseInsteadOfBlamingTheFraming() {
+        val body = """
+            {
+              "type": "error",
+              "error": {
+                "code": 503
+              }
+            }
+        """.trimIndent()
+        ScriptedEndpoint(body, contentType = "application/json").use { endpoint ->
+            val failure = assertThrows(Exception::class.java) {
+                runBlocking {
+                    AnthropicMessagesProvider(
+                        apiKey = "test-key",
+                        model = "claude-3-7-sonnet",
+                        baseUrl = endpoint.baseUrl,
+                        transport = JavaNetHttpTransport(connectTimeoutMillis = 5_000, readTimeoutMillis = 5_000)
+                    ).generateStream(request()).toList()
+                }
+            }
+            assertTrue(
+                "expected the payload's own parse refusal to be carried, got: ${failure.message}",
+                failure.message?.contains("whole-body document failed to parse") == true &&
+                    failure.message?.contains("Anthropic API error") == true
             )
         }
     }
