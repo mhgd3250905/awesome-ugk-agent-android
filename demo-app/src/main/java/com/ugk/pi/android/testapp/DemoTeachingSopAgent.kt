@@ -36,7 +36,9 @@ import kotlinx.serialization.json.putJsonObject
 
 internal data class DemoTeachingSopEvidence(
     val text: String,
-    val images: List<AgentImageContent> = emptyList()
+    val images: List<AgentImageContent> = emptyList(),
+    /** Screenshots the batch actually holds, which can exceed what one request may attach. */
+    val imagesAvailable: Int = 0
 )
 
 internal data class DemoTeachingSopReview(
@@ -202,7 +204,7 @@ internal class DemoTeachingSopAgent(private val provider: LLMProvider, private v
                     put("total", evidence.text.length)
                     put("returnedChars", page.length)
                     put("nextOffset", if (end < evidence.text.length) JsonPrimitive(end) else JsonNull)
-                    put("imagesAvailable", evidence.images.size)
+                    put("imagesAvailable", evidence.imagesAvailable)
                     put("imagesSupplied", images.size)
                     put("notice", if (end < evidence.text.length) {
                         "本次仅返回当前页，未发送后续原文；可使用 nextOffset 继续读取。"

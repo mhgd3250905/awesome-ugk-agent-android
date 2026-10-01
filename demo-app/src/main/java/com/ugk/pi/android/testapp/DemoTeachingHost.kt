@@ -152,6 +152,12 @@ internal class DemoTeachingHost(private val context: Context, private val proces
             }
             val now = System.currentTimeMillis()
             if (event !is AgentEvent.ModelContentDelta || now - lastRender > 100) { render(controller.snapshot()); lastRender = now }
+        } catch (error: DemoTeachingCapacityException) {
+            // A full record is a limit the user can act on, not a save failure: stop the teaching
+            // through the normal ending path, which writes a terminal status instead of leaving the
+            // record "active". The status write itself is not charged against the evidence limit.
+            notice(error.message)
+            controller.finish()
         } catch (_: Exception) {
             notice("记录保存失败，教学已停止；已有记录保留")
             controller.cancel()

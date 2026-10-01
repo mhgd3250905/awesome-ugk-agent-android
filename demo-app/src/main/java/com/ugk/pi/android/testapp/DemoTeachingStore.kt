@@ -77,15 +77,32 @@ internal class DemoTeachingStore(private val root: File) {
     @Synchronized fun update(id: String, change: (DemoTeachingRecord) -> DemoTeachingRecord) {
         val previous = read(id) ?: error("教学记录无法读取，原文件已保留")
         val next = change(previous).copy(updatedAt = System.currentTimeMillis())
-        check(next.id == id && next.segments.size <= 80 && next.segments.sumOf { it.actions.size } <= 600) {
-            "本次教学记录已达上限，请结束后开始新教学"
+        // The count ceiling and the durable byte ceiling both bind, whichever is reached first:
+        // long tool results cross 4 MB at about 350 actions, so a count-only guard reported an
+        // unreachable capacity and the write failed as an internal error instead of a limit.
+        if (next.id != id) error("教学记录标识与请求不一致")
+        if (next.segments.size > 80 || next.segments.sumOf { it.actions.size } > 600) {
+            throw DemoTeachingCapacityException(CAPACITY_MESSAGE)
         }
-        write(next)
+        val nextBytes = encode(next).toString().toByteArray(Charsets.UTF_8)
+        // Only evidence growth is charged against the size limit. Status, availability, usage
+        // history and the compiled guide all change the encoded size, and a record must always be
+        // able to accept the writes that end it and that store its result. The reserve is sized for
+        // the largest deliverable guide, so stopping evidence never costs the user the compilation
+        // they already paid for.
+        if (nextBytes.size > MAX_JSON_BYTES - GUIDE_RESERVE_BYTES && evidenceChars(next) > evidenceChars(previous)) {
+            throw DemoTeachingCapacityException(CAPACITY_MESSAGE)
+        }
+        write(next, nextBytes)
     }
-    @Synchronized fun saveGuide(id: String, guide: DemoTeachingGuide) = update(id) {
+    @Synchronized fun saveGuide(id: String, guide: DemoTeachingGuide) = try { update(id) {
         check(it.status != "active") { "请先结束教学" }
         it.copy(guide = guide, guideRevision = it.guideRevision + 1,
             availability = "pending_validation", compilationStatus = "completed")
+    } } catch (error: DemoTeachingCapacityException) {
+        // The evidence, not the teaching, is what filled the record: saying "请结束后开始新教学" here
+        // would send the user to end a teaching that has already ended, and pay for it again.
+        throw DemoTeachingCapacityException("这份教学记录的证据已达容量上限，整理结果放不下；请新建一份教学")
     }
     @Synchronized fun resumeTeaching(id: String) = update(id) {
         check(it.status != "active" && it.compilationStatus != "compiling") { "记录正在使用" }
@@ -211,10 +228,20 @@ internal class DemoTeachingStore(private val root: File) {
     private fun directory(id: String): File {
         require(id.matches(Regex("[0-9a-f-]{36}"))); return File(root, id)
     }
-    private fun write(record: DemoTeachingRecord) {
-        val bytes = encode(record).toString().toByteArray(Charsets.UTF_8)
-        check(bytes.size <= MAX_JSON_BYTES) { "教学记录过大，原文件已保留" }
+    private fun write(record: DemoTeachingRecord, bytes: ByteArray = encode(record).toString().toByteArray(Charsets.UTF_8)) {
+        if (bytes.size > MAX_JSON_BYTES) throw DemoTeachingCapacityException("教学记录过大，原文件已保留")
         atomicWrite(File(directory(record.id), "record.json"), bytes)
+    }
+    /**
+     * Characters of teaching evidence only, so the size guard can tell "the user taught more" apart
+     * from "the record gained a status word or a guide". Compared only against the same measure of
+     * the previous record, so encoding differences cannot bias the direction.
+     */
+    private fun evidenceChars(record: DemoTeachingRecord): Int = record.segments.sumOf { segment ->
+        segment.instruction.length + segment.reply.length + segment.actions.sumOf { action ->
+            action.name.length + action.input.toString().length + (action.result?.length ?: 0) +
+                action.gaps.sumOf { it.length } + (action.beforeImage?.length ?: 0) + (action.afterImage?.length ?: 0)
+        }
     }
     private fun atomicWrite(file: File, bytes: ByteArray) {
         val temporary = File.createTempFile("${file.name}.", ".tmp", file.parentFile)
@@ -228,6 +255,10 @@ internal class DemoTeachingStore(private val root: File) {
     companion object {
         private const val MAX_JSON_BYTES = 4L * 1024 * 1024
         private const val MAX_COMPILATION_CACHE_BYTES = 512 * 1024
+        private const val CAPACITY_MESSAGE = "本次教学记录已达上限，请结束后开始新教学"
+        // Room kept for the compiled result: the delivered document is bounded at 120,000 characters
+        // and review notes at 12,000 (DemoTeachingSopAgent), which is under 0.5 MB even in UTF-8.
+        private const val GUIDE_RESERVE_BYTES = 512 * 1024
         private fun searchTerms(text: String): Set<String> = buildSet {
             Regex("[a-z0-9]+(?:[._-][a-z0-9]+)*|[\\p{IsHan}]+").findAll(text.lowercase(java.util.Locale.ROOT)).forEach {
                 val word = it.value
@@ -291,6 +322,9 @@ internal class DemoTeachingStore(private val root: File) {
         private fun JsonObject.optionalList(key: String) = get(key)?.jsonArray?.map { it.jsonPrimitive.content }.orEmpty()
     }
 }
+
+/** The durable record has no room for more evidence; callers must still be able to end the teaching. */
+internal class DemoTeachingCapacityException(message: String) : IllegalStateException(message)
 
 /** Never persist transient model text, image base64, clipboard values, or terminal output. */
 internal object DemoTeachingEvidence {
