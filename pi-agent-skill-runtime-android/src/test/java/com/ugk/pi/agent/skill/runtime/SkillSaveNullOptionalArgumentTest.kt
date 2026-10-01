@@ -3,6 +3,8 @@ package com.ugk.pi.agent.skill.runtime
 import com.ugk.pi.android.ToolCall
 import com.ugk.pi.android.ToolExecutionContext
 import kotlinx.coroutines.runBlocking
+import com.ugk.pi.android.ToolResult
+import kotlinx.serialization.json.JsonArray
 import kotlinx.serialization.json.JsonElement
 import kotlinx.serialization.json.JsonNull
 import kotlinx.serialization.json.JsonPrimitive
@@ -35,31 +37,69 @@ class SkillSaveNullOptionalArgumentTest {
     private fun repository(): SkillRepository = SkillRepository(tempFolder.newFolder())
 
     /**
-     * One test per key: assertions inside a shared loop let the first refusal hide
-     * the later ones, and each key is a separate landing point of the rule.
+     * One test per key, each asserting the *default that key owns*: a shared
+     * assertion would let a regression in `triggers` pass under a `loadPolicy`
+     * check, which is what the first version of this file did.
      */
     @Test
     fun nullLoadPolicyUsesTheSchemaDefault() = runBlocking {
-        assertNullOptionalIsUnfilled("loadPolicy", "null-loadpolicy")
+        val result = saveWithNull("loadPolicy", "null-loadpolicy")
+        assertEquals(
+            "triggered",
+            (result.metadata["loadPolicy"] as? JsonPrimitive)?.content
+        )
     }
 
     @Test
     fun nullTriggersAreAnUnfilledList() = runBlocking {
-        assertNullOptionalIsUnfilled("triggers", "null-triggers")
+        val result = saveWithNull("triggers", "null-triggers")
+        assertEquals(
+            "a null triggers must read as the empty default, not a refusal",
+            JsonArray(emptyList()),
+            result.metadata["triggers"]
+        )
     }
 
     @Test
     fun nullEmbedFilesAreAnUnfilledList() = runBlocking {
-        assertNullOptionalIsUnfilled("embedFiles", "null-embedfiles")
+        val result = saveWithNull("embedFiles", "null-embedfiles")
+        assertEquals(
+            JsonArray(emptyList()),
+            result.metadata["embedFiles"]
+        )
     }
 
     @Test
     fun nullOverwriteIsTheDefaultFalse() = runBlocking {
-        assertNullOptionalIsUnfilled("overwrite", "null-overwrite")
+        val repository = repository()
+        val first = saveWithNull("overwrite", "null-overwrite", repository)
+        assertEquals(
+            "a null overwrite must not claim it replaced anything",
+            "false",
+            (first.metadata["overwritten"] as? JsonPrimitive)?.content
+        )
+        val second = SkillSaveTool(repository).execute(
+            call(
+                "name" to JsonPrimitive("null-overwrite"),
+                "description" to JsonPrimitive("A guide."),
+                "body" to JsonPrimitive("Version two."),
+                "overwrite" to JsonNull
+            ),
+            context()
+        )
+        assertTrue("the second null-overwrite save must not replace the first", second.isError)
+        assertEquals(
+            "SKILL_EXISTS",
+            (second.metadata["code"] as? JsonPrimitive)?.content
+        )
     }
 
-    private suspend fun assertNullOptionalIsUnfilled(key: String, skillName: String) {
-        val result = SkillSaveTool(repository()).execute(
+    private suspend fun saveWithNull(
+        key: String,
+        skillName: String,
+        into: SkillRepository = repository()
+    ): ToolResult {
+        val result = SkillSaveTool(into).execute(
             call(
                 "name" to JsonPrimitive(skillName),
                 "description" to JsonPrimitive("A guide."),
@@ -73,19 +113,15 @@ class SkillSaveNullOptionalArgumentTest {
             result.isError
         )
         assertTrue("a null $key must still create the skill", result.content.startsWith("Created skill"))
-        assertEquals(
-            "the schema default for a null $key",
-            "triggered",
-            (result.metadata["loadPolicy"] as? JsonPrimitive)?.content
-        )
+        return result
     }
 
     /**
-     * The safety side of the same rule: `overwrite` null must keep the existing
-     * skill, exactly as an omitted `overwrite` does.
+     * The control for the case above: a declared `overwrite: true` really does
+     * replace, so the null refusal is not just "this tool never overwrites".
      */
     @Test
-    fun nullOverwriteStillRefusesToReplaceAnExistingSkill() = runBlocking {
+    fun declaredOverwriteTrueStillReplaces() = runBlocking {
         val repository = repository()
         val first = SkillSaveTool(repository).execute(
             call(
@@ -96,22 +132,6 @@ class SkillSaveNullOptionalArgumentTest {
             context()
         )
         assertFalse("the first save must succeed: ${first.content}", first.isError)
-
-        val refused = SkillSaveTool(repository).execute(
-            call(
-                "name" to JsonPrimitive("mutable-guide"),
-                "description" to JsonPrimitive("A guide."),
-                "body" to JsonPrimitive("Version two."),
-                "overwrite" to JsonNull
-            ),
-            context()
-        )
-        assertTrue("a null overwrite must not replace an existing skill", refused.isError)
-        assertEquals(
-            "the refusal must name the argument it refused",
-            "SKILL_EXISTS",
-            (refused.metadata["code"] as? JsonPrimitive)?.content
-        )
 
         val allowed = SkillSaveTool(repository).execute(
             call(

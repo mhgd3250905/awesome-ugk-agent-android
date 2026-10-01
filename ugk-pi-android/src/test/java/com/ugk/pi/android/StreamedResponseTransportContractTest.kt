@@ -416,14 +416,81 @@ class StreamedResponseTransportContractTest {
             "id: 7" to true,
             "retry: 1000" to true,
             ": keep-alive comment" to true,
+            "  data: indented stream" to true,
+            "\tdata: tab-indented stream" to true,
+            "data:" to true,
             "{" to false,
             "  {" to false,
             "[1,2]" to false,
             "" to false,
-            "data" to false
+            "data" to false,
+            "DATA: uppercase is not a prefix the readers accept either" to false,
+            "data : space before the colon" to false,
+            "database: not-a-prefix" to false,
+            "Retry-After: 30" to false,
+            "data\u0000: nul" to false
         )
         for ((value, expected) in firstLines) {
             assertEquals("first line <$value>", expected, looksLikeEventStreamLine(value))
+        }
+    }
+
+    /**
+     * The boundary the media-type + first-line decision cannot cover: a real event
+     * stream whose very first line is blank and whose `Content-Type` is also
+     * missing. There is no way to call that a document *and* stream it, because
+     * handing a document over intact requires buffering. Pinned so the behaviour is
+     * a recorded decision rather than an accident: the answer still arrives, in one
+     * emission.
+     */
+    @Test
+    fun streamWithABlankFirstLineAndNoContentTypeIsBufferedButStillAnswered() {
+        ScriptedEndpoint("\n" + anthropicSseBody, contentType = null).use { endpoint ->
+            val emissions = runBlocking {
+                JavaNetHttpTransport(connectTimeoutMillis = 5_000, readTimeoutMillis = 5_000)
+                    .postStream(HttpRequest(endpoint.url, emptyMap(), "{}"))
+                    .toList()
+            }
+            assertEquals("buffered into one emission", 1, emissions.size)
+            val chunks = runBlocking {
+                AnthropicMessagesProvider(
+                    apiKey = "test-key",
+                    model = "claude-3-7-sonnet",
+                    baseUrl = endpoint.baseUrl,
+                    transport = JavaNetHttpTransport(connectTimeoutMillis = 5_000, readTimeoutMillis = 5_000)
+                ).generateStream(request()).toList()
+            }
+            assertEquals("第一段内容", chunks.completedOrNull()?.content)
+        }
+    }
+
+    /** An error object with a blank `message` must report the type, not an empty reason. */
+    @Test
+    fun anthropicFallsBackToTheErrorTypeWhenTheMessageIsBlank() {
+        val body = """
+            {
+              "type": "error",
+              "error": {
+                "type": "overloaded_error",
+                "message": ""
+              }
+            }
+        """.trimIndent()
+        ScriptedEndpoint(body, contentType = "application/json").use { endpoint ->
+            val failure = assertThrows(Exception::class.java) {
+                runBlocking {
+                    AnthropicMessagesProvider(
+                        apiKey = "test-key",
+                        model = "claude-3-7-sonnet",
+                        baseUrl = endpoint.baseUrl,
+                        transport = JavaNetHttpTransport(connectTimeoutMillis = 5_000, readTimeoutMillis = 5_000)
+                    ).generateStream(request()).toList()
+                }
+            }
+            assertTrue(
+                "expected the error type, got: ${failure.message}",
+                failure.message?.contains("Anthropic API error: overloaded_error") == true
+            )
         }
     }
 
@@ -773,9 +840,8 @@ class StreamedResponseTransportContractTest {
     private class ScriptedEndpoint(body: String, contentType: String?) : Closeable {
         private val server = ServerSocket(0, 16, java.net.InetAddress.getLoopbackAddress())
         private val worker = thread(isDaemon = true) {
-            // One request per call: a case that asks the transport and then the
-            // provider makes more than one connection, so the endpoint keeps
-            // answering until it is closed.
+            // Keep answering until closed: a case that drives the transport and
+            // then the provider opens more than one connection.
             while (!server.isClosed) {
                 val socket = try {
                     server.accept()

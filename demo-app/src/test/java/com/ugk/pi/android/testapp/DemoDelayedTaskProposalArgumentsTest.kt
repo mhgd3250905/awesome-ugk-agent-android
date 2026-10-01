@@ -130,9 +130,14 @@ class DemoDelayedTaskProposalArgumentsTest {
      * extraction must not reorder it. `repeating` is judged before `instruction`,
      * and the interval range before `repeating`.
      */
+    /**
+     * The check order is what the model reads, so it is behaviour: the extraction
+     * into a function must not reorder it. These are separate cases because a
+     * single method asserting three orders lets the first red hide the other two.
+     */
     @Test
-    fun checkOrderIsUnchangedWhenSeveralFieldsAreBad() {
-        val repeatingAndInstruction = readDelayProposalArguments(
+    fun repeatingIsJudgedBeforeInstruction() {
+        val result = readDelayProposalArguments(
             buildJsonObject {
                 put("delaySeconds", JsonPrimitive(60))
                 put("instruction", JsonPrimitive(""))
@@ -141,10 +146,13 @@ class DemoDelayedTaskProposalArgumentsTest {
         )
         assertEquals(
             "repeating must be a boolean.",
-            (repeatingAndInstruction as DelayProposalArguments.Refused).message
+            (result as DelayProposalArguments.Refused).message
         )
+    }
 
-        val rangeAndRepeating = readDelayProposalArguments(
+    @Test
+    fun intervalRangeIsJudgedBeforeRepeating() {
+        val result = readDelayProposalArguments(
             buildJsonObject {
                 put("delaySeconds", JsonPrimitive(0))
                 put("instruction", JsonPrimitive("提醒我喝水"))
@@ -153,10 +161,13 @@ class DemoDelayedTaskProposalArgumentsTest {
         )
         assertEquals(
             "The timer accepts intervals from 1 second to 24 hours.",
-            (rangeAndRepeating as DelayProposalArguments.Refused).message
+            (result as DelayProposalArguments.Refused).message
         )
+    }
 
-        val unknownAndDelay = readDelayProposalArguments(
+    @Test
+    fun unknownFieldsAreJudgedBeforeEverything() {
+        val result = readDelayProposalArguments(
             buildJsonObject {
                 put("instruction", JsonPrimitive("提醒我喝水"))
                 put("cron", JsonPrimitive("0 8 * * *"))
@@ -164,7 +175,7 @@ class DemoDelayedTaskProposalArgumentsTest {
         )
         assertEquals(
             "Unknown timer proposal field.",
-            (unknownAndDelay as DelayProposalArguments.Refused).message
+            (result as DelayProposalArguments.Refused).message
         )
     }
 }

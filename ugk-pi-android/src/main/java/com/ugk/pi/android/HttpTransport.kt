@@ -29,24 +29,30 @@ import java.net.URL
  *
  * Parameters are ignored (`text/event-stream; charset=utf-8` still is an event
  * stream), and a missing or malformed value falls through to
- * [looksLikeEventStreamLine].
+ * [looksLikeEventStreamLine]. A stream whose very first line is blank *and* whose
+ * media type is also missing falls through to the document branch: the answer is
+ * still read correctly (the reader re-splits the buffered body) but it arrives in
+ * one emission, and a body over `maxResponseBytes` then fails loudly instead of
+ * streaming. That boundary is pinned by a test rather than fixed, because buffering
+ * is the only way to hand a document over intact.
  */
 internal fun isEventStreamContentType(contentType: String?): Boolean =
     contentType?.substringBefore(';')?.trim()?.equals(EVENT_STREAM_MEDIA_TYPE, ignoreCase = true) == true
 
 /**
- * The secondary signal: a first line that only an SSE body produces. Without it,
- * an endpoint that streams real events but forgets the media type would be
- * buffered into one emission, losing incremental delivery for the whole answer
- * and putting a stream under the document size cap.
- *
- * Only the line prefixes the SSE grammar reserves are recognised, so a JSON
+ * The secondary signal: a first content line that only an SSE body produces.
+ * Without it, an endpoint that streams real events but forgets the media type
+ * would be buffered into one emission, losing incremental delivery for the whole
+ * answer and putting a stream under the document size cap. The line is trimmed the
+ * way the provider readers trim it, so the two cannot disagree about an indented
+ * stream. Only the prefixes the SSE grammar reserves are recognised, so a JSON
  * document - pretty-printed or not - can never be mistaken for one.
  */
-internal fun looksLikeEventStreamLine(firstLine: String): Boolean =
-    firstLine.startsWith("data:") || firstLine.startsWith("event:") ||
-        firstLine.startsWith("id:") || firstLine.startsWith("retry:") ||
-        firstLine.startsWith(":")
+internal fun looksLikeEventStreamLine(firstLine: String): Boolean {
+    val line = firstLine.trimStart()
+    return line.startsWith("data:") || line.startsWith("event:") ||
+        line.startsWith("id:") || line.startsWith("retry:") || line.startsWith(":")
+}
 
 private const val EVENT_STREAM_MEDIA_TYPE = "text/event-stream"
 

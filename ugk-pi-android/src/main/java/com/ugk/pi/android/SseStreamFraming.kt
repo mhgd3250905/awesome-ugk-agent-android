@@ -14,10 +14,13 @@ import kotlinx.serialization.json.JsonPrimitive
  * string a caller needs to be able to read - with a serialization-library message
  * about `JsonObject is not a JsonPrimitive`. A value that is not a string is
  * reported as absent, which lets the caller fall back to what it already holds
- * (the raw payload, or the body snippet).
+ * (the raw payload, or the body snippet). A blank string counts as absent too:
+ * `{"error":{"message":"","type":"overloaded_error"}}` must report the type, not
+ * "Anthropic API error: " with nothing after it.
  */
 internal fun JsonObject.textOrNull(key: String): String? =
-    (this[key] as? JsonPrimitive)?.takeIf { it.isString }?.content
+    (this[key] as? JsonPrimitive)
+        ?.takeIf { it.isString }?.content?.takeIf { it.isNotEmpty() }
 
 /**
  * Splits any emission that carries several lines into one emission per line.

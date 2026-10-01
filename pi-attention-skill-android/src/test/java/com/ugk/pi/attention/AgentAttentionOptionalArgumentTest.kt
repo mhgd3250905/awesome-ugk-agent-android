@@ -281,42 +281,74 @@ class AgentAttentionOptionalArgumentTest {
     }
 
     /**
-     * Both tools publish `additionalProperties: false`. A key outside the schema is
-     * therefore something the model was told not to send, and silently ignoring it
-     * lets an argument nobody implemented look honoured to the caller.
+     * Both tools publish `additionalProperties: false`, so a key outside the schema
+     * is something the model was told not to send - and a host that cannot route
+     * interactions must not accept `actions`. Three things have to hold at once, and
+     * the second is the shape this guard itself broke when it was first written:
+     * a null-valued key is not a declaration, so a gateway filling every optional
+     * with null must still get its screen.
      */
     @Test
     fun undeclaredArgumentNamesAreVisibleToBothTools() {
-        val notificationOnly = buildJsonObject {
-            put("title", "标题")
-            put("body", "正文")
-        }
-        assertFalse(notificationOnly.declaresUndeclaredArgument(messageArgumentKeys(withInteractions = false)))
+        val notificationSchema = notificationSchema()
+        val urgentSchema = urgentMessageSchema()
+        assertEquals(
+            "the notification tool must validate against its own schema, not the urgent one",
+            (notificationSchema["properties"] as JsonObject).keys.toSet(),
+            messageArgumentKeys(withReason = false, withInteractions = false)
+        )
+        assertEquals(
+            (urgentSchema["properties"] as JsonObject).keys.toSet(),
+            messageArgumentKeys(withReason = true, withInteractions = true)
+        )
+        assertEquals(
+            setOf("title", "body"),
+            messageArgumentKeys(withReason = false, withInteractions = false)
+        )
+
+        val notificationKeys = messageArgumentKeys(withReason = false, withInteractions = false)
+        assertFalse(
+            buildJsonObject {
+                put("title", "标题")
+                put("body", "正文")
+            }.declaresUndeclaredArgument(notificationKeys)
+        )
         assertTrue(
-            "an urgency knob is not an argument of this tool",
+            "accent is not an argument of agent_send_notification",
+            buildJsonObject {
+                put("title", "标题")
+                put("body", "正文")
+                put("accent", "red")
+            }.declaresUndeclaredArgument(notificationKeys)
+        )
+        assertTrue(
+            "an urgency knob is not an argument either",
             buildJsonObject {
                 put("title", "标题")
                 put("body", "正文")
                 put("urgency", "critical")
-            }.declaresUndeclaredArgument(messageArgumentKeys(withInteractions = false))
+            }.declaresUndeclaredArgument(notificationKeys)
         )
 
-        val urgentWithoutInteractions = buildJsonObject {
-            put("title", "标题")
-            put("body", "正文")
-            put("reason", "理由")
-            put("accent", "red")
-            put("blocks", JsonArray(emptyList()))
-        }
-        assertFalse(urgentWithoutInteractions.declaresUndeclaredArgument(messageArgumentKeys(withInteractions = false)))
-        assertTrue(
-            "a non-interactive host must not see actions as a declared argument",
+        val nonInteractiveKeys = messageArgumentKeys(withReason = true, withInteractions = false)
+        val interactiveKeys = messageArgumentKeys(withReason = true, withInteractions = true)
+        assertFalse(
+            "a declared blocks list is fine on either host",
             buildJsonObject {
                 put("title", "标题")
                 put("body", "正文")
                 put("reason", "理由")
-                put("actions", JsonArray(emptyList()))
-            }.declaresUndeclaredArgument(messageArgumentKeys(withInteractions = false))
+                put("blocks", JsonArray(emptyList()))
+            }.declaresUndeclaredArgument(nonInteractiveKeys)
+        )
+        assertTrue(
+            "a non-interactive host must refuse actions it cannot route",
+            buildJsonObject {
+                put("title", "标题")
+                put("body", "正文")
+                put("reason", "理由")
+                put("actions", buildJsonArray { add(buildJsonObject { put("id", "ok"); put("label", "好") }) })
+            }.declaresUndeclaredArgument(nonInteractiveKeys)
         )
         assertFalse(
             "an interactive host accepts actions",
@@ -325,12 +357,18 @@ class AgentAttentionOptionalArgumentTest {
                 put("body", "正文")
                 put("reason", "理由")
                 put("actions", JsonArray(emptyList()))
-            }.declaresUndeclaredArgument(messageArgumentKeys(withInteractions = true))
+            }.declaresUndeclaredArgument(interactiveKeys)
         )
-        assertEquals(
-            "the declared keys must be exactly what the schema lists",
-            (urgentMessageSchema()["properties"] as JsonObject).keys,
-            messageArgumentKeys(withInteractions = true)
+        assertFalse(
+            "a null actions/form is an unfilled optional, even on a non-interactive host",
+            buildJsonObject {
+                put("title", "标题")
+                put("body", "正文")
+                put("reason", "理由")
+                put("blocks", JsonNull)
+                put("actions", JsonNull)
+                put("form", JsonNull)
+            }.declaresUndeclaredArgument(nonInteractiveKeys)
         )
     }
 

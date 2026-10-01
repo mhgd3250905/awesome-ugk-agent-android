@@ -126,6 +126,14 @@ class AgentTaskUpdateNullOptionalArgumentTest {
         assertTrue(withoutTitle.isError)
         assertEquals("MISSING_TITLE", (withoutTitle.metadata["code"] as? JsonPrimitive)?.content)
 
+        val withoutSchedule = AgentTaskCreateTool(store, NoopAgentTaskScheduler, FixedClock(1_000L), SequentialTaskIdGenerator("task"))
+            .execute(call("agent_task_create", "title" to JsonPrimitive("x"), "action" to notifyAction()), context())
+        assertEquals("MISSING_SCHEDULE", (withoutSchedule.metadata["code"] as? JsonPrimitive)?.content)
+
+        val withoutAction = AgentTaskCreateTool(store, NoopAgentTaskScheduler, FixedClock(1_000L), SequentialTaskIdGenerator("task"))
+            .execute(call("agent_task_create", "title" to JsonPrimitive("x"), "schedule" to oneShotSchedule()), context())
+        assertEquals("MISSING_ACTION", (withoutAction.metadata["code"] as? JsonPrimitive)?.content)
+
         val withoutTaskId = AgentTaskUpdateTool(store, NoopAgentTaskScheduler).execute(
             call("agent_task_update", "title" to JsonPrimitive("改名")),
             context()
@@ -165,6 +173,38 @@ class AgentTaskUpdateNullOptionalArgumentTest {
         assertTrue(
             "the next run must move out with the new interval",
             (store.get("task_1")!!.nextRunAtMillis ?: 0L) > (before.nextRunAtMillis ?: 0L)
+        )
+    }
+
+    /** The `action` landing point needs its own declared-garbage case. */
+    @Test
+    fun nonObjectActionIsStillRefused() = runBlocking {
+        val store = InMemoryAgentTaskStore()
+        AgentTaskCreateTool(store, NoopAgentTaskScheduler, FixedClock(1_000L), SequentialTaskIdGenerator("task"))
+            .execute(
+                call(
+                    "agent_task_create",
+                    "title" to JsonPrimitive("喝水提醒"),
+                    "schedule" to oneShotSchedule(),
+                    "action" to notifyAction()
+                ),
+                context()
+            )
+        val original = store.get("task_1")!!.action
+
+        val updated = AgentTaskUpdateTool(store, NoopAgentTaskScheduler, FixedClock(2_000L)).execute(
+            call(
+                "agent_task_update",
+                "taskId" to JsonPrimitive("task_1"),
+                "action" to JsonPrimitive("remind me later")
+            ),
+            context()
+        )
+        assertTrue("a string action must still be refused", updated.isError)
+        assertEquals(
+            "the refused update must leave the stored action untouched",
+            original,
+            store.get("task_1")!!.action
         )
     }
 

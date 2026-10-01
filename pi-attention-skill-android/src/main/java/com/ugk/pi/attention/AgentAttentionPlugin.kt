@@ -89,7 +89,7 @@ private class SendNotificationTool(
     override val inputSchema: JsonObject = messageSchema()
 
     override suspend fun execute(call: ToolCall, context: ToolExecutionContext): ToolResult {
-        if (call.input.declaresUndeclaredArgument(messageArgumentKeys(withInteractions = false))) {
+        if (call.input.declaresUndeclaredArgument(messageArgumentKeys(withReason = false, withInteractions = false))) {
             return invalidInput(call)
         }
         val message = call.input.readMessage() ?: return invalidInput(call)
@@ -117,7 +117,10 @@ private class ShowUrgentMessageTool(
     override val inputSchema: JsonObject = messageSchema(withReason = true, withInteractions = supportsInteractions)
 
     override suspend fun execute(call: ToolCall, context: ToolExecutionContext): ToolResult {
-        if (call.input.declaresUndeclaredArgument(messageArgumentKeys(withInteractions = supportsInteractions))) {
+        if (call.input.declaresUndeclaredArgument(
+                messageArgumentKeys(withReason = true, withInteractions = supportsInteractions)
+            )
+        ) {
             return invalidInput(call)
         }
         val message = call.input.readMessage() ?: return invalidInput(call)
@@ -127,11 +130,8 @@ private class ShowUrgentMessageTool(
             ?: return invalidInput(call)
         val accent = call.input.readUrgentAccent() ?: return invalidInput(call)
         val blocks = call.input.readUrgentBlocks() ?: return invalidInput(call)
-        if (!supportsInteractions &&
-            (call.input.declaresControl("actions") || call.input.declaresControl("form"))
-        ) {
-            return invalidInput(call)
-        }
+        // A host without interaction routing refuses `actions`/`form` through the
+        // undeclared-argument check above: they are simply not in its schema.
         val actions = call.input.readUrgentActions() ?: return invalidInput(call)
         val form = if (call.input.declaresControl("form")) {
             call.input.readUrgentForm() ?: return invalidInput(call)
@@ -302,25 +302,36 @@ internal fun JsonObject.readUrgentAccent(): UrgentAccent? =
     }
 
 /**
- * True when the arguments name a key the schema does not declare. Both tools
- * publish `additionalProperties: false`, so a stray key is something the model was
- * told it must not send; accepting it silently is how an argument nobody
- * implemented looks honoured to the caller.
+ * True when the arguments **declare** a key the schema does not. Both tools publish
+ * `additionalProperties: false`, so a stray key is something the model was told not
+ * to send, and accepting it silently is how an argument nobody implemented looks
+ * honoured to the caller.
+ *
+ * A key whose value is JSON null is not a declaration. Without that, the guard would
+ * re-break the rule it sits next to: a gateway that fills every optional field with
+ * null would be refused for naming `actions` on a host that has no actions - the
+ * exact failure the readers below exist to stop.
  *
  * See [readUrgentBlocks] for why this is internal.
  */
-internal fun JsonObject.declaresUndeclaredArgument(allowed: Set<String>): Boolean =
-    keys.any { it !in allowed }
+internal fun JsonObject.declaresUndeclaredArgument(declared: Set<String>): Boolean =
+    keys.any { it !in declared && declaresControl(it) }
 
-/** The argument names [messageSchema] declares for one call shape. */
-internal fun messageArgumentKeys(withInteractions: Boolean): Set<String> =
-    if (withInteractions) MESSAGE_ARGUMENT_KEYS + INTERACTION_ARGUMENT_KEYS else MESSAGE_ARGUMENT_KEYS
+/**
+ * The argument names the schema declares for one call shape, read off the schema
+ * itself: a hand-copied list here drifted the first time (the notification tool was
+ * validated against the urgent tool's keys and went on accepting `accent`).
+ */
+internal fun messageArgumentKeys(withReason: Boolean, withInteractions: Boolean): Set<String> =
+    (messageSchema(withReason = withReason, withInteractions = withInteractions)["properties"] as? JsonObject)
+        ?.keys?.toSet()
+        .orEmpty()
 
-private val MESSAGE_ARGUMENT_KEYS = setOf("title", "body", "reason", "accent", "blocks")
-private val INTERACTION_ARGUMENT_KEYS = setOf("actions", "form")
-
-/** The schema the urgent-message Tool answers to, exposed so its optional keys can be enumerated. */
+/** The schema the urgent-message Tool answers to, exposed so its keys can be enumerated. */
 internal fun urgentMessageSchema(): JsonObject = messageSchema(withReason = true, withInteractions = true)
+
+/** The schema the notification Tool answers to. */
+internal fun notificationSchema(): JsonObject = messageSchema()
 
 /** See [readUrgentBlocks] for why this is internal. */
 internal fun validControlId(id: String): Boolean =
