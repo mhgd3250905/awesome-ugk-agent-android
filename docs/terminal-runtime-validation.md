@@ -601,3 +601,13 @@ MODULE pi-file-skill-android          tests=13  failures=0 errors=0 skipped=1
 - 结果定性：设备环境阻塞，非本轮代码回归。① 首轮运行期间发生一次对在用应用的卸载重装，应用私有数据被清空（五份教学记录与 API 配置；事故与教训登记于版本台账 2026-10-01 节）；② 用户手动开启 MIUI「显示悬浮窗」后 `Settings.canDrawOverlays()` 守卫通过，证明该开关在 MIUI 上不受 AOSP `appops set SYSTEM_ALERT_WINDOW allow` 影响；③ `DemoDialogTestHostActivity` 45 秒无法达到 idle（事件队列零空闲），关闭 window/transition/animator 三个动画缩放后依旧复现，属设备系统 UI 级重绘，FloatingConversation、NoteStyle、PermissionGuide、DemoDelayedTaskDialog 等依赖该宿主 Activity 的用例系统性超时；④ `PermissionGuideInstrumentedTest.settingsEntry...SurvivesRecreation` 三轮挂起（§33 已登记该用例首跑偶发，本机为常态）。
 - 影响边界：失败用例与本轮合并代码（教学编译器、终端本地 HTTP 运行时）无文件交集，不构成第九/十轮修复的回归或假绿证据；通过类与失败类的完整清单留在 `/tmp/am-instrument-run*.log`（未入库）。
 - 结论与后续：UI 仪器套件的通过性验收只在 AVD 上执行（§33 惯例）；日用手机禁止直跑 connected/instrumented，确需时先 `run-as` tar 备份 `files/` 与 `shared_prefs/` 到 PC，跑完恢复并核对哈希。另登记两条操作教训：TaskStop gradle connected 会触发其清理阶段异步卸载主应用与 test APK（重装须用同钥 APK 并重授权限）；结果目录的孤儿 UTP JVM 进程不终止时，Gradle 因无法哈希 `.lck`/logcat 文件而拒绝执行 connected 任务。
+
+## 37. D-031 close 归属与 native 探针 fail-closed 的验证（2026-10-02）
+
+- 范围：`fix/terminal-lifecycle-d031-20261002` 分支四提交（D-031 决策先行、C8 fail-closed、A8 单表+ownerId、plugin close 接线与仪器回归）。决策与动机见 `docs/terminal-runtime-decisions.md` D-031；此处只记证据。
+- JVM 门禁：十模块 `--rerun-tasks` 独占全量 **863/0/0/3**（= §36 前基线 858 + 新增 5：`LocalHttpServerRecordDispositionTest` 的「探针不可用按存在处理」×2 与「close 作用域」×3；skip 分布不变）。
+- 仪器门禁（AVD `ugk_dev_api35_smooth`，emulator-5554，Android 35）：`:demo-app:installDebug` + `am instrument -e class com.ugk.pi.android.testapp.LocalHttpServerManagerInstrumentedTest` → **OK (2 tests)**：
+  1. `managedServerServesWorkspaceAndStopsByProcessGroup`（既有用例，跨实例显式 stop 契约在单表下保持，D-030 追记第 5 条要求的复跑对象）；
+  2. `closingASideManagerDoesNotStopTheServerItsOwnerStillServes`（新增 D-031 回归：side manager `close()` 后 owner 的站点仍 `running`，owner 显式 `stop` 仍 `stopped`）。
+- 一次计划外的红/绿实证：首跑时模拟器上残留 09-28 旧主包（`installDebugAndroidTest` 只更新了测试包，主包 `lastUpdateTime=2026-09-28`），新用例对旧代码判红——`sideManager.close()` 走旧 `stopAll()` 语义杀掉 owner 站点、`owner.status(port)` 列表为空、`single()` 抛 `NoSuchElementException`；显式 `:demo-app:installDebug` 装入分支构建后同用例转绿。该失败与修复前缺陷逐点吻合，构成回归用例有效性的直接证据。教训登记：`installDebugAndroidTest` 不保证主包同步更新，`am instrument` 前须显式 `installDebug` 并核对 `lastUpdateTime`。
+- 遗留（不假装已把关）：D-030 追记第 5 条的「外来监听者不得被报成 running」仪器断言仍未落地——构造该场景需要测试进程访问 manager 私有 `Process` 句柄或注入外来监听的测试缝，本批未引入；`unattributable` 真机路径与设备侧 CPython 3.14.6 handler 行为（§35 未证实项 1/2）继续挂账。
