@@ -149,12 +149,21 @@ class TerminalAgentPlugin private constructor(
     /** Interrupts all running and queued terminal calls owned by this plugin. */
     override fun cancelAll(): Int = terminalTool.cancelAll()
 
-    /** Stops services owned by this plugin instance when the host is shutting down. */
+    /**
+     * Stops every managed local HTTP server this process has recorded,
+     * regardless of which plugin instance started it; hosts use this for a
+     * deliberate full shutdown.
+     */
     fun stopAllLocalHttpServers(): Int = localHttpServerController.stopAll()
 
-    /** Releases Runtime-managed local services owned by this plugin instance. */
+    /**
+     * Releases the local HTTP servers this plugin instance started (D-031):
+     * the manager's own close() scope, not the process-wide stopAll().
+     * Records rehydrated from disk and servers started by other live plugin
+     * instances are left to their owners or an explicit stop/stopAll.
+     */
     override fun close() {
-        localHttpServerController.stopAll()
+        localHttpServerController.close()
     }
 
     private data class Components(

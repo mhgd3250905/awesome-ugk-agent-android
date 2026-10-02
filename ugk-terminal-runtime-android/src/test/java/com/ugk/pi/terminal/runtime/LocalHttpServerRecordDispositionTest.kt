@@ -1,6 +1,8 @@
 package com.ugk.pi.terminal.runtime
 
 import org.junit.Assert.assertEquals
+import org.junit.Assert.assertFalse
+import org.junit.Assert.assertTrue
 import org.junit.Test
 
 /**
@@ -199,5 +201,58 @@ class LocalHttpServerRecordDispositionTest {
         )
 
         assertEquals(StopDisposition.SIGNAL_PROCESS_GROUP, disposition)
+    }
+
+    /**
+     * D-031: a native probe that cannot run says nothing about the group.
+     * Reading its universal `false` as "gone" let status() FORGET a live
+     * record - deleting the only copy of the issued token - and let stop()
+     * claim `stopped` for a server still running.
+     */
+    @Test
+    fun groupExistenceIsTreatedAsTrueWhenTheProbeCannotRun() {
+        assertEquals(
+            "an unobservable group is not a dead group",
+            true,
+            LocalHttpServerManager.groupExistsForDisposition(probeUsable = false, probeAnswer = false)
+        )
+        assertEquals(
+            true,
+            LocalHttpServerManager.groupExistsForDisposition(probeUsable = false, probeAnswer = true)
+        )
+    }
+
+    @Test
+    fun groupExistenceFollowsTheProbeWhenItRuns() {
+        assertEquals(false, LocalHttpServerManager.groupExistsForDisposition(probeUsable = true, probeAnswer = false))
+        assertEquals(true, LocalHttpServerManager.groupExistsForDisposition(probeUsable = true, probeAnswer = true))
+    }
+
+    /**
+     * D-031: close() releases only what the closing instance itself started.
+     * A side runtime (the demo app's teaching runtime) shares the process
+     * with the main conversation runtime; before this rule its close()
+     * rehydrated the shared disk records and killed the foreground server.
+     */
+    @Test
+    fun closeReleasesOnlyRecordsThisInstanceStarted() {
+        assertTrue(
+            LocalHttpServerManager.closeReleasesRecord(recordOwnerId = 7L, closingOwnerId = 7L)
+        )
+    }
+
+    @Test
+    fun closeSparesRecordsRehydratedFromDisk() {
+        assertFalse(
+            "a rehydrated record has no live owner and must wait for an explicit stop/stopAll",
+            LocalHttpServerManager.closeReleasesRecord(recordOwnerId = null, closingOwnerId = 7L)
+        )
+    }
+
+    @Test
+    fun closeSparesRecordsStartedByAnotherLiveInstance() {
+        assertFalse(
+            LocalHttpServerManager.closeReleasesRecord(recordOwnerId = 8L, closingOwnerId = 7L)
+        )
     }
 }
