@@ -8,7 +8,7 @@ import com.ugk.pi.android.AtomicFileWrites
 import com.ugk.pi.android.ToolCall
 import com.ugk.pi.android.ToolExecutionContext
 import com.ugk.pi.android.ToolResult
-import com.ugk.pi.android.UserConfirmationRequiredTool
+import com.ugk.pi.android.withUserConfirmation
 import com.ugk.pi.android.boolean
 import com.ugk.pi.android.isInsideRoot
 import com.ugk.pi.android.string
@@ -60,16 +60,10 @@ class AppFileAgentPlugin(
     override val id: String = "app-private-files"
 
     override fun tools(): List<AgentTool> {
-        return appPrivateFileTools(rootDir, maxFileBytes).map { tool ->
-            if (requireDeleteConfirmation && tool.name == "app_file_delete") {
-                UserConfirmationRequiredTool(
-                    tool,
-                    shouldBypassConfirmation = shouldBypassConfirmation
-                )
-            } else {
-                tool
-            }
-        }
+        val protectedToolNames =
+            if (requireDeleteConfirmation) setOf("app_file_delete") else emptySet()
+        return appPrivateFileTools(rootDir, maxFileBytes)
+            .withUserConfirmation(protectedToolNames, shouldBypassConfirmation)
     }
 
     override fun skills(): List<AndroidSkill> = listOf(
