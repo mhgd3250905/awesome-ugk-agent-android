@@ -422,7 +422,10 @@ class LocalHttpServerManager(
 
     private fun hasProcess(server: ManagedServer): Boolean {
         val processAlive = server.process?.let(::isAlive) == true
-        return processAlive || NativeProcessGroupControl.processGroupExists(server.processGroupId)
+        return processAlive || groupExistsForDisposition(
+            probeUsable = NativeProcessGroupControl.isAvailable(),
+            probeAnswer = NativeProcessGroupControl.processGroupExists(server.processGroupId)
+        )
     }
 
     /**
@@ -465,21 +468,43 @@ class LocalHttpServerManager(
 
     private fun queryDispositionFor(server: ManagedServer): QueryDisposition = queryDisposition(
         processHandleAlive = server.process?.let(::isAlive) == true,
-        processGroupExists = { NativeProcessGroupControl.processGroupExists(server.processGroupId) },
+        processGroupExists = { groupProbe(server) },
         pastStaleGrace = isPastStaleGrace(server),
         portListening = { answersAsOurServer(server) }
     )
 
     private fun stopDispositionFor(server: ManagedServer): StopDisposition = stopDisposition(
         processHandleAlive = server.process?.let(::isAlive) == true,
-        processGroupExists = { NativeProcessGroupControl.processGroupExists(server.processGroupId) },
+        processGroupExists = { groupProbe(server) },
         pastStaleGrace = isPastStaleGrace(server),
         portListening = { answersAsOurServer(server) }
     )
 
+    /**
+     * Group existence as the lifecycle tables may treat it (D-031): a probe
+     * that cannot run does not say "absent". Treating an unobservable group
+     * as gone let status() FORGET a live record - deleting the only copy of
+     * its issued token - and let stop() report `stopped` for a server still
+     * running.
+     */
+    private fun groupProbe(server: ManagedServer): Boolean = groupExistsForDisposition(
+        probeUsable = NativeProcessGroupControl.isAvailable(),
+        probeAnswer = NativeProcessGroupControl.processGroupExists(server.processGroupId)
+    )
+
     private fun stopRecord(server: ManagedServer): Boolean {
-        var groupStopped = !NativeProcessGroupControl.processGroupExists(server.processGroupId)
-        if (!groupStopped) {
+        val groupProbeUsable = NativeProcessGroupControl.isAvailable()
+        // Fail closed (D-031): without the native probe a process group can be
+        // neither signalled nor observed. A record this instance still holds a
+        // Process handle for is torn down through that handle, and the handle
+        // stands in for group evidence; a handle-less record reports failure
+        // instead of claiming a stop that cannot be performed or verified.
+        var groupStopped = if (groupProbeUsable) {
+            !NativeProcessGroupControl.processGroupExists(server.processGroupId)
+        } else {
+            server.process != null
+        }
+        if (!groupStopped && groupProbeUsable) {
             NativeProcessGroupControl.signalProcessGroup(server.processGroupId, SIGNAL_TERMINATE)
             groupStopped = waitForProcessGroupExit(server.processGroupId, STOP_GRACE_PERIOD_MILLIS)
             if (!groupStopped) {
@@ -743,6 +768,17 @@ class LocalHttpServerManager(
          * when it might be serving its workspace to the token URL right now.
          */
         const val STATE_UNATTRIBUTABLE = "unattributable"
+
+        /**
+         * Group existence as the disposition tables may treat it, split out so
+         * the rule is pinnable on the JVM: a probe that cannot run must not be
+         * read as "the group is gone" (D-031). Reverting this to
+         * `probeAnswer` alone lets status() forget live records and stop()
+         * report `stopped` for servers still running whenever the native
+         * library fails to load.
+         */
+        internal fun groupExistsForDisposition(probeUsable: Boolean, probeAnswer: Boolean): Boolean =
+            if (probeUsable) probeAnswer else true
 
         /**
          * What status() may conclude about one record from four observations.

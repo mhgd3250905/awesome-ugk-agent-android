@@ -10,6 +10,13 @@ internal object NativeProcessGroupControl {
         runCatching { System.loadLibrary("ugk_terminal_native") }.isSuccess
     }
 
+    /**
+     * Whether the probe can run at all. Callers that must not mistake an
+     * unobservable process group for a dead one (D-031) read this and treat
+     * "unknown" as "exists"; best-effort callers may keep ignoring it.
+     */
+    fun isAvailable(): Boolean = nativeAvailable
+
     fun signalProcessGroup(processGroupId: Int, signalNumber: Int): Boolean {
         if (processGroupId <= 0 || signalNumber <= 0 || !nativeAvailable) return false
         return nativeSignalProcessGroup(processGroupId, signalNumber)

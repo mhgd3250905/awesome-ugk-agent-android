@@ -200,4 +200,29 @@ class LocalHttpServerRecordDispositionTest {
 
         assertEquals(StopDisposition.SIGNAL_PROCESS_GROUP, disposition)
     }
+
+    /**
+     * D-031: a native probe that cannot run says nothing about the group.
+     * Reading its universal `false` as "gone" let status() FORGET a live
+     * record - deleting the only copy of the issued token - and let stop()
+     * claim `stopped` for a server still running.
+     */
+    @Test
+    fun groupExistenceIsTreatedAsTrueWhenTheProbeCannotRun() {
+        assertEquals(
+            "an unobservable group is not a dead group",
+            true,
+            LocalHttpServerManager.groupExistsForDisposition(probeUsable = false, probeAnswer = false)
+        )
+        assertEquals(
+            true,
+            LocalHttpServerManager.groupExistsForDisposition(probeUsable = false, probeAnswer = true)
+        )
+    }
+
+    @Test
+    fun groupExistenceFollowsTheProbeWhenItRuns() {
+        assertEquals(false, LocalHttpServerManager.groupExistsForDisposition(probeUsable = true, probeAnswer = false))
+        assertEquals(true, LocalHttpServerManager.groupExistsForDisposition(probeUsable = true, probeAnswer = true))
+    }
 }
