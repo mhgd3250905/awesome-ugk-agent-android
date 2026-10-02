@@ -255,4 +255,88 @@ class LocalHttpServerRecordDispositionTest {
             LocalHttpServerManager.closeReleasesRecord(recordOwnerId = 8L, closingOwnerId = 7L)
         )
     }
+
+    /**
+     * The D-031 rule as the lifecycle calls actually compose it.
+     *
+     * Before this row set, only `groupExistsForDisposition` was pinned: replacing
+     * the `probeUsable` argument at `hasProcess()`/`groupProbe()` with a constant,
+     * or reading a live handle plus an unusable probe as "gone", left all 55 tests
+     * green (measured: mut-m1a/m1b logs). Every combination is reported together,
+     * because a loop that stopped at the first mismatch would hide the D-031 rows
+     * behind the handle-alive rows.
+     */
+    @Test
+    fun processEvidenceCoversEveryObservationCombination() {
+        val expected = mapOf(
+            // A handle this instance still holds is direct evidence either way.
+            Triple(true, true, true) to true,
+            Triple(true, true, false) to true,
+            Triple(true, false, true) to true,
+            Triple(true, false, false) to true,
+            // No handle: a usable probe decides.
+            Triple(false, true, true) to true,
+            Triple(false, true, false) to false,
+            // No handle and no probe: "unknown" must not be read as "gone" (D-031).
+            Triple(false, false, true) to true,
+            Triple(false, false, false) to true
+        )
+        assertEquals(
+            "handleAlive / probeUsable / probeAnswer rows that disagree",
+            emptyList<String>(),
+            expected.mapNotNull { (observations, want) ->
+                val (handleAlive, probeUsable, probeAnswer) = observations
+                val got = LocalHttpServerManager.processEvidencePresent(
+                    handleAlive = handleAlive,
+                    probeUsable = probeUsable,
+                    probeAnswer = probeAnswer
+                )
+                if (got == want) {
+                    null
+                } else {
+                    "handleAlive=$handleAlive probeUsable=$probeUsable probeAnswer=$probeAnswer " +
+                        "expected=$want got=$got"
+                }
+            }
+        )
+    }
+
+    /**
+     * What one `stopRecord()` attempt may claim, over the whole observation
+     * domain. The discriminating rows are the last two: with the probe unusable
+     * and no handle the stop must fail loudly instead of reporting `stopped`,
+     * and with the probe usable a group that answers "exists" must be signalled
+     * rather than trusted.
+     */
+    @Test
+    fun stopPlanCoversEveryObservationCombination() {
+        val expected = mapOf(
+            Triple(true, false, true) to GroupStopPlan.ALREADY_GONE,
+            Triple(true, false, false) to GroupStopPlan.ALREADY_GONE,
+            Triple(true, true, true) to GroupStopPlan.SIGNAL_AND_VERIFY,
+            Triple(true, true, false) to GroupStopPlan.SIGNAL_AND_VERIFY,
+            Triple(false, true, true) to GroupStopPlan.ALREADY_GONE,
+            Triple(false, false, true) to GroupStopPlan.ALREADY_GONE,
+            Triple(false, true, false) to GroupStopPlan.UNVERIFIABLE,
+            Triple(false, false, false) to GroupStopPlan.UNVERIFIABLE
+        )
+        assertEquals(
+            "probeUsable / groupExists / holdsProcessHandle rows that disagree",
+            emptyList<String>(),
+            expected.mapNotNull { (observations, want) ->
+                val (probeUsable, groupExists, holdsProcessHandle) = observations
+                val got = LocalHttpServerManager.groupStopPlan(
+                    probeUsable = probeUsable,
+                    groupExists = groupExists,
+                    holdsProcessHandle = holdsProcessHandle
+                )
+                if (got == want) {
+                    null
+                } else {
+                    "probeUsable=$probeUsable groupExists=$groupExists " +
+                        "holdsProcessHandle=$holdsProcessHandle expected=$want got=$got"
+                }
+            }
+        )
+    }
 }

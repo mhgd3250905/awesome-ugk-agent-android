@@ -452,13 +452,11 @@ class LocalHttpServerManager(
         )
     }
 
-    private fun hasProcess(server: ManagedServer): Boolean {
-        val processAlive = server.process?.let(::isAlive) == true
-        return processAlive || groupExistsForDisposition(
-            probeUsable = NativeProcessGroupControl.isAvailable(),
-            probeAnswer = NativeProcessGroupControl.processGroupExists(server.processGroupId)
-        )
-    }
+    private fun hasProcess(server: ManagedServer): Boolean = processEvidencePresent(
+        handleAlive = server.process?.let(::isAlive) == true,
+        probeUsable = NativeProcessGroupControl.isAvailable(),
+        probeAnswer = NativeProcessGroupControl.processGroupExists(server.processGroupId)
+    )
 
     /**
      * Whether the responder on this port is this record's own server.
@@ -525,18 +523,18 @@ class LocalHttpServerManager(
     )
 
     private fun stopRecord(server: ManagedServer): Boolean {
-        val groupProbeUsable = NativeProcessGroupControl.isAvailable()
         // Fail closed (D-031): without the native probe a process group can be
         // neither signalled nor observed. A record this instance still holds a
         // Process handle for is torn down through that handle, and the handle
         // stands in for group evidence; a handle-less record reports failure
         // instead of claiming a stop that cannot be performed or verified.
-        var groupStopped = if (groupProbeUsable) {
-            !NativeProcessGroupControl.processGroupExists(server.processGroupId)
-        } else {
-            server.process != null
-        }
-        if (!groupStopped && groupProbeUsable) {
+        val plan = groupStopPlan(
+            probeUsable = NativeProcessGroupControl.isAvailable(),
+            groupExists = NativeProcessGroupControl.processGroupExists(server.processGroupId),
+            holdsProcessHandle = server.process != null
+        )
+        var groupStopped = plan == GroupStopPlan.ALREADY_GONE
+        if (plan == GroupStopPlan.SIGNAL_AND_VERIFY) {
             NativeProcessGroupControl.signalProcessGroup(server.processGroupId, SIGNAL_TERMINATE)
             groupStopped = waitForProcessGroupExit(server.processGroupId, STOP_GRACE_PERIOD_MILLIS)
             if (!groupStopped) {
@@ -588,12 +586,17 @@ class LocalHttpServerManager(
             FileOutputStream(staged).use { output ->
                 properties.store(output, "UGK managed local HTTP server")
             }
-            if (!staged.renameTo(server.metadataFile)) {
-                // renameTo does not replace an existing target everywhere.
-                server.metadataFile.delete()
-                check(staged.renameTo(server.metadataFile)) {
-                    "Unable to persist local HTTP server metadata for port ${server.port}."
-                }
+            // No delete-then-rename here. This file is the only surviving copy of
+            // the token handed to the caller, and deleting it before a second
+            // rename attempt can leave a live server whose record - and therefore
+            // whose stop() and its own URL - no longer exist, which is exactly the
+            // state D-031 was written to prevent. File.renameTo does replace an
+            // existing target on Android's filesystem; on a JVM where it cannot,
+            // the failure is surfaced loudly and the existing record is left
+            // intact instead of being destroyed on the way to a retry.
+            check(staged.renameTo(server.metadataFile)) {
+                "Unable to persist local HTTP server metadata for port ${server.port}; " +
+                    "the record already on disk for that port is unchanged."
             }
         } finally {
             if (staged.exists()) staged.delete()
@@ -845,6 +848,40 @@ class LocalHttpServerManager(
          */
         internal fun groupExistsForDisposition(probeUsable: Boolean, probeAnswer: Boolean): Boolean =
             if (probeUsable) probeAnswer else true
+
+        /**
+         * Whether one record may still be treated as backed by a live process.
+         *
+         * [groupExistsForDisposition] alone is not the answer: a process this
+         * instance still holds is direct evidence, and the group probe only
+         * substitutes for it. Pinning the composition here is what makes
+         * `hasProcess()` decidable on the host at all - before it, dropping the
+         * probe term or reading an unobservable group as "gone" left every JVM
+         * test green.
+         */
+        internal fun processEvidencePresent(
+            handleAlive: Boolean,
+            probeUsable: Boolean,
+            probeAnswer: Boolean
+        ): Boolean = handleAlive || groupExistsForDisposition(probeUsable, probeAnswer)
+
+        /**
+         * The three observations `stopRecord()` can make, as one decision table.
+         *
+         * An unusable probe says nothing about the group, so only a handle this
+         * instance holds can stand in for group evidence (D-031); without one,
+         * claiming "stopped" would delete the record and its only copy of the
+         * issued token while a server may still be serving.
+         */
+        internal fun groupStopPlan(
+            probeUsable: Boolean,
+            groupExists: Boolean,
+            holdsProcessHandle: Boolean
+        ): GroupStopPlan = when {
+            !probeUsable -> if (holdsProcessHandle) GroupStopPlan.ALREADY_GONE else GroupStopPlan.UNVERIFIABLE
+            !groupExists -> GroupStopPlan.ALREADY_GONE
+            else -> GroupStopPlan.SIGNAL_AND_VERIFY
+        }
 
         /**
          * What status() may conclude about one record from four observations.
@@ -1250,6 +1287,24 @@ internal enum class QueryDisposition { REPORT, REPORT_UNATTRIBUTABLE, FORGET_CON
 
 /** What stop()/stopAll() may do to one record. */
 internal enum class StopDisposition { SIGNAL_PROCESS_GROUP, DROP_UNATTRIBUTABLE, DROP_CONFIRMED_DEAD }
+
+/**
+ * How one `stopRecord()` attempt may treat the process group, decided from the
+ * three things the call can actually observe. Split out because the equivalent
+ * decision used to be spelled inline in `stopRecord()`, where no test on any
+ * host could reach it (`:ugk-terminal-runtime-android` cannot construct a
+ * manager without an Android Context, and a device always has a working probe).
+ */
+internal enum class GroupStopPlan {
+    /** The group is provably gone, or this instance can prove the teardown through its own handle. */
+    ALREADY_GONE,
+
+    /** The group is live and the probe can signal it: TERM, then KILL, then re-verify. */
+    SIGNAL_AND_VERIFY,
+
+    /** Neither the probe nor a held handle can prove anything: the stop must fail loudly. */
+    UNVERIFIABLE
+}
 
 /** Single source of the default loopback port; the companion keeps no duplicate. */
 const val DEFAULT_LOCAL_HTTP_SERVER_PORT: Int = 8_765
