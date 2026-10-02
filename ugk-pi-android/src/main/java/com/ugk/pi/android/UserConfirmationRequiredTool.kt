@@ -220,3 +220,24 @@ class UserConfirmationRequiredTool(
         return value.contentOrNull
     }
 }
+
+/**
+ * Wraps every tool whose name appears in [protectedToolNames] in a
+ * [UserConfirmationRequiredTool]; all other tools pass through unchanged.
+ *
+ * Shared by hosts and plugins that protect a tool set by name (the
+ * app-private file plugin and the skill runtime plugin). Plugins that wire
+ * their tools structurally - building each wrapped tool by hand, possibly
+ * under a decorator - keep doing so; this helper is only for the
+ * name-filter shape.
+ */
+fun List<AgentTool>.withUserConfirmation(
+    protectedToolNames: Set<String>,
+    shouldBypassConfirmation: () -> Boolean
+): List<AgentTool> = map { tool ->
+    if (tool.name in protectedToolNames) {
+        UserConfirmationRequiredTool(tool, shouldBypassConfirmation = shouldBypassConfirmation)
+    } else {
+        tool
+    }
+}

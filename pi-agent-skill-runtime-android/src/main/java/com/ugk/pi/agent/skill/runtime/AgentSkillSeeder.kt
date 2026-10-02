@@ -1,6 +1,7 @@
 package com.ugk.pi.agent.skill.runtime
 
 import android.content.Context
+import com.ugk.pi.android.AtomicFileWrites
 import java.io.File
 import java.io.InputStream
 
@@ -56,7 +57,7 @@ object AgentSkillSeeder {
         // another seed was about to rename onto the target, and because the
         // target is never re-seeded the corruption would be permanent.
         val temporary = try {
-            File.createTempFile(temporaryPrefixFor(target), ".tmp", parent)
+            File.createTempFile(AtomicFileWrites.temporaryPrefixFor(target), ".tmp", parent)
         } catch (error: java.io.IOException) {
             return 0
         }
@@ -85,12 +86,6 @@ object AgentSkillSeeder {
             temporary.delete()
             0
         }
-    }
-
-    /** createTempFile rejects prefixes shorter than three characters. */
-    private fun temporaryPrefixFor(target: File): String {
-        val prefix = "${target.name}."
-        return if (prefix.length < 3) prefix.padEnd(3, '_') else prefix
     }
 }
 

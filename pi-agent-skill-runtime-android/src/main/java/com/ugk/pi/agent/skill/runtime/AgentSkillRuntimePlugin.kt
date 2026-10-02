@@ -3,7 +3,7 @@ import com.ugk.pi.android.AgentCapabilityPlugin
 import com.ugk.pi.android.AgentTool
 import com.ugk.pi.android.AndroidSkill
 import com.ugk.pi.android.AndroidSkillProvider
-import com.ugk.pi.android.UserConfirmationRequiredTool
+import com.ugk.pi.android.withUserConfirmation
 
 import java.io.File
 
@@ -42,22 +42,16 @@ class AgentSkillRuntimePlugin(
     private val fileBackedSkillProvider = FileBackedSkillProvider(repository, embedRoots)
 
     override fun tools(): List<AgentTool> {
-        return agentSkillRuntimeTools(repository, memoryRoot, embedRoots).map { tool ->
-            val requiresConfirmation = when (tool.name) {
-                "memory_delete" -> requireDeleteConfirmation
-                "memory_write" -> requireMemoryWriteConfirmation
-                "skill_save", "skill_delete" -> requireSkillMutationConfirmation
-                else -> false
-            }
-            if (requiresConfirmation) {
-                UserConfirmationRequiredTool(
-                    tool,
-                    shouldBypassConfirmation = shouldBypassConfirmation
-                )
-            } else {
-                tool
+        val protectedToolNames = buildSet {
+            if (requireDeleteConfirmation) add("memory_delete")
+            if (requireMemoryWriteConfirmation) add("memory_write")
+            if (requireSkillMutationConfirmation) {
+                add("skill_save")
+                add("skill_delete")
             }
         }
+        return agentSkillRuntimeTools(repository, memoryRoot, embedRoots)
+            .withUserConfirmation(protectedToolNames, shouldBypassConfirmation)
     }
 
     override fun skills(): List<AndroidSkill> = emptyList()

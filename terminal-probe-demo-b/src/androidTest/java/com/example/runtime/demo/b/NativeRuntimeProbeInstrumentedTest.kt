@@ -5,6 +5,7 @@ import androidx.test.platform.app.InstrumentationRegistry
 import com.ugk.pi.terminal.runtime.BashCommandRequest
 import com.ugk.pi.terminal.runtime.BashRuntime
 import com.ugk.pi.terminal.runtime.NativeRuntimeProbe
+import com.ugk.pi.terminal.runtime.TerminalPythonProfile
 import java.io.File
 import org.junit.Assert.assertEquals
 import org.junit.Assert.assertFalse
@@ -144,10 +145,10 @@ class NativeRuntimeProbeInstrumentedTest {
 
         assertFalse("Python timed out: $result", result.timedOut)
         assertEquals("Python stderr: ${result.stderr}", 0, result.exitCode)
-        assertTrue("stdout: ${result.stdout}", result.stdout.contains("python=3.14.6"))
+        assertTrue("stdout: ${result.stdout}", result.stdout.contains("python=${TerminalPythonProfile.PYTHON_DISTRIBUTION_VERSION}"))
         assertTrue(
             "stdout: ${result.stdout}",
-            result.stdout.contains("prefix=${context.filesDir.absolutePath}/ugk-terminal-runtime/python/3.14.6")
+            result.stdout.contains("prefix=${context.filesDir.absolutePath}/ugk-terminal-runtime/python/${TerminalPythonProfile.PYTHON_DISTRIBUTION_VERSION}")
         )
         assertTrue(
             "stdout: ${result.stdout}",

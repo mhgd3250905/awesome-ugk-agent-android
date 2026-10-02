@@ -1,5 +1,6 @@
 package com.ugk.pi.agent.skill.runtime
 
+import com.ugk.pi.android.AtomicFileWrites
 import org.junit.Assert.assertEquals
 import org.junit.Assert.assertTrue
 import org.junit.Rule
@@ -43,13 +44,13 @@ class AtomicFileWritesConcurrencyTest {
 
         val writerA = thread(name = "writer-a") {
             try {
-                writeTextAtomically(
+                AtomicFileWrites.writeTextAtomically(
                     target = target,
                     text = contentA,
                     performWrite = { temporary, text ->
                         // A only starts once B's bytes are in the temp file.
                         assertTrue(bWroteTemp.await(5, TimeUnit.SECONDS))
-                        writeTemporaryText(temporary, text)
+                        AtomicFileWrites.writeTemporaryText(temporary, text)
                         aWroteTemp.countDown()
                         // A returns immediately: its rename moves the shared
                         // temp file away from under B.
@@ -61,11 +62,11 @@ class AtomicFileWritesConcurrencyTest {
         }
         val writerB = thread(name = "writer-b") {
             try {
-                writeTextAtomically(
+                AtomicFileWrites.writeTextAtomically(
                     target = target,
                     text = contentB,
                     performWrite = { temporary, text ->
-                        writeTemporaryText(temporary, text)
+                        AtomicFileWrites.writeTemporaryText(temporary, text)
                         bWroteTemp.countDown()
                         // B stays inside its write step while A renames the
                         // shared temp file onto the target.
@@ -103,7 +104,7 @@ class AtomicFileWritesConcurrencyTest {
         val writers = (1..8).map { index ->
             thread(name = "writer-$index") {
                 repeat(25) { round ->
-                    writeTextAtomically(target, "writer-$index-round-$round-${"x".repeat(512)}")
+                    AtomicFileWrites.writeTextAtomically(target, "writer-$index-round-$round-${"x".repeat(512)}")
                 }
             }
         }

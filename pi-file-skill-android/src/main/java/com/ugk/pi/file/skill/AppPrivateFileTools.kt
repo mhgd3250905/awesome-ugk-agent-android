@@ -4,19 +4,20 @@ import com.ugk.pi.android.AgentConfirmationPolicy
 import com.ugk.pi.android.AgentTool
 import com.ugk.pi.android.AndroidSkill
 import com.ugk.pi.android.AndroidSkillMethod
+import com.ugk.pi.android.AtomicFileWrites
 import com.ugk.pi.android.ToolCall
 import com.ugk.pi.android.ToolExecutionContext
 import com.ugk.pi.android.ToolResult
-import com.ugk.pi.android.UserConfirmationRequiredTool
+import com.ugk.pi.android.withUserConfirmation
+import com.ugk.pi.android.boolean
+import com.ugk.pi.android.isInsideRoot
+import com.ugk.pi.android.string
 
 import java.io.File
 import java.io.IOException
-import java.lang.reflect.Array as ReflectArray
 import kotlinx.serialization.json.JsonObject
 import kotlinx.serialization.json.JsonPrimitive
 import kotlinx.serialization.json.buildJsonObject
-import kotlinx.serialization.json.contentOrNull
-import kotlinx.serialization.json.jsonPrimitive
 import kotlinx.serialization.json.put
 import kotlinx.serialization.json.putJsonArray
 import kotlinx.serialization.json.putJsonObject
@@ -59,16 +60,10 @@ class AppFileAgentPlugin(
     override val id: String = "app-private-files"
 
     override fun tools(): List<AgentTool> {
-        return appPrivateFileTools(rootDir, maxFileBytes).map { tool ->
-            if (requireDeleteConfirmation && tool.name == "app_file_delete") {
-                UserConfirmationRequiredTool(
-                    tool,
-                    shouldBypassConfirmation = shouldBypassConfirmation
-                )
-            } else {
-                tool
-            }
-        }
+        val protectedToolNames =
+            if (requireDeleteConfirmation) setOf("app_file_delete") else emptySet()
+        return appPrivateFileTools(rootDir, maxFileBytes)
+            .withUserConfirmation(protectedToolNames, shouldBypassConfirmation)
     }
 
     override fun skills(): List<AndroidSkill> = listOf(
@@ -236,7 +231,7 @@ class AppFileWriteTool(
 
         return try {
             file.parentFile?.mkdirs()
-            writeTextAtomically(file, content)
+            AtomicFileWrites.writeTextAtomically(file, content)
             ToolResult(
                 toolCallId = call.id,
                 name = name,
@@ -366,7 +361,7 @@ abstract class AppPrivateFileTool(
             return FileResolveResult.Error("INVALID_PATH", "Path must not contain . or ..")
         }
         val file = File(canonicalRoot, segments.joinToString(File.separator)).canonicalFile
-        if (!file.isInside(canonicalRoot)) {
+        if (!file.isInsideRoot(canonicalRoot)) {
             return FileResolveResult.Error("OUTSIDE_ROOT", "Path resolves outside the app-private workspace.")
         }
         val normalizedPath = normalizedRelativePath(file)
@@ -389,7 +384,7 @@ abstract class AppPrivateFileTool(
     }
 
     protected fun isInsideRoot(file: File): Boolean {
-        return file.isInside(canonicalRoot)
+        return file.isInsideRoot(canonicalRoot)
     }
 
     protected fun fileMetadata(file: File): JsonObject {
@@ -416,17 +411,6 @@ abstract class AppPrivateFileTool(
         )
     }
 
-    private fun File.isInside(root: File): Boolean {
-        val candidatePath = canonicalFile.path
-        val rootPath = root.canonicalFile.path
-        if (candidatePath == rootPath) return true
-
-        return candidatePath.startsWith(
-            rootPath.withTrailingSeparator(),
-            ignoreCase = File.separatorChar == '\\'
-        )
-    }
-
     private fun isSupportedTextPath(fileName: String): Boolean {
         val lastDot = fileName.lastIndexOf('.')
         if (lastDot < 0) return true
@@ -437,87 +421,6 @@ abstract class AppPrivateFileTool(
 
 private fun String.withTrailingSeparator(): String {
     return if (endsWith(File.separatorChar)) this else "$this${File.separatorChar}"
-}
-
-/**
- * Atomic text write for workspace files: content goes to a same-directory
- * temporary file and is renamed onto the target, so an interrupted write can
- * never leave a truncated file at the target path. [performWrite] is
- * injectable so tests can simulate a crash between the temporary write and
- * the rename. File.renameTo is atomic on Android's filesystem and keeps API
- * 24 compatibility; the reflective Files.move fallback replaces existing
- * targets on JVMs/Windows where renameTo cannot, and if both moves fail the
- * failure is surfaced with the target left untouched.
- */
-internal fun writeTextAtomically(
-    target: File,
-    text: String,
-    performWrite: (File, String) -> Unit = ::writeTemporaryText
-) {
-    val parent = target.parentFile
-        ?: throw IOException("Target file has no parent directory: '${target.name}'.")
-    // Every writer stages into its own uniquely named file: a fixed
-    // "<name>.tmp" made concurrent writers share one staging path, so one
-    // writer's rename could move away the very file another writer was
-    // still filling. createTempFile pre-creates the empty file, which the
-    // default writeText step (and test injections) simply overwrite.
-    val temporary = File.createTempFile(temporaryPrefixFor(target), ".tmp", parent)
-    try {
-        performWrite(temporary, text)
-        if (!replaceOnto(temporary, target)) {
-            throw IOException("Failed to move temporary file onto '${target.name}'.")
-        }
-    } finally {
-        // Only this writer's unique staging file is ever touched here; after
-        // a successful move it no longer exists and the delete is a no-op.
-        if (temporary.exists()) temporary.delete()
-    }
-}
-
-/** createTempFile rejects prefixes shorter than three characters. */
-private fun temporaryPrefixFor(target: File): String {
-    val prefix = "${target.name}."
-    return if (prefix.length < 3) prefix.padEnd(3, '_') else prefix
-}
-
-/** Default write step; internal so failure-injection tests can reuse it. */
-internal fun writeTemporaryText(temporary: File, text: String) {
-    temporary.writeText(text, Charsets.UTF_8)
-}
-
-/**
- * No delete-then-copy last resort on purpose: when both moves fail we
- * surface the failure and leave the target untouched, because deleting the
- * target first could destroy a file another concurrent writer had just
- * landed (and the copy would then fail anyway, losing the target outright).
- */
-private fun replaceOnto(temporary: File, target: File): Boolean {
-    if (temporary.renameTo(target)) return true
-    return moveReflectively(temporary, target)
-}
-
-private fun moveReflectively(temporary: File, target: File): Boolean {
-    return runCatching {
-        val filesClass = Class.forName("java.nio.file.Files")
-        val pathMethod = File::class.java.getMethod("toPath")
-        val moveMethod = filesClass.methods.first {
-            it.name == "move" && it.parameterTypes.size == 3 && it.parameterTypes[2].isArray
-        }
-        val copyOptionClass = Class.forName("java.nio.file.CopyOption")
-        val standardCopyOption = Class.forName("java.nio.file.StandardCopyOption")
-        val constants = standardCopyOption.enumConstants ?: return@runCatching false
-        val replaceExisting = constants.firstOrNull { it.toString() == "REPLACE_EXISTING" }
-            ?: return@runCatching false
-        val options = ReflectArray.newInstance(copyOptionClass, 1)
-        ReflectArray.set(options, 0, replaceExisting)
-        moveMethod.invoke(
-            null,
-            pathMethod.invoke(temporary),
-            pathMethod.invoke(target),
-            options
-        )
-        true
-    }.getOrDefault(false)
 }
 
 sealed class FileResolveResult {
@@ -566,14 +469,6 @@ private fun writeSchema(includeOverwrite: Boolean): JsonObject {
             add(JsonPrimitive("content"))
         }
     }
-}
-
-private fun JsonObject.string(key: String): String? {
-    return this[key]?.jsonPrimitive?.contentOrNull
-}
-
-private fun JsonObject.boolean(key: String): Boolean? {
-    return this[key]?.jsonPrimitive?.contentOrNull?.toBooleanStrictOrNull()
 }
 
 private fun JsonObject.plus(key: String, value: JsonPrimitive): JsonObject {

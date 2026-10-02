@@ -1,4 +1,5 @@
 package com.ugk.pi.file.skill
+import com.ugk.pi.android.AtomicFileWrites
 import com.ugk.pi.android.ToolCall
 import com.ugk.pi.android.ToolExecutionContext
 
@@ -145,8 +146,8 @@ class AppPrivateFileToolsTest {
         val file = File(root, "note.md").apply { writeText("original") }
 
         try {
-            writeTextAtomically(file, "replacement") { temporary, text ->
-                writeTemporaryText(temporary, text)
+            AtomicFileWrites.writeTextAtomically(file, "replacement") { temporary, text ->
+                AtomicFileWrites.writeTemporaryText(temporary, text)
                 throw IOException("injected failure after the temporary write")
             }
             throw AssertionError("Expected the injected IOException to propagate.")
