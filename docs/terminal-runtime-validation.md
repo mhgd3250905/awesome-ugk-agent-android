@@ -574,7 +574,7 @@ MODULE pi-file-skill-android          tests=13  failures=0 errors=0 skipped=1
 
 6. **本轮第一版整改又引入一条：`start()` 会销毁它随后拒绝接管的记录（P1）**。第一版把 `start()` 的复用条件接到 `queryDisposition` 之后，顺序变成「先 `discardRecord(existing)`（连带删 `.properties`）→ 再 `isPortListening` 判 PORT_IN_USE 并抛出」。于是一次抖动的 100 ms 探针就能让一个**在跑的服务**失去唯一记录：`status()`/`stop()` 从此报 `not_found`，端口永久不可复用——正是 F4 要消灭的那个状态，被本轮自己的修法在生产路径上复刻。现已改为「先确认端口不再应答，再删记录」，并把错误文案改成能读出成因的一支。**局限如实登记**：该顺序在宿主不可判红（`start()` 需要 Android Context 与真进程），`probe m4c` 亦为绿说明纯表用例看不见调用点装配；证据为代码路径推演 + 主仓仪器面复跑（见未证实项）。
 7. **对外来监听者的错误归属（P1）**。`NativeProcessGroupControl.processGroupExists` 有意把 `EPERM` 当作"存在"，所以进程组被任何别的所有者复用后记录仍"活着"；`status()` 的正分支又只看一次裸 connect。结果 App 重启 + 端口被别的进程占用时，`status()` 会返回 `running` 并附上一个**没有任何人在服务**的 token URL，`start()` 还会直接复用该端口——而类里早就有为归因写的 `isTokenServed` 却没被这条路用。修复：无进程内句柄的记录一律用 `isTokenServed(port, token)` 判"这个端口是不是我们自己的服务在应答"，有句柄的仍用便宜的 connect（句柄即归属证据）。
-8. **带 NUL 的 URL 不答话（P2）**。`realpath()`/`stat()` 对含 ` ` 的路径抛的是 `ValueError` 而非 `OSError`，它会逃出 `except ServedRootEscape`，连接被直接关闭、**没有任何响应**。变异 `m6-nul-guard-removed` 的实测原文即为证据：`expected:<[404]> but was:<[]>`（空状态）。这同时说明本轮此前所有"非 200 即拒绝"的断言形状是错的——连接中断、超时、文件不存在都能冒充拒绝，故本节新增/改写的所有拒绝断言一律要求显式 `404`。
+8. **带 NUL 的 URL 不答话（P2）**。`realpath()`/`stat()` 对含 `U+0000` 的路径抛的是 `ValueError` 而非 `OSError`，它会逃出 `except ServedRootEscape`，连接被直接关闭、**没有任何响应**。变异 `m6-nul-guard-removed` 的实测原文即为证据：`expected:<[404]> but was:<[]>`（空状态）。这同时说明本轮此前所有"非 200 即拒绝"的断言形状是错的——连接中断、超时、文件不存在都能冒充拒绝，故本节新增/改写的所有拒绝断言一律要求显式 `404`。
 
 ### 独立复核两轮的实际结果与处置
 
