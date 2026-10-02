@@ -8,8 +8,7 @@ import com.ugk.pi.android.ModelRequest
 import com.ugk.pi.android.ModelResponse
 import com.ugk.pi.android.AgentRuntime
 import kotlinx.coroutines.Dispatchers
-import java.util.concurrent.CountDownLatch
-import java.util.concurrent.TimeUnit
+import java.util.concurrent.atomic.AtomicBoolean
 import org.junit.Assert.assertEquals
 import org.junit.Assert.assertNotNull
 import org.junit.Assert.assertTrue
@@ -32,7 +31,7 @@ class DemoAgentRunOutcomeHandoffTest {
     @Test
     fun anObserverThatThrowsHandsTheOutcomeBackToTheConversationUi() {
         val coordinator = DemoAgentRunCoordinator(Dispatchers.Unconfined)
-        val finished = CountDownLatch(1)
+        val observerRan = AtomicBoolean(false)
 
         coordinator.start(
             runtime = runtimeReturning("回答内容"),
@@ -42,22 +41,23 @@ class DemoAgentRunOutcomeHandoffTest {
             source = AgentRunSource.SDK_EVENT,
             onOutcome = { event ->
                 assertNotNull("a terminal event reaches the observer", event)
-                finished.countDown()
+                observerRan.set(true)
                 throw IllegalStateException("Unable to persist the urgent interaction result.")
             }
         )
-        assertTrue(
-            "the run never reached a terminal event in 10s",
-            finished.await(10, TimeUnit.SECONDS)
-        )
 
-        val outcome = coordinator.snapshot().pendingOutcome
-        assertNotNull(outcome)
+        // `dispatch` assigns pendingOutcome AFTER invoking the observer, so the
+        // assertion has to wait for the state it reads rather than for the
+        // observer. Waiting on the observer alone passed in a targeted run and
+        // failed in the full gate under load - a race in this test, not in the
+        // production path.
+        val outcome = awaitOutcome(coordinator)
+        assertTrue("the observer was never invoked", observerRan.get())
         assertEquals(
             "a throwing observer is the retry channel MainActivity reads; reporting it as handled " +
                 "silently drops the answer",
             false,
-            outcome!!.handledByProcessOwner
+            outcome.handledByProcessOwner
         )
         assertEquals(AgentRunSource.SDK_EVENT, outcome.source)
     }
@@ -65,7 +65,7 @@ class DemoAgentRunOutcomeHandoffTest {
     @Test
     fun anObserverThatReturnsClaimsTheOutcomeSoTheUiDoesNotWriteItTwice() {
         val coordinator = DemoAgentRunCoordinator(Dispatchers.Unconfined)
-        val finished = CountDownLatch(1)
+        val observerRan = AtomicBoolean(false)
 
         coordinator.start(
             runtime = runtimeReturning("回答内容"),
@@ -73,18 +73,21 @@ class DemoAgentRunOutcomeHandoffTest {
             conversationId = "conversation-2",
             message = "hello",
             source = AgentRunSource.SDK_EVENT,
-            onOutcome = {
-                finished.countDown()
-            }
-        )
-        assertTrue(
-            "the run never reached a terminal event in 10s",
-            finished.await(10, TimeUnit.SECONDS)
+            onOutcome = { observerRan.set(true) }
         )
 
-        val outcome = coordinator.snapshot().pendingOutcome
-        assertNotNull(outcome)
-        assertEquals(true, outcome!!.handledByProcessOwner)
+        val outcome = awaitOutcome(coordinator)
+        assertTrue("the observer was never invoked", observerRan.get())
+        assertEquals(true, outcome.handledByProcessOwner)
+    }
+
+    private fun awaitOutcome(coordinator: DemoAgentRunCoordinator): DemoAgentRunOutcome {
+        val deadline = System.currentTimeMillis() + 10_000L
+        while (System.currentTimeMillis() < deadline) {
+            coordinator.snapshot().pendingOutcome?.let { return it }
+            Thread.sleep(10)
+        }
+        throw AssertionError("no pending outcome within 10s; the run never reached a terminal event")
     }
 
     private fun runtimeReturning(content: String): AgentRuntime = AgentRuntime.Builder()
