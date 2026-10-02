@@ -1,6 +1,7 @@
 package com.ugk.pi.agent.skill.runtime
 
 import com.ugk.pi.android.AtomicFileWrites
+import com.ugk.pi.android.isInsideRoot
 import java.io.File
 import java.io.IOException
 
@@ -526,9 +527,7 @@ class SkillRepository(
         if (canonical.path == root.path) {
             return "Refusing to delete the skill repository root."
         }
-        if (canonical.parentFile == null ||
-            (canonical.path != root.path && !canonical.path.startsWith(root.path + File.separator))
-        ) {
+        if (canonical.parentFile == null || !canonical.isInsideRoot(root)) {
             return "Deletion target '${file.name}' resolves outside the skill repository."
         }
         if (canonical.name != file.name) {
