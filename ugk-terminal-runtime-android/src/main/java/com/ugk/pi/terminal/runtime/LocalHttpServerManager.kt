@@ -81,8 +81,14 @@ class LocalHttpServerManager(
 ) : LocalHttpServerController, AutoCloseable {
     constructor(context: Context) : this(BashRuntime(context))
 
-    private val records = linkedMapOf<Int, ManagedServer>()
-    private var metadataLoaded = false
+    /**
+     * Identifies this instance inside the process-wide record table (D-031).
+     * The table itself lives in the companion: the lock, the port space, the
+     * service directory and the persisted metadata are all shared process
+     * resources, so an instance-private copy of the records was never more
+     * than a stale view of them.
+     */
+    private val ownerId: Long = OWNER_ID_SEQUENCE.incrementAndGet()
 
     override fun start(request: LocalHttpServerRequest): LocalHttpServerStatus {
         synchronized(PROCESS_LOCK) {
@@ -223,7 +229,8 @@ class LocalHttpServerManager(
                 processGroupId = processGroupId,
                 process = process,
                 logDrainThread = logDrainThread,
-                startedAtMillis = System.currentTimeMillis()
+                startedAtMillis = System.currentTimeMillis(),
+                ownerId = this.ownerId
             )
             records[request.port] = server
             persist(server)
@@ -329,40 +336,54 @@ class LocalHttpServerManager(
         }
     }
 
-    override fun stopAll(): Int {
+    override fun stopAll(): Int = synchronized(PROCESS_LOCK) {
+        releaseRecords { true }
+    }
+
+    /**
+     * Releases only the servers this instance started (D-031). A host runs
+     * several runtimes side by side - the demo app keeps the main
+     * conversation runtime alive while a teaching runtime comes and goes -
+     * and the previous whole-table stopAll() here let a closing side runtime
+     * terminate a foreground server, and delete its token metadata, that
+     * another live instance was still serving. Records rehydrated from disk
+     * have no owner and stay available to explicit stop()/stopAll().
+     */
+    override fun close() {
         synchronized(PROCESS_LOCK) {
-            ensureMetadataLoaded()
-            val servers = records.values.toList()
-            var stopped = 0
-            servers.forEach { server ->
-                when (stopDispositionFor(server)) {
-                    // Both drop-without-signalling rows: the group is either
-                    // provably gone or no longer attributable, and in neither
-                    // case may stopAll() signal it. Neither is counted in the
-                    // returned total, because nothing was terminated here - the
-                    // total is the number of groups this call actually brought
-                    // down, so a caller must not read "stopped N" as "N records
-                    // were cleared". No caller today consumes it.
-                    StopDisposition.DROP_CONFIRMED_DEAD,
-                    StopDisposition.DROP_UNATTRIBUTABLE -> removeRecord(server)
-                    StopDisposition.SIGNAL_PROCESS_GROUP -> {
-                        // Keep the record for a group that survived the kill
-                        // window: dropping it would orphan a live process group
-                        // that the tool can no longer see or stop. This mirrors
-                        // stop()'s contract, which raises STOP_FAILED instead.
-                        if (stopRecord(server)) {
-                            stopped++
-                            removeRecord(server)
-                        }
-                    }
-                }
-            }
-            return stopped
+            releaseRecords { closeReleasesRecord(it.ownerId, ownerId) }
         }
     }
 
-    override fun close() {
-        stopAll()
+    private fun releaseRecords(release: (ManagedServer) -> Boolean): Int {
+        ensureMetadataLoaded()
+        val servers = records.values.toList()
+        var stopped = 0
+        servers.forEach { server ->
+            if (!release(server)) return@forEach
+            when (stopDispositionFor(server)) {
+                // Both drop-without-signalling rows: the group is either
+                // provably gone or no longer attributable, and in neither
+                // case may stopAll() signal it. Neither is counted in the
+                // returned total, because nothing was terminated here - the
+                // total is the number of groups this call actually brought
+                // down, so a caller must not read "stopped N" as "N records
+                // were cleared". No caller today consumes it.
+                StopDisposition.DROP_CONFIRMED_DEAD,
+                StopDisposition.DROP_UNATTRIBUTABLE -> removeRecord(server)
+                StopDisposition.SIGNAL_PROCESS_GROUP -> {
+                    // Keep the record for a group that survived the kill
+                    // window: dropping it would orphan a live process group
+                    // that the tool can no longer see or stop. This mirrors
+                    // stop()'s contract, which raises STOP_FAILED instead.
+                    if (stopRecord(server)) {
+                        stopped++
+                        removeRecord(server)
+                    }
+                }
+            }
+        }
+        return stopped
     }
 
     private fun resolveWorkspaceDirectory(relativePath: String): File {
@@ -594,6 +615,9 @@ class LocalHttpServerManager(
                         process = null,
                         logDrainThread = null,
                         startedAtMillis = metadataFile.lastModified(),
+                        // Rehydrated rows belong to no live instance: a side
+                        // runtime's close() must not claim them (D-031).
+                        ownerId = null,
                         metadataFile = metadataFile
                     )
                 }.onFailure { metadataFile.delete() }
@@ -712,6 +736,13 @@ class LocalHttpServerManager(
         // it approximates the start time without changing the persisted
         // properties format.
         val startedAtMillis: Long,
+        // Which manager instance started this server (D-031): close()
+        // releases only matching records. Null for records rehydrated from
+        // disk, which no live instance owns - a side runtime closing must
+        // not claim them either. Not persisted: ownership is a property of
+        // this process, and start() reuse deliberately keeps the original
+        // owner so a coexisting instance cannot steal the record.
+        val ownerId: Long?,
         val metadataFile: File = File(
             logFile.parentFile ?: logFile,
             "http-$port.properties"
@@ -728,6 +759,30 @@ class LocalHttpServerManager(
          * process-wide lock instead of the instance.
          */
         private val PROCESS_LOCK = Any()
+
+        /**
+         * The process-wide record table (D-031). It used to be an instance
+         * field while the lock, the port space, the service directory and the
+         * persisted metadata were all shared, so one instance's close()
+         * rehydrated the shared disk records into its own stale view and
+         * terminated servers another live instance was still serving. The
+         * table is loaded once per process; [ManagedServer.ownerId] carries
+         * the per-instance attribution close() filters on.
+         */
+        private val records = linkedMapOf<Int, ManagedServer>()
+
+        private var metadataLoaded = false
+
+        private val OWNER_ID_SEQUENCE = java.util.concurrent.atomic.AtomicLong()
+
+        /**
+         * Whether close() on the instance identified by [closingOwnerId] may
+         * release the record started by [recordOwnerId] (D-031). Split out as
+         * a pure rule so the ownership contract is pinnable on the JVM:
+         * widening this to `true` restores the cross-instance kill.
+         */
+        internal fun closeReleasesRecord(recordOwnerId: Long?, closingOwnerId: Long): Boolean =
+            recordOwnerId == closingOwnerId
 
         /**
          * Screens a model-authored directory before it becomes an argv element of

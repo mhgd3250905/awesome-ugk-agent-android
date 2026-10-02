@@ -1,6 +1,8 @@
 package com.ugk.pi.terminal.runtime
 
 import org.junit.Assert.assertEquals
+import org.junit.Assert.assertFalse
+import org.junit.Assert.assertTrue
 import org.junit.Test
 
 /**
@@ -224,5 +226,33 @@ class LocalHttpServerRecordDispositionTest {
     fun groupExistenceFollowsTheProbeWhenItRuns() {
         assertEquals(false, LocalHttpServerManager.groupExistsForDisposition(probeUsable = true, probeAnswer = false))
         assertEquals(true, LocalHttpServerManager.groupExistsForDisposition(probeUsable = true, probeAnswer = true))
+    }
+
+    /**
+     * D-031: close() releases only what the closing instance itself started.
+     * A side runtime (the demo app's teaching runtime) shares the process
+     * with the main conversation runtime; before this rule its close()
+     * rehydrated the shared disk records and killed the foreground server.
+     */
+    @Test
+    fun closeReleasesOnlyRecordsThisInstanceStarted() {
+        assertTrue(
+            LocalHttpServerManager.closeReleasesRecord(recordOwnerId = 7L, closingOwnerId = 7L)
+        )
+    }
+
+    @Test
+    fun closeSparesRecordsRehydratedFromDisk() {
+        assertFalse(
+            "a rehydrated record has no live owner and must wait for an explicit stop/stopAll",
+            LocalHttpServerManager.closeReleasesRecord(recordOwnerId = null, closingOwnerId = 7L)
+        )
+    }
+
+    @Test
+    fun closeSparesRecordsStartedByAnotherLiveInstance() {
+        assertFalse(
+            LocalHttpServerManager.closeReleasesRecord(recordOwnerId = 8L, closingOwnerId = 7L)
+        )
     }
 }
