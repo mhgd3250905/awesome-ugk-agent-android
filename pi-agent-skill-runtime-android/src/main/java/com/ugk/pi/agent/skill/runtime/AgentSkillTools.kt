@@ -1,5 +1,8 @@
 package com.ugk.pi.agent.skill.runtime
 import com.ugk.pi.android.AgentTool
+import com.ugk.pi.android.AtomicFileWrites
+import com.ugk.pi.android.boolean
+import com.ugk.pi.android.string
 import com.ugk.pi.android.ToolCall
 import com.ugk.pi.android.ToolExecutionContext
 import com.ugk.pi.android.ToolResult
@@ -328,7 +331,7 @@ class MemoryWriteTool(
 
         return try {
             memoryRoot.mkdirs()
-            writeTextAtomically(file, content)
+            AtomicFileWrites.writeTextAtomically(file, content)
             ToolResult(
                 toolCallId = call.id,
                 name = name,
@@ -423,14 +426,6 @@ private fun categorySchema(): JsonObject {
         }
         putJsonArray("required") { add(JsonPrimitive("category")) }
     }
-}
-
-private fun JsonObject.string(key: String): String? {
-    return this[key]?.jsonPrimitive?.contentOrNull
-}
-
-private fun JsonObject.boolean(key: String): Boolean? {
-    return this[key]?.jsonPrimitive?.contentOrNull?.toBooleanStrictOrNull()
 }
 
 private fun JsonObject.plus(key: String, value: JsonPrimitive): JsonObject {

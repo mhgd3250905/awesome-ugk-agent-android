@@ -1,5 +1,6 @@
 package com.ugk.pi.agent.skill.runtime
 
+import com.ugk.pi.android.AtomicFileWrites
 import java.io.File
 import java.io.IOException
 
@@ -257,7 +258,7 @@ class SkillRepository(
                     }
                 }
             }
-            if (!replaceOnto(temporary, skillFile)) {
+            if (!AtomicFileWrites.replaceOnto(temporary, skillFile)) {
                 return@synchronized SkillSaveOutcome.Failed(
                     code = "IO_ERROR",
                     message = "Failed to replace SKILL.md for '${request.name}'."
@@ -503,7 +504,7 @@ class SkillRepository(
         }.getOrNull() ?: return
         try {
             restoreFile.outputStream().use { it.write(previousContent) }
-            replaceOnto(restoreFile, skillFile)
+            AtomicFileWrites.replaceOnto(restoreFile, skillFile)
         } catch (_: IOException) {
             // Keep the best available state; the normal path is prevalidated,
             // so this is only a defensive rollback after an unexpected race.

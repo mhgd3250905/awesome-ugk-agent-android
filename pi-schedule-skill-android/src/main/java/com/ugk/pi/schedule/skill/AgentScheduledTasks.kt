@@ -6,6 +6,9 @@ import com.ugk.pi.android.AndroidSkillMethod
 import com.ugk.pi.android.ToolCall
 import com.ugk.pi.android.ToolExecutionContext
 import com.ugk.pi.android.ToolResult
+import com.ugk.pi.android.boolean
+import com.ugk.pi.android.long
+import com.ugk.pi.android.string
 
 import kotlinx.coroutines.CancellationException
 import kotlinx.serialization.SerialName
@@ -13,13 +16,8 @@ import kotlinx.serialization.Serializable
 import kotlinx.serialization.json.JsonElement
 import kotlinx.serialization.json.JsonObject
 import kotlinx.serialization.json.JsonPrimitive
-import kotlinx.serialization.json.booleanOrNull
 import kotlinx.serialization.json.buildJsonObject
-import kotlinx.serialization.json.contentOrNull
-import kotlinx.serialization.json.intOrNull
 import kotlinx.serialization.json.jsonObject
-import kotlinx.serialization.json.jsonPrimitive
-import kotlinx.serialization.json.longOrNull
 import kotlinx.serialization.json.put
 import kotlinx.serialization.json.putJsonArray
 import kotlinx.serialization.json.putJsonObject
@@ -769,16 +767,4 @@ private fun taskIdSchema(): JsonObject = buildJsonObject {
     putJsonArray("required") {
         add(JsonPrimitive("taskId"))
     }
-}
-
-private fun JsonObject.string(name: String): String? {
-    return this[name]?.jsonPrimitive?.contentOrNull
-}
-
-private fun JsonObject.long(name: String): Long? {
-    return this[name]?.jsonPrimitive?.longOrNull ?: this[name]?.jsonPrimitive?.intOrNull?.toLong()
-}
-
-private fun JsonObject.boolean(name: String): Boolean? {
-    return this[name]?.jsonPrimitive?.booleanOrNull
 }
