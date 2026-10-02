@@ -87,6 +87,30 @@ class TerminalAgentPluginCompositionTest {
         )
     }
 
+    /**
+     * D-031's wiring point. AgentRuntime.close() calls plugin.close(), and this
+     * single link is the only thing connecting the host's teardown to the
+     * manager's per-instance release scope. It used to call stopAll(), which is
+     * process-wide - that is what let a closing teaching runtime kill the local
+     * HTTP site the main conversation was still serving. The manager's own
+     * close() scope is pinned by an instrumented case, but nothing pinned this
+     * link: reverting it left both the JVM gate and the AVD gate green.
+     */
+    @Test
+    fun closingThePluginRoutesToInstanceScopedCloseNotProcessWideStopAll() {
+        val controller = RecordingLocalHttpServerController()
+        val plugin = plugin(RecordingExecutor(), controller = controller)
+
+        plugin.close()
+
+        assertEquals(1, controller.closeCalls)
+        assertEquals(
+            "plugin close() must not fall back to the process-wide stopAll()",
+            0,
+            controller.stopAllCalls
+        )
+    }
+
     @Test
     fun normalAuthorizationKeepsConfirmationBeforeBashExecution() = runBlocking {
         val executor = RecordingExecutor()
@@ -164,7 +188,8 @@ class TerminalAgentPluginCompositionTest {
     private fun plugin(
         executor: RecordingExecutor,
         shouldBypassConfirmation: () -> Boolean = { false },
-        toolDecorator: AgentToolDecorator = AgentToolDecorator.Identity
+        toolDecorator: AgentToolDecorator = AgentToolDecorator.Identity,
+        controller: LocalHttpServerController = EmptyLocalHttpServerController
     ): TerminalAgentPlugin {
         val terminalTool = BashCommandTool(
             executor = executor,
@@ -182,7 +207,7 @@ class TerminalAgentPluginCompositionTest {
         val components = componentsConstructor.newInstance(
             "Terminal composition test instructions",
             terminalTool,
-            EmptyLocalHttpServerController
+            controller
         )
 
         val primaryConstructor = TerminalAgentPlugin::class.java.declaredConstructors.single {
@@ -246,6 +271,33 @@ class TerminalAgentPluginCompositionTest {
                 outputTruncated = false,
                 workingDirectory = request.workingDirectory!!.absolutePath
             )
+        }
+    }
+
+    /**
+     * Overrides close() rather than inheriting the interface default (which
+     * delegates to stopAll()), so a call that reached close() stays separable
+     * from a call that reached the process-wide stopAll().
+     */
+    private class RecordingLocalHttpServerController : LocalHttpServerController {
+        var closeCalls = 0
+        var stopAllCalls = 0
+
+        override fun start(request: LocalHttpServerRequest): LocalHttpServerStatus =
+            LocalHttpServerStatus.notFound(request.port)
+
+        override fun status(port: Int?): List<LocalHttpServerStatus> = emptyList()
+
+        override fun stop(port: Int): LocalHttpServerStatus =
+            LocalHttpServerStatus.notFound(port)
+
+        override fun stopAll(): Int {
+            stopAllCalls++
+            return 0
+        }
+
+        override fun close() {
+            closeCalls++
         }
     }
 
