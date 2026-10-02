@@ -45,19 +45,11 @@ internal class DemoUrgentInteractionDispatcher(
     /** Called on the main thread by the overlay. A true result consumes this screen's event once. */
     fun submit(event: DemoUrgentInteraction): Boolean {
         if (DemoCapabilityInterlock.isScreenOperationOwned()) return false
-        if (!ledger.accept(event)) return false
-        if (!timerAllowsInteraction(event)) {
-            ledger.discard(event)
-            return false
-        }
-        if (!ownsCurrentSession(event)) {
-            ledger.discard(event)
-            return false
-        }
-        if (conversationRuntime.agentRuntime == null) {
-            ledger.discard(event)
-            return false
-        }
+        if (!ledger.isReservable(event)) return false
+        if (!timerAllowsInteraction(event)) return false
+        if (!ownsCurrentSession(event)) return false
+        if (conversationRuntime.agentRuntime == null) return false
+        ledger.reserve(event)
         return drain()
     }
 
@@ -210,13 +202,22 @@ internal class DemoUrgentInteractionLedger(
     private val pending = ArrayDeque<DemoUrgentInteraction>()
     private val remembered = LinkedHashSet<String>()
 
-    /** True when this screen's action is now queued; a repeat of a queued or delivered id is refused. */
-    fun accept(event: DemoUrgentInteraction): Boolean {
-        val presentationId = event.binding.presentationId
-        if (pending.size >= maxPending || presentationId in remembered) return false
+    /**
+     * Whether this screen's action could be queued right now. Deliberately
+     * read-only: `submit()` probes it before its own session and timer guards,
+     * and a probe must not consume a slot in the bounded remembered set the way
+     * an accept-then-discard shape would.
+     */
+    fun isReservable(event: DemoUrgentInteraction): Boolean =
+        pending.size < maxPending && event.binding.presentationId !in remembered
+
+    /** Queue the action and remember its screen; call only when [isReservable] said yes. */
+    fun reserve(event: DemoUrgentInteraction) {
+        if (!isReservable(event)) {
+            throw IllegalStateException("urgent interaction is not reservable: ${event.binding.presentationId}")
+        }
         pending.addLast(event)
-        remember(presentationId)
-        return true
+        remember(event.binding.presentationId)
     }
 
     fun hasPending(): Boolean = pending.isNotEmpty()
@@ -225,10 +226,9 @@ internal class DemoUrgentInteractionLedger(
 
     fun next(): DemoUrgentInteraction? = pending.peekFirst()
 
-    /** The event leaves the queue and its id stays remembered: this screen has been answered once. */
+    /** The event leaves the queue and its id stays remembered (reserve put it there): this screen has been answered once. */
     fun deliver(event: DemoUrgentInteraction) {
         remove(event)
-        remember(event.binding.presentationId)
     }
 
     /** The event is thrown away without being delivered, so its screen may be tapped again. */

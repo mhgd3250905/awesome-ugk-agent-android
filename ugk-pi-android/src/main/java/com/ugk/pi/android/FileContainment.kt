@@ -12,7 +12,7 @@ import java.io.File
  * the boundary, including the sibling-with-a-shared-prefix case that a plain
  * `startsWith(root.path)` accepts.
  *
- * Four sites still compare paths by hand and are NOT covered by this
+ * Five hand-written comparisons in four files are NOT covered by this
  * predicate: `LocalHttpServerManager.resolveWorkspaceDirectory` and two checks
  * in `PythonDistribution` - `:ugk-terminal-runtime-android` has no dependency
  * edge on this module, so it cannot reach it - plus `BashCommandTool.isInside`
