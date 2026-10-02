@@ -42,6 +42,9 @@ flowchart TD
 - `cancel(callId)`/`cancelAll()` 作用于该 Plugin 持有的同一个 Tool 实例。
 - `AgentRuntime.cancelAllPlugins()` 会统一转发已注册 Plugin 的 `cancelAll()`；宿主释放 Runtime
   时先取消工作，再调用 `AgentRuntime.close()`，由 Runtime 幂等地转发 Plugin `close()`。
+- `TerminalAgentPlugin.close()` 只释放本插件实例启动的本地 HTTP 服务（D-031：记录表进程级共享，
+  由内存 ownerId 区分归属）；磁盘 rehydrate 记录与其它存活实例的服务留给显式
+  `local_http_server_stop` / `stopAllLocalHttpServers()`。
 - `TerminalAgentPlugin` 仍保留 `cancel(callId)` 和 `stopAllLocalHttpServers()` 作为精细控制 API，
   但宿主的通用生命周期不应再按 Terminal 类型做特殊识别。
 

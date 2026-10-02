@@ -49,6 +49,17 @@ interface LocalHttpServerController {
     fun stop(port: Int): LocalHttpServerStatus
 
     fun stopAll(): Int
+
+    /**
+     * Releases the resources this controller instance owns. The default
+     * mirrors the historical behavior and stops everything this process
+     * recorded (test doubles keep that); [LocalHttpServerManager] narrows
+     * it to the servers that instance started, so a side runtime closing
+     * cannot terminate a foreground server (D-031).
+     */
+    fun close() {
+        stopAll()
+    }
 }
 
 class LocalHttpServerException(
