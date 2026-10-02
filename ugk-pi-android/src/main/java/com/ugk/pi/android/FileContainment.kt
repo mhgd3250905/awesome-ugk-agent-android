@@ -5,11 +5,23 @@ import java.io.File
 /**
  * Whether this file's canonical location is [root] itself or lies inside it.
  *
- * Shared by every SDK path-safety check that must keep a model-authored
- * relative path inside its owning root (the app-private file workspace, the
- * skill repository, and skill embed resolution). Deliberately [File]-API
- * only because the runtime supports API 24; the comparison is
- * case-insensitive on Windows, where the filesystem is too.
+ * The rule every model-authored relative path is checked against, in three
+ * places: the app-private file workspace (`AppPrivateFileTool.resolvePath` and
+ * `AppFileListTool`), skill embed resolution (`resolveInsideRoot`) and skill
+ * deletion (`SkillRepository.validateDeleteTree`). `FileContainmentTest` pins
+ * the boundary, including the sibling-with-a-shared-prefix case that a plain
+ * `startsWith(root.path)` accepts.
+ *
+ * Four sites still compare paths by hand and are NOT covered by this
+ * predicate: `LocalHttpServerManager.resolveWorkspaceDirectory` and two checks
+ * in `PythonDistribution` - `:ugk-terminal-runtime-android` has no dependency
+ * edge on this module, so it cannot reach it - plus `BashCommandTool.isInside`
+ * and `DemoWorkflowRepository`. Each compares canonicalized operands and
+ * appends `File.separator`, so they behave like this rule on Android; they are
+ * a registered consolidation gap, not extra guards this file speaks for.
+ *
+ * Deliberately [File]-API only because the runtime supports API 24; the
+ * comparison is case-insensitive on Windows, where the filesystem is too.
  */
 fun File.isInsideRoot(root: File): Boolean {
     val candidatePath = canonicalFile.path
