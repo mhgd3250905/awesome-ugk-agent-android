@@ -129,31 +129,34 @@ internal class DemoUrgentInteractionDispatcher(
                             is AgentEvent.Failed -> "悬浮提醒操作未完成：${outcome.message}"
                             else -> ""
                         }
+                        var persistenceFailure: Throwable? = null
                         if (answer.isNotBlank()) {
                             // DemoAgentRunCoordinator invokes this observer inside
-                            // runCatching (that is how it computes `handled`), so an
-                            // exception thrown here is swallowed and everything after
-                            // it in this lambda never runs: the check below used to
-                            // leave the floating window on "正在处理悬浮操作" for the
-                            // rest of the session whenever the conversation had been
-                            // deleted. A result that cannot be persisted is now
-                            // reported instead of fatal, and the reset always runs.
-                            val persisted = runCatching {
-                                store.appendMessagesAndFlush(
+                            // runCatching (that is how it computes `handled`), so a
+                            // throw that escapes *here* used to skip everything after
+                            // it: the floating window stayed on "正在处理悬浮操作" for
+                            // the rest of the session whenever the conversation had
+                            // been deleted. The reset therefore runs first, and only
+                            // then is the failure rethrown - throwing at all is the
+                            // only channel that reports `handled = false`, and
+                            // MainActivity persists an SDK_EVENT answer exactly when
+                            // `handledByProcessOwner != true`. Swallowing the failure
+                            // here would reset the UI and then lose the answer.
+                            persistenceFailure = runCatching {
+                                checkNotNull(store.appendMessagesAndFlush(
                                     event.conversationId,
                                     listOf(DemoStoredMessage("assistant", answer))
-                                ) != null
-                            }.getOrDefault(false)
-                            if (!persisted) {
-                                runCatching {
-                                    processScope.overlayController.window.addLog("悬浮提醒结果未能保存")
-                                }
-                            }
+                                )) { "Unable to persist the urgent interaction result." }
+                            }.exceptionOrNull()
                         }
                         processScope.overlayController.window.apply {
                             setSending(false)
                             setStatus(if (outcome is AgentEvent.Completed) "已完成" else "失败")
+                            if (persistenceFailure != null) {
+                                addLog("悬浮提醒结果未能保存，改由对话界面写入")
+                            }
                         }
+                        persistenceFailure?.let { throw it }
                     }
                 )
             } catch (error: RuntimeException) {

@@ -455,7 +455,7 @@ class LocalHttpServerManager(
     private fun hasProcess(server: ManagedServer): Boolean = processEvidencePresent(
         handleAlive = server.process?.let(::isAlive) == true,
         probeUsable = NativeProcessGroupControl.isAvailable(),
-        probeAnswer = NativeProcessGroupControl.processGroupExists(server.processGroupId)
+        probeAnswer = { NativeProcessGroupControl.processGroupExists(server.processGroupId) }
     )
 
     /**
@@ -530,7 +530,7 @@ class LocalHttpServerManager(
         // instead of claiming a stop that cannot be performed or verified.
         val plan = groupStopPlan(
             probeUsable = NativeProcessGroupControl.isAvailable(),
-            groupExists = NativeProcessGroupControl.processGroupExists(server.processGroupId),
+            groupExists = { NativeProcessGroupControl.processGroupExists(server.processGroupId) },
             holdsProcessHandle = server.process != null
         )
         var groupStopped = plan == GroupStopPlan.ALREADY_GONE
@@ -858,12 +858,17 @@ class LocalHttpServerManager(
          * `hasProcess()` decidable on the host at all - before it, dropping the
          * probe term or reading an unobservable group as "gone" left every JVM
          * test green.
+         *
+         * [probeAnswer] stays lazy because it is a JNI `kill(-pgid, 0)`: a live
+         * handle, or an unusable probe, must not pay for it. That is the same
+         * reason `queryDisposition` and `stopDisposition` take their probes as
+         * lambdas.
          */
         internal fun processEvidencePresent(
             handleAlive: Boolean,
             probeUsable: Boolean,
-            probeAnswer: Boolean
-        ): Boolean = handleAlive || groupExistsForDisposition(probeUsable, probeAnswer)
+            probeAnswer: () -> Boolean
+        ): Boolean = handleAlive || if (probeUsable) probeAnswer() else true
 
         /**
          * The three observations `stopRecord()` can make, as one decision table.
@@ -872,14 +877,18 @@ class LocalHttpServerManager(
          * instance holds can stand in for group evidence (D-031); without one,
          * claiming "stopped" would delete the record and its only copy of the
          * issued token while a server may still be serving.
+         *
+         * [groupExists] is lazy for the same reason as above: with no probe to
+         * signal anything, asking whether the group exists costs a JNI call and
+         * answers nothing.
          */
         internal fun groupStopPlan(
             probeUsable: Boolean,
-            groupExists: Boolean,
+            groupExists: () -> Boolean,
             holdsProcessHandle: Boolean
         ): GroupStopPlan = when {
             !probeUsable -> if (holdsProcessHandle) GroupStopPlan.ALREADY_GONE else GroupStopPlan.UNVERIFIABLE
-            !groupExists -> GroupStopPlan.ALREADY_GONE
+            !groupExists() -> GroupStopPlan.ALREADY_GONE
             else -> GroupStopPlan.SIGNAL_AND_VERIFY
         }
 

@@ -15,9 +15,15 @@ import org.junit.Test
  * (round 11 filed it as F5 and fixed one line), and round 11's own section 36
  * wrote a second one that the same fix did not reach.
  *
- * The gate is a scan of the documentation set the repo actually ships, not a
- * glob over its own fixture, and it fails loudly when it scans nothing: a
- * silently empty inventory would turn this into a check that never runs.
+ * The gate walks the whole source tree below the repository root, skipping
+ * `build/` and dot-directories, so it covers the packaged prose as well as the
+ * handbooks: `pi-terminal-skill-android/src/main/assets/ugk/AGENTS.md` and the
+ * shipped `SKILL.md` files are the documents the model itself reads, and they
+ * were outside an earlier version of this scan that looked only at the root,
+ * `docs/` and the module top levels. The inventory assert exists because a
+ * silently empty or partial scan would turn this into a check that never runs:
+ * 46 Markdown files are tracked at the time of writing, so the floor is set to
+ * 40 rather than to a count that any single directory's removal would satisfy.
  */
 class DocumentationTextHygieneTest {
     @Test
@@ -25,9 +31,8 @@ class DocumentationTextHygieneTest {
         val repositoryRoot = File(".").canonicalFile.parentFile
         val documents = markdownFilesUnder(repositoryRoot)
         assertTrue(
-            "Scanned ${documents.size} Markdown files from $repositoryRoot; expected the whole " +
-                "prose set (root, docs/, module directories). A zero or partial inventory means " +
-                "this gate is not looking at anything.",
+            "Scanned ${documents.size} Markdown files under $repositoryRoot; the tree tracks 46. " +
+                "A zero or partial inventory means this gate is not looking at anything.",
             documents.size >= MIN_DOCUMENTS
         )
 
@@ -54,25 +59,14 @@ class DocumentationTextHygieneTest {
     }
 
     private fun markdownFilesUnder(repositoryRoot: File): List<File> {
-        val topLevel = repositoryRoot.listFiles { file ->
-            file.isFile && file.extension.equals("md", ignoreCase = true)
-        }.orEmpty().toList()
-        val moduleLevel = repositoryRoot.listFiles { file -> file.isDirectory }.orEmpty().toList()
-            .filter { directory -> !directory.name.startsWith(".") && directory.name != "build" }
-            .flatMap { directory ->
-                directory.listFiles { file ->
-                    file.isFile && file.extension.equals("md", ignoreCase = true)
-                }.orEmpty().toList()
+        return repositoryRoot.walkTopDown()
+            .onEnter { directory ->
+                // `build/` holds generated reports that are not prose and not
+                // tracked; dot-directories hold tool state.
+                directory.name != "build" && !directory.name.startsWith(".")
             }
-        val documentation = File(repositoryRoot, "docs")
-        val nested = if (documentation.isDirectory) {
-            documentation.walkTopDown()
-                .filter { it.isFile && it.extension.equals("md", ignoreCase = true) }
-                .toList()
-        } else {
-            emptyList()
-        }
-        return (topLevel + moduleLevel + nested).distinctBy { it.path }
+            .filter { it.isFile && it.extension.equals("md", ignoreCase = true) }
+            .toList()
     }
 
     private fun isControlByte(byte: Byte): Boolean {
@@ -86,6 +80,6 @@ class DocumentationTextHygieneTest {
         const val NEWLINE = 0x0A
         const val CARRIAGE_RETURN = 0x0D
         const val DELETE = 0x7F
-        const val MIN_DOCUMENTS = 30
+        const val MIN_DOCUMENTS = 40
     }
 }

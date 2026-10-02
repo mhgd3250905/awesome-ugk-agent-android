@@ -16,9 +16,14 @@ import java.io.File
  * predicate: `LocalHttpServerManager.resolveWorkspaceDirectory` and two checks
  * in `PythonDistribution` - `:ugk-terminal-runtime-android` has no dependency
  * edge on this module, so it cannot reach it - plus `BashCommandTool.isInside`
- * and `DemoWorkflowRepository`. Each compares canonicalized operands and
- * appends `File.separator`, so they behave like this rule on Android; they are
- * a registered consolidation gap, not extra guards this file speaks for.
+ * and `DemoWorkflowRepository`. `LocalHttpServerManager` and `BashCommandTool`
+ * gate a model-authored path and spell out `candidate == root` plus a
+ * `File.separator`-suffixed prefix, which is exactly this rule.
+ * `PythonDistribution`'s two compare archive/manifest paths and
+ * `DemoWorkflowRepository` compares a workflow file path, and all three accept
+ * only a strict prefix - they reject the root itself, so they are stricter than
+ * this predicate rather than equivalent to it. All five are a registered
+ * consolidation gap: this file does not speak for them.
  *
  * Deliberately [File]-API only because the runtime supports API 24; the
  * comparison is case-insensitive on Windows, where the filesystem is too.

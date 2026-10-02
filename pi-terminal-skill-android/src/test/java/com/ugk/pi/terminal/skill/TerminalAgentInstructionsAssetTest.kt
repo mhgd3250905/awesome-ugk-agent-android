@@ -13,10 +13,14 @@ import org.junit.Test
  * asset edit that invents a version, turns this red on the JVM without needing
  * a device.
  *
- * Every mention is checked, not just the presence of one: the first version of
- * this test asserted `text.contains("CPython <version>")`, so adding a second
- * line claiming a different interpreter - which is exactly what an asset edit
- * that invents a version looks like - left it green.
+ * Every version mention is checked, not just the presence of one, and not only
+ * under the `CPython` label: the first version of this test asserted
+ * `text.contains("CPython <version>")`, and a second version of it folded only
+ * `CPython x.y.z`, so an added line reading "Python 3.13 is the interpreter this
+ * runtime ships" - which is what an asset edit that invents a version looks like
+ * to the model - stayed green. A bare `Python x.y` mention is legitimate when it
+ * names the interpreter series, so the rule is set membership over the two
+ * derived facts rather than string equality.
  *
  * Reads the asset from the source tree because unit tests do not see
  * src/main/assets on their classpath; Gradle runs JVM tests with the module
@@ -29,22 +33,27 @@ class TerminalAgentInstructionsAssetTest {
         check(agentsMd.isFile) { "SDK runtime AGENTS.md not found at ${agentsMd.absolutePath}" }
         val text = agentsMd.readText()
 
-        val claims = CPYTHON_VERSION_CLAIM.findAll(text).map { it.groupValues[1] }.toList()
+        val claims = PYTHON_VERSION_CLAIM.findAll(text).map { it.groupValues[1] }.toSet()
         assertTrue(
             "AGENTS.md must state the packaged CPython version at least once; the model needs it " +
                 "to decide what `python` is, and this assertion is also the pin against deleting " +
                 "the only line that carries it",
-            claims.isNotEmpty()
+            claims.contains(TerminalPythonProfile.PYTHON_DISTRIBUTION_VERSION)
         )
         assertEquals(
-            "every CPython version AGENTS.md names must be the packaged distribution version " +
-                "(a second, invented version is a model-facing lie about the interpreter)",
-            listOf(TerminalPythonProfile.PYTHON_DISTRIBUTION_VERSION),
-            claims.distinct().sorted()
+            "every Python version AGENTS.md names must be one of the packaged facts " +
+                "(distribution ${TerminalPythonProfile.PYTHON_DISTRIBUTION_VERSION} or interpreter " +
+                "series ${TerminalPythonProfile.PYTHON_VERSION}); anything else is a model-facing " +
+                "lie about the interpreter",
+            setOf(
+                TerminalPythonProfile.PYTHON_DISTRIBUTION_VERSION,
+                TerminalPythonProfile.PYTHON_VERSION
+            ).intersect(claims),
+            claims
         )
     }
 
     private companion object {
-        val CPYTHON_VERSION_CLAIM = Regex("""CPython\s+(\d+\.\d+(?:\.\d+)?)""")
+        val PYTHON_VERSION_CLAIM = Regex("""(?:CPython|Python|python)\s?(\d+\.\d+(?:\.\d+)?)""")
     }
 }

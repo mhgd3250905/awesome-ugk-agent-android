@@ -22,10 +22,11 @@ import org.junit.Test
  * "True"/"FALSE"; the shared one is the strict content parse and returns null
  * for them, and `AgentTaskListTool` maps null to `false`. So `{"activeOnly":
  * "True"}` used to narrow the listing to active tasks and now silently widens it
- * back to every row, including cancelled and completed ones. No test passed a
- * case variant to any tool before this file: on main at c5a13f5, searching every
- * unit and instrumented test source set for the identifier `activeOnly` returned
- * nothing.
+ * back to every row, including cancelled and completed ones. Nothing observed
+ * this landing point: on main at c5a13f5, searching every unit and instrumented
+ * test source set for the identifier `activeOnly` returned no test (the shared
+ * accessor's own case-variant behaviour is pinned in `ToolJsonTest`, but nothing
+ * followed it through to a tool).
  *
  * The rows are pinned rather than "fixed" on purpose. The root-cause shape for
  * this family is a three-state optional read (absent and null default, a

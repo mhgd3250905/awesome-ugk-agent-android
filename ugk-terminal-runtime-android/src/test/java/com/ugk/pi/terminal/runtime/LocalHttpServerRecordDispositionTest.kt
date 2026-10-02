@@ -289,7 +289,7 @@ class LocalHttpServerRecordDispositionTest {
                 val got = LocalHttpServerManager.processEvidencePresent(
                     handleAlive = handleAlive,
                     probeUsable = probeUsable,
-                    probeAnswer = probeAnswer
+                    probeAnswer = { probeAnswer }
                 )
                 if (got == want) {
                     null
@@ -299,6 +299,40 @@ class LocalHttpServerRecordDispositionTest {
                 }
             }
         )
+    }
+
+    /**
+     * The group probe is a JNI `kill(-pgid, 0)`. `hasProcess()` short-circuited
+     * around it on trunk, and an extraction that takes the observation eagerly
+     * would pay one probe per live record per status() call - so the laziness is
+     * part of the rule, not an implementation detail.
+     */
+    @Test
+    fun processEvidenceOnlyAsksTheProbeWhenTheProbeIsTheAnswer() {
+        var probes = 0
+        val probeAnswer: () -> Boolean = {
+            probes++
+            true
+        }
+
+        LocalHttpServerManager.processEvidencePresent(
+            handleAlive = true,
+            probeUsable = true,
+            probeAnswer = probeAnswer
+        )
+        LocalHttpServerManager.processEvidencePresent(
+            handleAlive = false,
+            probeUsable = false,
+            probeAnswer = probeAnswer
+        )
+        assertEquals("a live handle or an unusable probe must not reach the JNI call", 0, probes)
+
+        LocalHttpServerManager.processEvidencePresent(
+            handleAlive = false,
+            probeUsable = true,
+            probeAnswer = probeAnswer
+        )
+        assertEquals("with no handle and a usable probe the answer comes from the probe", 1, probes)
     }
 
     /**
@@ -327,7 +361,7 @@ class LocalHttpServerRecordDispositionTest {
                 val (probeUsable, groupExists, holdsProcessHandle) = observations
                 val got = LocalHttpServerManager.groupStopPlan(
                     probeUsable = probeUsable,
-                    groupExists = groupExists,
+                    groupExists = { groupExists },
                     holdsProcessHandle = holdsProcessHandle
                 )
                 if (got == want) {
@@ -338,5 +372,40 @@ class LocalHttpServerRecordDispositionTest {
                 }
             }
         )
+    }
+
+    /**
+     * With no probe there is nothing to signal and nothing to observe, so asking
+     * whether the group exists is pure cost - and `stopRecord()` used to do it.
+     */
+    @Test
+    fun stopPlanDoesNotAskTheProbeWhenNothingCanSignalTheGroup() {
+        var probes = 0
+        val groupExists: () -> Boolean = {
+            probes++
+            true
+        }
+
+        LocalHttpServerManager.groupStopPlan(
+            probeUsable = false,
+            groupExists = groupExists,
+            holdsProcessHandle = true
+        )
+        LocalHttpServerManager.groupStopPlan(
+            probeUsable = false,
+            groupExists = groupExists,
+            holdsProcessHandle = false
+        )
+        assertEquals("an unusable probe must not be consulted", 0, probes)
+
+        assertEquals(
+            GroupStopPlan.SIGNAL_AND_VERIFY,
+            LocalHttpServerManager.groupStopPlan(
+                probeUsable = true,
+                groupExists = groupExists,
+                holdsProcessHandle = false
+            )
+        )
+        assertEquals("a usable probe is consulted exactly once", 1, probes)
     }
 }
