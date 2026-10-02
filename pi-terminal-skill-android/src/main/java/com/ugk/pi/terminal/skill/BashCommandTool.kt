@@ -17,6 +17,7 @@ import com.ugk.pi.terminal.runtime.BashCommandResult
 import com.ugk.pi.terminal.runtime.BashRuntime
 import com.ugk.pi.terminal.runtime.LocalHttpServerController
 import com.ugk.pi.terminal.runtime.LocalHttpServerManager
+import com.ugk.pi.terminal.runtime.TerminalPythonProfile
 import java.io.File
 import java.io.IOException
 import java.util.concurrent.ConcurrentHashMap
@@ -213,7 +214,7 @@ class BashCommandTool(
     }
 
     override val description: String =
-        "Runs a non-interactive Bash script in the app-private terminal workspace and returns stdout, stderr, exit code, and timeout status. The current runtime profile includes Bash, CPython 3.14 as python/python3, sqlite3, curl, and openssl."
+        "Runs a non-interactive Bash script in the app-private terminal workspace and returns stdout, stderr, exit code, and timeout status. The current runtime profile includes Bash, CPython ${TerminalPythonProfile.PYTHON_VERSION} as python/python3, sqlite3, curl, and openssl."
 
     /**
      * Requests cancellation of a running or queued call. The Runtime observes the
@@ -543,7 +544,7 @@ fun terminalBashSkill(policy: TerminalToolPolicy = TerminalToolPolicy()): Androi
             Pass Bash source directly as the script. Do not invoke bash, bash -c, sh, or sh -c as a child command because this tool is already running Bash. Use non-interactive scripts only. Work only in the provided app-private workspace; use relative workingDirectory values such as projects/demo.
             The process runs with the host app's Android UID. It is not a security sandbox and must never be treated as a way to protect host secrets from an untrusted model.
             Use conservative timeouts, keep this tool bounded and non-daemon, and inspect stdout/stderr/exitCode before taking a follow-up action. Do not use nohup, disown, setsid, or a shell background job to maintain a persistent HTTP service; use local_http_server_start, local_http_server_status, and local_http_server_stop instead. The host limits this tool to ${policy.maxConcurrentExecutions} concurrent execution(s); cancelling the Agent coroutine also interrupts and terminates the active terminal process group.
-            The current runtime contains Bash, CPython 3.14 available as python and python3, a SQLite CLI available as sqlite3, curl, and openssl. Python includes its bundled standard library plus ssl, sqlite3, hashlib, and subprocess; its native extension modules stay in nativeLibraryDir and its standard library is hash-verified in app-private data. curl supports only file/http/https in this profile and uses the same managed CA bundle through CURL_CA_BUNDLE. HTTPS access requires the host's merged INTERNET permission and should be treated as network egress requiring confirmation. Do not disable TLS verification unless the user specifically directs it.
+            The current runtime contains Bash, CPython ${TerminalPythonProfile.PYTHON_VERSION} available as python and python3, a SQLite CLI available as sqlite3, curl, and openssl. Python includes its bundled standard library plus ssl, sqlite3, hashlib, and subprocess; its native extension modules stay in nativeLibraryDir and its standard library is hash-verified in app-private data. curl supports only file/http/https in this profile and uses the same managed CA bundle through CURL_CA_BUNDLE. HTTPS access requires the host's merged INTERNET permission and should be treated as network egress requiring confirmation. Do not disable TLS verification unless the user specifically directs it.
             Node.js, Git, and SSH are not packaged in the current profile. Do not claim them as available or attempt to install packages or executable native extensions at runtime.
         """.trimIndent(),
         methods = listOf(

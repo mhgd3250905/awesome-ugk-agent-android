@@ -9,6 +9,7 @@ import com.ugk.pi.terminal.skill.TerminalToolPolicy
 import com.ugk.pi.terminal.runtime.BashCommandRequest
 import com.ugk.pi.terminal.runtime.BashRuntime
 import com.ugk.pi.terminal.runtime.NativeRuntimeProbe
+import com.ugk.pi.terminal.runtime.TerminalPythonProfile
 import java.io.File
 import kotlinx.coroutines.async
 import kotlinx.coroutines.delay
@@ -206,7 +207,7 @@ class NativeRuntimeProbeInstrumentedTest {
             "Python launcher is missing",
             File(nativeLibraryDirectory, BashRuntime.pythonExecutableFileName).isFile
         )
-        assertTrue("libpython is missing", File(nativeLibraryDirectory, "libpython3.14.so").isFile)
+        assertTrue("libpython is missing", File(nativeLibraryDirectory, TerminalPythonProfile.PYTHON_LIBRARY_FILE_NAME).isFile)
 
         val importPaths = runtime.execute(
             BashCommandRequest(
@@ -243,7 +244,7 @@ class NativeRuntimeProbeInstrumentedTest {
         assertFalse("Python timed out: $first", first.timedOut)
         assertEquals("Python stderr: ${first.stderr}", 0, first.exitCode)
         assertTrue("stdout: ${first.stdout}", first.stdout.lines().count { it == "function" } >= 2)
-        assertTrue("stdout: ${first.stdout}", first.stdout.contains("python=3.14.6"))
+        assertTrue("stdout: ${first.stdout}", first.stdout.contains("python=${TerminalPythonProfile.PYTHON_DISTRIBUTION_VERSION}"))
         assertTrue(
             "stdout: ${first.stdout}",
             first.stdout.contains("sha256=ba7816bf8f01cfea414140de5dae2223b00361a396177a9cb410ff61f20015ad")
@@ -254,7 +255,7 @@ class NativeRuntimeProbeInstrumentedTest {
 
         val stdlibFile = File(
             context.filesDir,
-            "ugk-terminal-runtime/python/3.14.6/lib/python3.14/encodings/__init__.py"
+            "ugk-terminal-runtime/python/${TerminalPythonProfile.PYTHON_DISTRIBUTION_VERSION}/lib/${TerminalPythonProfile.PYTHON_VERSION}/encodings/__init__.py"
         )
         assertTrue("Python stdlib was not materialized: $stdlibFile", stdlibFile.isFile)
         stdlibFile.writeText("tampered")

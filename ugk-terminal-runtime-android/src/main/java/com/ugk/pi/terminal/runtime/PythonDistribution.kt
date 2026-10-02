@@ -275,9 +275,9 @@ internal class PythonDistribution(context: Context) {
     )
 
     companion object {
-        const val PYTHON_VERSION = "3.14"
-        const val PYTHON_DISTRIBUTION_VERSION = "3.14.6"
-        const val PYTHON_LIBRARY_FILE_NAME = "libpython3.14.so"
+        const val PYTHON_VERSION = TerminalPythonProfile.PYTHON_VERSION
+        const val PYTHON_DISTRIBUTION_VERSION = TerminalPythonProfile.PYTHON_DISTRIBUTION_VERSION
+        const val PYTHON_LIBRARY_FILE_NAME = TerminalPythonProfile.PYTHON_LIBRARY_FILE_NAME
 
         private const val RUNTIME_DATA_DIRECTORY = "ugk-terminal-runtime/python"
         private const val DISTRIBUTION_DIRECTORY = PYTHON_DISTRIBUTION_VERSION
