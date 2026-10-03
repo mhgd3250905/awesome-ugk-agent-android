@@ -29,10 +29,15 @@ class DemoOperationStepReviewerTest {
     }
 
     @Test fun rejectsMalformedTruncatedAndOversizedResponsesWithoutRetry() = runBlocking {
+        // The last two rows carry a well-formed answer, so the only thing that can
+        // refuse them is the truncation guard: `{}` would be refused for other
+        // reasons too, and those rows would stay green even after the reason was
+        // dropped from the set (the first version of these rows did exactly that).
+        val wellFormed = """{"action":"打开页面","result":"页面可见","gaps":"需要核对"}"""
         listOf(ModelResponse("SECRET"), ModelResponse("{}", stopReason = "length"), ModelResponse("x".repeat(12_001)),
             ModelResponse("{}", toolCalls = listOf(ToolCall("1", "click", JsonObject(emptyMap())))),
-            ModelResponse("{}", stopReason = "max_output_tokens"),
-            ModelResponse("{}", stopReason = "MAX_OUTPUT_TOKENS")).forEach { response ->
+            ModelResponse(wellFormed, stopReason = "max_output_tokens"),
+            ModelResponse(wellFormed, stopReason = "MAX_OUTPUT_TOKENS")).forEach { response ->
             var calls = 0
             val error = runCatching { reviewer(response) { calls++ }.review(draft, step, "") { byteArrayOf(1) } }.exceptionOrNull()
             assertTrue(error is DemoOperationStepReviewException)

@@ -39,7 +39,11 @@ class DemoModelStopReasonsTest {
     @Test
     fun everyTruncatedReasonIsRecognizedInEverySpellingTheWireUses() {
         val failures = mutableListOf<String>()
-        DemoModelStopReasons.truncated.forEach { reason ->
+        // A literal list, not the production set: iterating `truncated` itself would
+        // make this a tautology - drop a member from the set and this case simply
+        // stops checking it and stays green, which is exactly what the first version
+        // of this test did (the mutation matrix caught it).
+        listOf("length", "max_tokens", "max_output_tokens").forEach { reason ->
             listOf(reason, reason.uppercase(), " $reason ", reason.replaceFirstChar { it.uppercase() })
                 .forEach { spelling ->
                     if (!DemoModelStopReasons.isTruncated(spelling)) {
