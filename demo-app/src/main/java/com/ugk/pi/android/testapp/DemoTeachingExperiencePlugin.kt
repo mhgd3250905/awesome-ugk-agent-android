@@ -43,7 +43,12 @@ internal class DemoTeachingExperiencePlugin(
         },
         tool("teaching_experience_use", "Ask the user whether to use this exact guide version for the current request; returns guide only after approval.", listOf("id", "revision")) { call, context ->
             require(context.runSource == AgentRunSource.USER) { "教学经验仅用于当前用户对话" }
-            val id = call.text("id"); val revision = call.text("revision").toInt()
+            val id = call.text("id")
+            val revisionText = call.text("revision")
+            // toInt() on "abc" throws NumberFormatException, whose text names
+            // neither the tool nor the argument the caller has to fix.
+            val revision = revisionText.toIntOrNull()
+                ?: error("revision 必须是整数，收到：$revisionText")
             val record = withContext(Dispatchers.IO) { store.read(id) } ?: error("经验不存在")
             requireUsable(record, revision)
             val guide = record.guide!!
@@ -78,7 +83,9 @@ internal class DemoTeachingExperiencePlugin(
             val use = uses[token] ?: error("没有已确认的经验使用")
             require(use.session == context.sessionId && use.turn == turn(context)) { "使用结果不属于当前任务" }
             val outcome = call.text("outcome")
-            require(outcome in setOf("success", "failure", "network_error", "cancelled", "needs_revision"))
+            require(outcome in OUTCOME_VALUES) {
+                "outcome 只能是 ${OUTCOME_VALUES.joinToString("、")}，收到：$outcome"
+            }
             val summary = call.text("summary").trim(); require(summary.length in 1..2000)
             val record = withContext(Dispatchers.IO) { store.read(use.recordId) } ?: error("经验不存在")
             requireUsable(record, use.revision)
@@ -151,7 +158,22 @@ internal class DemoTeachingExperiencePlugin(
             .joinToString("") { byte -> "%02x".format(byte.toInt() and 0xff) }
     }
     private fun strings(values: List<String>) = JsonArray(values.map(::JsonPrimitive))
-    private fun ToolCall.text(key: String) = input[key]?.jsonPrimitive?.content ?: error("缺少$key")
+    /**
+     * A required argument's text, or a refusal that names it.
+     *
+     * `jsonPrimitive.content` on `JsonNull` is the four-letter string "null", and
+     * a gateway that fills every optional serializes an unfilled one that way, so
+     * reading it produced a plausible-looking id instead of a refusal. A value that
+     * is present but not a string (an object or array) threw from the serialization
+     * library, and the wrapper turned that into a message about `JsonPrimitive`
+     * instead of about the argument the model actually sent.
+     */
+    private fun ToolCall.text(key: String): String =
+        (input[key] as? JsonPrimitive)
+            ?.takeUnless { it is JsonNull }
+            ?.contentOrNull
+            ?.takeIf { it.isNotBlank() }
+            ?: error("缺少或不可用的参数：$key")
     private fun tool(name: String, description: String, fields: List<String>, handler: suspend (ToolCall, ToolExecutionContext) -> String) = object : AgentTool {
         override val name = name
         override val description = description
@@ -167,6 +189,7 @@ internal class DemoTeachingExperiencePlugin(
     }
 
     private companion object {
+        val OUTCOME_VALUES = listOf("success", "failure", "network_error", "cancelled", "needs_revision")
         const val MAX_PENDING_USES = 32
         const val USE_TTL_MILLIS = 24 * 60 * 60 * 1000L
     }
