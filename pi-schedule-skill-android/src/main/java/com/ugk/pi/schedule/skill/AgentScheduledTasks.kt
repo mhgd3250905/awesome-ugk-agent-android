@@ -6,7 +6,6 @@ import com.ugk.pi.android.AndroidSkillMethod
 import com.ugk.pi.android.ToolCall
 import com.ugk.pi.android.ToolExecutionContext
 import com.ugk.pi.android.ToolResult
-import com.ugk.pi.android.boolean
 import com.ugk.pi.android.long
 import com.ugk.pi.android.string
 
@@ -18,6 +17,7 @@ import kotlinx.serialization.json.JsonNull
 import kotlinx.serialization.json.JsonObject
 import kotlinx.serialization.json.JsonPrimitive
 import kotlinx.serialization.json.buildJsonObject
+import kotlinx.serialization.json.contentOrNull
 import kotlinx.serialization.json.jsonObject
 import kotlinx.serialization.json.put
 import kotlinx.serialization.json.putJsonArray
@@ -339,6 +339,20 @@ class AgentTaskListTool(
             putJsonObject("status") {
                 put("type", "string")
                 put("description", "Optional AgentTaskStatus name.")
+                // Written out as literals, not derived from AgentTaskStatus: the
+                // tool's own accepted set is the other side of the comparison, so
+                // `AgentTaskListFilterSchemaTest` can turn red when one side gains
+                // or loses a status and the other does not.
+                putJsonArray("enum") {
+                    listOf(
+                        "SCHEDULED",
+                        "RUNNING",
+                        "COMPLETED",
+                        "CANCELLED",
+                        "FAILED",
+                        "EXPIRED"
+                    ).forEach { add(JsonPrimitive(it)) }
+                }
             }
             putJsonObject("activeOnly") {
                 put("type", "boolean")
@@ -348,10 +362,43 @@ class AgentTaskListTool(
     }
 
     override suspend fun execute(call: ToolCall, context: ToolExecutionContext): ToolResult {
-        val statusFilter = call.input.string("status")?.let { value ->
-            runCatching { AgentTaskStatus.valueOf(value) }.getOrNull()
+        // Both filters are model-controlled optionals and both go through the
+        // rule this module already uses for `agent_task_update` just above: a key
+        // that is absent, or present as JSON null, means "not declared"; a value
+        // that is declared and unusable is refused by name. The previous reading
+        // (`runCatching { valueOf }` for status, the strict boolean accessor with a
+        // `?: false` tail for activeOnly) made every unusable value mean "no
+        // filter", so a typo answered with the whole table - cancelled and failed
+        // rows included - and reported ok=true.
+        val declaredStatus = call.input.optionalElement("status")
+        val statusFilter = if (declaredStatus == null) {
+            null
+        } else {
+            // Folded over the enum's own values, so adding a status cannot be
+            // forgotten here and the accepted list is what the message prints.
+            val declaredName = (declaredStatus as? JsonPrimitive)?.contentOrNull
+            AgentTaskStatus.entries.firstOrNull { it.name == declaredName }
+                ?: return errorResult(
+                    call,
+                    name,
+                    "INVALID_STATUS",
+                    "status must name one of ${AgentTaskStatus.entries.joinToString { it.name }}; " +
+                        "got ${declaredStatus.describeRejectedArgument()}"
+                )
         }
-        val activeOnly = call.input.boolean("activeOnly") ?: false
+        val declaredActiveOnly = call.input.optionalElement("activeOnly")
+        val activeOnly = if (declaredActiveOnly == null) {
+            false
+        } else {
+            (declaredActiveOnly as? JsonPrimitive)?.contentOrNull?.toBooleanStrictOrNull()
+                ?: return errorResult(
+                    call,
+                    name,
+                    "INVALID_ACTIVE_ONLY",
+                    "activeOnly must be true or false (a boolean, or the string \"true\"/\"false\"); " +
+                        "got ${declaredActiveOnly.describeRejectedArgument()}"
+                )
+        }
         val tasks = store.list()
             .filter { statusFilter == null || it.status == statusFilter }
             .filter { !activeOnly || it.status == AgentTaskStatus.SCHEDULED || it.status == AgentTaskStatus.RUNNING }
@@ -704,6 +751,18 @@ private fun taskResult(call: ToolCall, toolName: String, task: AgentTask, conten
  */
 private fun JsonObject.optionalElement(key: String): JsonElement? =
     this[key]?.takeUnless { it is JsonNull }
+
+/**
+ * The rejected value as the caller sees it, bounded.
+ *
+ * The argument text is model-controlled, and a refusal lands in the transcript
+ * and the host's logs, so an arbitrarily long value must not be echoed back
+ * whole; a snippet is enough to show what was rejected.
+ */
+private fun JsonElement.describeRejectedArgument(): String =
+    toString().take(MAX_REJECTED_ARGUMENT_ECHO_CHARS)
+
+private const val MAX_REJECTED_ARGUMENT_ECHO_CHARS = 40
 
 private fun errorResult(call: ToolCall, toolName: String, code: String, message: String): ToolResult {
     return ToolResult(

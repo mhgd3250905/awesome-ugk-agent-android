@@ -16,14 +16,21 @@ import kotlinx.serialization.json.longOrNull
  * [boolean] is deliberately the strict stdlib parse, NOT kotlinx
  * `booleanOrNull`, which also accepts the case variants "True"/"FALSE". The two
  * copies that feed the overwrite-style write flags (`pi-file-skill`,
- * `pi-agent-skill-runtime`) were already strict, so those tools did not change.
- * The third copy, in `pi-schedule-skill`, read `booleanOrNull`, so
- * `agent_task_list.activeOnly` did accept a case variant and now reads it as
- * absent - which widens the listing back to every row instead of narrowing it.
- * That difference is pinned case by case in
- * `AgentTaskListActiveOnlyArgumentTest`; the three-state fix (a declared value
- * of the wrong type is refused by name) belongs to the shared optional-argument
- * reader, not to this file.
+ * `pi-agent-skill-runtime`) were already strict, so those tools did not change,
+ * and both of them map null to `false` - the fail-closed direction, where a
+ * value this accessor cannot read means "do not overwrite".
+ *
+ * `agent_task_list.activeOnly` used to be the third consumer and mapped null to
+ * `false` too, but there the direction is the opposite: `false` means "no
+ * filter", so a declared-but-unusable value silently widened the listing to
+ * every row. Round 11 merged the three-state rule into this module's own
+ * `optionalElement` reader for `agent_task_update`, and round 12 recorded the
+ * widening on the reasoning that no such reader existed here yet. Both filter
+ * arguments of `agent_task_list` now go through that reader and refuse an
+ * unusable declaration by name, pinned by `AgentTaskListActiveOnlyArgumentTest`,
+ * `AgentTaskListStatusArgumentTest` and `AgentTaskListFilterSchemaTest`. There is
+ * no shared cross-module version of that reader: each module keeps its own copy
+ * because promoting it would widen the published AAR API for two lines.
  *
  * Quoted scalars are read by their content on purpose: `{"overwrite": "true"}`
  * is accepted here, as it was by every replaced copy.
