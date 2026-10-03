@@ -33,8 +33,7 @@ internal class DemoUrgentInteractionDispatcher(
     private val processScope: DemoProcessScope
 ) {
     private val appContext = context.applicationContext
-    private val pending = ArrayDeque<DemoUrgentInteraction>()
-    private val acceptedPresentationIds = LinkedHashSet<String>()
+    private val ledger = DemoUrgentInteractionLedger()
     private val conversationRuntime = processScope.conversationRuntime
     private val coordinator = conversationRuntime.runCoordinator
     private var draining = false
@@ -46,23 +45,19 @@ internal class DemoUrgentInteractionDispatcher(
     /** Called on the main thread by the overlay. A true result consumes this screen's event once. */
     fun submit(event: DemoUrgentInteraction): Boolean {
         if (DemoCapabilityInterlock.isScreenOperationOwned()) return false
-        if (pending.size >= MAX_PENDING || event.binding.presentationId in acceptedPresentationIds) return false
+        if (!ledger.isReservable(event)) return false
         if (!timerAllowsInteraction(event)) return false
         if (!ownsCurrentSession(event)) return false
         if (conversationRuntime.agentRuntime == null) return false
-        pending.addLast(event)
-        acceptedPresentationIds.add(event.binding.presentationId)
-        while (acceptedPresentationIds.size > MAX_RECENT_IDS) {
-            acceptedPresentationIds.remove(acceptedPresentationIds.first())
-        }
+        ledger.reserve(event)
         return drain()
     }
 
-    fun hasPending(): Boolean = pending.isNotEmpty()
+    fun hasPending(): Boolean = ledger.hasPending()
 
     /** Stopping or replacing the current turn also drops clicks waiting behind it. */
     fun cancelPending() {
-        pending.clear()
+        ledger.discardAll()
     }
 
     fun resumePending() {
@@ -85,16 +80,17 @@ internal class DemoUrgentInteractionDispatcher(
 
     private fun drain(): Boolean {
         if (DemoCapabilityInterlock.isScreenOperationOwned()) {
+            // The queued clicks are gone, so the screens that produced them must
+            // be able to produce them again: see DemoUrgentInteractionLedger.
             cancelPending()
             return false
         }
         if (draining || coordinator.isRunning()) return true
-        val event = pending.peekFirst() ?: return true
+        val event = ledger.next() ?: return true
         draining = true
         try {
             if (!ownsCurrentSession(event)) {
-                pending.removeFirst()
-                acceptedPresentationIds.remove(event.binding.presentationId)
+                ledger.discard(event)
                 processScope.overlayController.window.addLog("悬浮提醒所属会话已变化，操作未发送")
                 return false
             }
@@ -107,12 +103,11 @@ internal class DemoUrgentInteractionDispatcher(
                     listOf(DemoStoredMessage("user", message))
                 ) }.getOrNull() == null
             ) {
-                pending.removeFirst()
-                acceptedPresentationIds.remove(event.binding.presentationId)
+                ledger.discard(event)
                 processScope.overlayController.window.addLog("悬浮提醒操作保存失败")
                 return false
             }
-            pending.removeFirst()
+            ledger.deliver(event)
             runCatching { DemoAgentTraceStore(appContext).reset(event.conversationId, session.id) }
             runCatching { processScope.overlayController.window.apply {
                 setSending(true)
@@ -134,16 +129,34 @@ internal class DemoUrgentInteractionDispatcher(
                             is AgentEvent.Failed -> "悬浮提醒操作未完成：${outcome.message}"
                             else -> ""
                         }
+                        var persistenceFailure: Throwable? = null
                         if (answer.isNotBlank()) {
-                            checkNotNull(store.appendMessagesAndFlush(
-                                event.conversationId,
-                                listOf(DemoStoredMessage("assistant", answer))
-                            )) { "Unable to persist the urgent interaction result." }
+                            // DemoAgentRunCoordinator invokes this observer inside
+                            // runCatching (that is how it computes `handled`), so a
+                            // throw that escapes *here* used to skip everything after
+                            // it: the floating window stayed on "正在处理悬浮操作" for
+                            // the rest of the session whenever the conversation had
+                            // been deleted. The reset therefore runs first, and only
+                            // then is the failure rethrown - throwing at all is the
+                            // only channel that reports `handled = false`, and
+                            // MainActivity persists an SDK_EVENT answer exactly when
+                            // `handledByProcessOwner != true`. Swallowing the failure
+                            // here would reset the UI and then lose the answer.
+                            persistenceFailure = runCatching {
+                                checkNotNull(store.appendMessagesAndFlush(
+                                    event.conversationId,
+                                    listOf(DemoStoredMessage("assistant", answer))
+                                )) { "Unable to persist the urgent interaction result." }
+                            }.exceptionOrNull()
                         }
                         processScope.overlayController.window.apply {
                             setSending(false)
                             setStatus(if (outcome is AgentEvent.Completed) "已完成" else "失败")
+                            if (persistenceFailure != null) {
+                                addLog("悬浮提醒结果未能保存，改由对话界面写入")
+                            }
                         }
+                        persistenceFailure?.let { throw it }
                     }
                 )
             } catch (error: RuntimeException) {
@@ -166,8 +179,91 @@ internal class DemoUrgentInteractionDispatcher(
         }
     }
 
+}
+
+/**
+ * The queue of urgent-screen actions and the memory of which screens have
+ * already been spoken for.
+ *
+ * Split out of [DemoUrgentInteractionDispatcher] because nothing in that class
+ * can be reached from a host test: it needs an Android Context, an overlay
+ * window and a live Agent run, and the module's unit tests contain no reference
+ * to urgent interactions at all. The bookkeeping below is pure, and it is where
+ * the defect was.
+ *
+ * The rule: a presentation id is remembered while its event is queued or has
+ * been delivered, and released as soon as the event is dropped without being
+ * delivered. Remembering a discarded event is what made a user's tap on an
+ * urgent screen permanently unrecoverable - the queue was emptied, the overlay
+ * was told the action did not go through, and every later attempt for that
+ * `presentationId` was refused by the deduplication before it could be queued.
+ */
+internal class DemoUrgentInteractionLedger(
+    private val maxPending: Int = MAX_PENDING,
+    private val maxRemembered: Int = MAX_REMEMBERED
+) {
+    private val pending = ArrayDeque<DemoUrgentInteraction>()
+    private val remembered = LinkedHashSet<String>()
+
+    /**
+     * Whether this screen's action could be queued right now. Deliberately
+     * read-only: `submit()` probes it before its own session and timer guards,
+     * and a probe must not consume a slot in the bounded remembered set the way
+     * an accept-then-discard shape would.
+     */
+    fun isReservable(event: DemoUrgentInteraction): Boolean =
+        pending.size < maxPending && event.binding.presentationId !in remembered
+
+    /** Queue the action and remember its screen; call only when [isReservable] said yes. */
+    fun reserve(event: DemoUrgentInteraction) {
+        if (!isReservable(event)) {
+            throw IllegalStateException("urgent interaction is not reservable: ${event.binding.presentationId}")
+        }
+        pending.addLast(event)
+        remember(event.binding.presentationId)
+    }
+
+    fun hasPending(): Boolean = pending.isNotEmpty()
+
+    fun pendingCount(): Int = pending.size
+
+    fun next(): DemoUrgentInteraction? = pending.peekFirst()
+
+    /** The event leaves the queue and its id stays remembered (reserve put it there): this screen has been answered once. */
+    fun deliver(event: DemoUrgentInteraction) {
+        remove(event)
+    }
+
+    /** The event is thrown away without being delivered, so its screen may be tapped again. */
+    fun discard(event: DemoUrgentInteraction) {
+        remove(event)
+        remembered.remove(event.binding.presentationId)
+    }
+
+    /** Every queued action is thrown away: the whole batch of screens becomes reusable. */
+    fun discardAll() {
+        val dropped = pending.toList()
+        pending.clear()
+        dropped.forEach { remembered.remove(it.binding.presentationId) }
+    }
+
+    private fun remove(event: DemoUrgentInteraction) {
+        // Ids are unique while queued (accept refuses a repeat), so the
+        // predicate selects exactly this event.
+        if (!pending.removeIf { it.binding.presentationId == event.binding.presentationId }) {
+            throw IllegalStateException("urgent interaction is not queued: ${event.binding.presentationId}")
+        }
+    }
+
+    private fun remember(presentationId: String) {
+        remembered.add(presentationId)
+        while (remembered.size > maxRemembered) {
+            remembered.remove(remembered.first())
+        }
+    }
+
     private companion object {
         const val MAX_PENDING = 4
-        const val MAX_RECENT_IDS = 32
+        const val MAX_REMEMBERED = 32
     }
 }

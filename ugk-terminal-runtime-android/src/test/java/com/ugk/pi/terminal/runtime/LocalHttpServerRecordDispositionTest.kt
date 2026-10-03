@@ -255,4 +255,157 @@ class LocalHttpServerRecordDispositionTest {
             LocalHttpServerManager.closeReleasesRecord(recordOwnerId = 8L, closingOwnerId = 7L)
         )
     }
+
+    /**
+     * The D-031 rule as the lifecycle calls actually compose it.
+     *
+     * Before this row set, only `groupExistsForDisposition` was pinned: replacing
+     * the `probeUsable` argument at `hasProcess()`/`groupProbe()` with a constant,
+     * or reading a live handle plus an unusable probe as "gone", left all 55 tests
+     * green (measured: mut-m1a/m1b logs). Every combination is reported together,
+     * because a loop that stopped at the first mismatch would hide the D-031 rows
+     * behind the handle-alive rows.
+     */
+    @Test
+    fun processEvidenceCoversEveryObservationCombination() {
+        val expected = mapOf(
+            // A handle this instance still holds is direct evidence either way.
+            Triple(true, true, true) to true,
+            Triple(true, true, false) to true,
+            Triple(true, false, true) to true,
+            Triple(true, false, false) to true,
+            // No handle: a usable probe decides.
+            Triple(false, true, true) to true,
+            Triple(false, true, false) to false,
+            // No handle and no probe: "unknown" must not be read as "gone" (D-031).
+            Triple(false, false, true) to true,
+            Triple(false, false, false) to true
+        )
+        assertEquals(
+            "handleAlive / probeUsable / probeAnswer rows that disagree",
+            emptyList<String>(),
+            expected.mapNotNull { (observations, want) ->
+                val (handleAlive, probeUsable, probeAnswer) = observations
+                val got = LocalHttpServerManager.processEvidencePresent(
+                    handleAlive = handleAlive,
+                    probeUsable = probeUsable,
+                    probeAnswer = { probeAnswer }
+                )
+                if (got == want) {
+                    null
+                } else {
+                    "handleAlive=$handleAlive probeUsable=$probeUsable probeAnswer=$probeAnswer " +
+                        "expected=$want got=$got"
+                }
+            }
+        )
+    }
+
+    /**
+     * The group probe is a JNI `kill(-pgid, 0)`. `hasProcess()` short-circuited
+     * around it on trunk, and an extraction that takes the observation eagerly
+     * would pay one probe per live record per status() call - so the laziness is
+     * part of the rule, not an implementation detail.
+     */
+    @Test
+    fun processEvidenceOnlyAsksTheProbeWhenTheProbeIsTheAnswer() {
+        var probes = 0
+        val probeAnswer: () -> Boolean = {
+            probes++
+            true
+        }
+
+        LocalHttpServerManager.processEvidencePresent(
+            handleAlive = true,
+            probeUsable = true,
+            probeAnswer = probeAnswer
+        )
+        LocalHttpServerManager.processEvidencePresent(
+            handleAlive = false,
+            probeUsable = false,
+            probeAnswer = probeAnswer
+        )
+        assertEquals("a live handle or an unusable probe must not reach the JNI call", 0, probes)
+
+        LocalHttpServerManager.processEvidencePresent(
+            handleAlive = false,
+            probeUsable = true,
+            probeAnswer = probeAnswer
+        )
+        assertEquals("with no handle and a usable probe the answer comes from the probe", 1, probes)
+    }
+
+    /**
+     * What one `stopRecord()` attempt may claim, over the whole observation
+     * domain. The discriminating rows are the last two: with the probe unusable
+     * and no handle the stop must fail loudly instead of reporting `stopped`,
+     * and with the probe usable a group that answers "exists" must be signalled
+     * rather than trusted.
+     */
+    @Test
+    fun stopPlanCoversEveryObservationCombination() {
+        val expected = mapOf(
+            Triple(true, false, true) to GroupStopPlan.ALREADY_GONE,
+            Triple(true, false, false) to GroupStopPlan.ALREADY_GONE,
+            Triple(true, true, true) to GroupStopPlan.SIGNAL_AND_VERIFY,
+            Triple(true, true, false) to GroupStopPlan.SIGNAL_AND_VERIFY,
+            Triple(false, true, true) to GroupStopPlan.ALREADY_GONE,
+            Triple(false, false, true) to GroupStopPlan.ALREADY_GONE,
+            Triple(false, true, false) to GroupStopPlan.UNVERIFIABLE,
+            Triple(false, false, false) to GroupStopPlan.UNVERIFIABLE
+        )
+        assertEquals(
+            "probeUsable / groupExists / holdsProcessHandle rows that disagree",
+            emptyList<String>(),
+            expected.mapNotNull { (observations, want) ->
+                val (probeUsable, groupExists, holdsProcessHandle) = observations
+                val got = LocalHttpServerManager.groupStopPlan(
+                    probeUsable = probeUsable,
+                    groupExists = { groupExists },
+                    holdsProcessHandle = holdsProcessHandle
+                )
+                if (got == want) {
+                    null
+                } else {
+                    "probeUsable=$probeUsable groupExists=$groupExists " +
+                        "holdsProcessHandle=$holdsProcessHandle expected=$want got=$got"
+                }
+            }
+        )
+    }
+
+    /**
+     * With no probe there is nothing to signal and nothing to observe, so asking
+     * whether the group exists is pure cost - and `stopRecord()` used to do it.
+     */
+    @Test
+    fun stopPlanDoesNotAskTheProbeWhenNothingCanSignalTheGroup() {
+        var probes = 0
+        val groupExists: () -> Boolean = {
+            probes++
+            true
+        }
+
+        LocalHttpServerManager.groupStopPlan(
+            probeUsable = false,
+            groupExists = groupExists,
+            holdsProcessHandle = true
+        )
+        LocalHttpServerManager.groupStopPlan(
+            probeUsable = false,
+            groupExists = groupExists,
+            holdsProcessHandle = false
+        )
+        assertEquals("an unusable probe must not be consulted", 0, probes)
+
+        assertEquals(
+            GroupStopPlan.SIGNAL_AND_VERIFY,
+            LocalHttpServerManager.groupStopPlan(
+                probeUsable = true,
+                groupExists = groupExists,
+                holdsProcessHandle = false
+            )
+        )
+        assertEquals("a usable probe is consulted exactly once", 1, probes)
+    }
 }
