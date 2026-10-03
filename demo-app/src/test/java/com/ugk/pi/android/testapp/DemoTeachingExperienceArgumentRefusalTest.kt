@@ -72,6 +72,14 @@ class DemoTeachingExperienceArgumentRefusalTest {
             put("summary", "本次未完成")
         })
         assertRefusalNaming(result, "outcome")
+        // A refusal that quotes "null" means the value was read as the four-letter
+        // string and then rejected for its content - the outcome this test exists
+        // to rule out, since the reader would still be pointed at the domain of
+        // `outcome` rather than at the argument that was never filled in.
+        assertFalse(
+            "a JSON null must not be read as the literal string \"null\": ${result.content}",
+            result.content.contains("null")
+        )
     }
 
     @Test
