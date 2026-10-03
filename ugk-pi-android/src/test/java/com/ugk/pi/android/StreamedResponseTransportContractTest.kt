@@ -655,6 +655,33 @@ class StreamedResponseTransportContractTest {
         }
     }
 
+    /**
+     * The OpenAI reader's `[DONE]` branch used to emit the end-of-stream
+     * completion itself, which set `completedEmitted` and short-circuited the
+     * no-understood-event guard: a stream whose only event is `[DONE]` finished
+     * as a successful empty answer - the exact shape the guard exists to stop,
+     * and the one the Anthropic side above already refuses.
+     */
+    @Test
+    fun openAiFailsLoudlyWhenTheStreamCarriedOnlyADoneMarker() {
+        ScriptedEndpoint("data: [DONE]\n\n", contentType = "text/event-stream").use { endpoint ->
+            val failure = assertThrows(Exception::class.java) {
+                runBlocking {
+                    OpenAiChatCompletionsProvider(
+                        apiKey = "test-key",
+                        model = "gpt-test",
+                        endpoint = endpoint.url,
+                        transport = JavaNetHttpTransport(connectTimeoutMillis = 5_000, readTimeoutMillis = 5_000)
+                    ).generateStream(request()).toList()
+                }
+            }
+            assertTrue(
+                "expected a framing failure, got: ${failure.message}",
+                failure.message?.contains("no SSE event") == true
+            )
+        }
+    }
+
     /** Same rule for a payload that is a data event but not an event object. */
     @Test
     fun anthropicFailsLoudlyWhenTheEventPayloadIsNotAnObject() {

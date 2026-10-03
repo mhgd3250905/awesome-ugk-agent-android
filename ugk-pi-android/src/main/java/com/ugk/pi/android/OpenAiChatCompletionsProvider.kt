@@ -242,19 +242,14 @@ class OpenAiChatCompletionsProvider(
             val dataStr = line.removePrefix("data:").trim()
             if (dataStr == "[DONE]") {
                 // An unfinished event must fail the stream instead of being
-                // swept into the completion emitted below.
+                // swept into the completion the stream end emits.
                 pendingDataPayload?.let { throw malformedSseEvent(it) }
-                if (!completedEmitted) {
-                    val finalToolCalls = buildFinalToolCalls()
-                    val response = ModelResponse(
-                        content = accumulatedContent.toString(),
-                        toolCalls = finalToolCalls,
-                        stopReason = currentStopReason,
-                        reasoningContent = accumulatedReasoning.toString().takeIf { it.isNotBlank() }
-                    )
-                    emit(ModelStreamChunk.Completed(response))
-                    completedEmitted = true
-                }
+                // No completion is emitted here. Doing that used to set
+                // `completedEmitted` and short-circuit the end-of-stream guard,
+                // letting a stream whose only event is `[DONE]` finish as a
+                // successful empty answer. The stream-end fallback below builds
+                // the identical response, so a stream that understood at least
+                // one event completes exactly as before - one emission later.
                 return@collect
             }
 
