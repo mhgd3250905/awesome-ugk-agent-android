@@ -11,6 +11,7 @@ import kotlinx.serialization.json.JsonPrimitive
 import kotlinx.serialization.json.buildJsonObject
 import kotlinx.serialization.json.contentOrNull
 import org.junit.Assert.assertEquals
+import org.junit.Assert.assertFalse
 import org.junit.Assert.assertTrue
 import org.junit.Test
 
@@ -89,6 +90,25 @@ class AgentTaskListStatusArgumentTest {
         }
 
         assertEquals(emptyList<String>(), failures)
+    }
+
+    /**
+     * The refused value is quoted only as far as it is useful.
+     *
+     * The argument text is model-controlled and a refusal lands in the transcript
+     * and the host's logs, so the echo must not be the whole payload.
+     */
+    @Test
+    fun refusalEchoesOnlyABoundedPrefixOfTheRejectedStatus() = runBlocking {
+        val long = "S" + "X".repeat(200)
+        val result = execute(buildJsonObject { put("status", JsonPrimitive(long)) })
+        assertTrue("expected a refusal: ${result.content}", result.isError)
+        val message = (result.metadata?.get("message") as? JsonPrimitive)?.contentOrNull ?: result.content
+        assertFalse(
+            "the refusal must not echo the whole 201-character value: length=${message.length}",
+            message.contains(long)
+        )
+        assertTrue("the refusal should still show the start of the value: $message", message.contains("SXXX"))
     }
 
     /** Control: the key absent keeps every row, which is what the schema documents. */

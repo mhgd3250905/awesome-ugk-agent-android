@@ -136,6 +136,23 @@ class DemoTeachingExperienceArgumentRefusalTest {
         assertRefusalNaming(result, "summary")
     }
 
+    /** The refused value is quoted only as far as it identifies the mistake. */
+    @Test
+    fun outcomeRefusalDoesNotEchoTheWholeRejectedValue() = runBlocking {
+        val fixture = approvedFixture()
+        val long = "z".repeat(201)
+        val result = call(fixture.plugin, "report", buildJsonObject {
+            put("usageId", fixture.token)
+            put("outcome", long)
+            put("summary", "本次未完成")
+        })
+        assertRefusalNaming(result, "outcome")
+        assertFalse(
+            "the refusal must not echo the whole rejected value",
+            result.content.contains(long)
+        )
+    }
+
     /** Control: a well-formed report still succeeds, so the refusals are not a blanket block. */
     @Test
     fun wellFormedReportStillRecordsTheOutcome() = runBlocking {
