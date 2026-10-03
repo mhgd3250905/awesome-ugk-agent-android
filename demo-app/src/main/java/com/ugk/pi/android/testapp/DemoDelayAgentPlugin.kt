@@ -7,6 +7,8 @@ import com.ugk.pi.android.AndroidSkill
 import com.ugk.pi.android.ToolCall
 import com.ugk.pi.android.ToolExecutionContext
 import com.ugk.pi.android.ToolResult
+import kotlinx.serialization.json.JsonElement
+import kotlinx.serialization.json.JsonNull
 import kotlinx.serialization.json.JsonObject
 import kotlinx.serialization.json.JsonPrimitive
 import kotlinx.serialization.json.booleanOrNull
@@ -72,29 +74,21 @@ private class ProposeDelayTool(
         if (context.runSource != AgentRunSource.USER) {
             return error(call, "Only a direct user message can propose a delayed task.")
         }
-        if (call.input.keys.any { it !in setOf("delaySeconds", "instruction", "repeating") }) {
-            return error(call, "Unknown timer proposal field.")
+        val arguments = readDelayProposalArguments(call.input)
+        if (arguments is DelayProposalArguments.Refused) {
+            return error(call, arguments.message)
         }
-        val durationValue = call.input["delaySeconds"] as? JsonPrimitive
-        val delaySeconds = durationValue?.takeUnless { it.isString }?.longOrNull
-            ?: return error(call, "delaySeconds must be an integer.")
-        if (delaySeconds !in 1L..86400L) {
-            return error(call, "The timer accepts intervals from 1 second to 24 hours.")
-        }
-        val repeating = when (val value = call.input["repeating"]) {
-            null -> false
-            is JsonPrimitive -> value.takeUnless { it.isString }?.booleanOrNull
-                ?: return error(call, "repeating must be a boolean.")
-            else -> return error(call, "repeating must be a boolean.")
-        }
-        val instructionValue = call.input["instruction"] as? JsonPrimitive
-        val instruction = instructionValue?.takeIf { it.isString }
-            ?.contentOrNull?.trim().orEmpty()
-        if (instruction.isBlank() || instruction.length > 2000) {
-            return error(call, "instruction must contain 1 to 2000 characters.")
-        }
-        val proposed = controller.propose(context.sessionId, instruction, delaySeconds, repeating)
-            .getOrElse { return error(call, it.message ?: "Unable to propose a delayed task.") }
+        // The refusal branch returned, so only Valid remains; the explicit cast is
+        // what the compiler cannot see across the sealed check here. A third
+        // subtype would surface as an error ToolResult, not a crash: the runtime
+        // catches Throwable out of every tool.
+        val accepted = arguments as DelayProposalArguments.Valid
+        val proposed = controller.propose(
+            context.sessionId,
+            accepted.instruction,
+            accepted.delaySeconds,
+            accepted.repeating
+        ).getOrElse { return error(call, it.message ?: "Unable to propose a delayed task.") }
         val description = if (proposed.repeating) {
             "请确认：每 ${proposed.delaySeconds} 秒执行「${proposed.instruction}」，直到手动停止；首次在确认后一个间隔执行。"
         } else {
@@ -118,4 +112,49 @@ private class ProposeDelayTool(
         content = message,
         isError = true
     )
+}
+
+/**
+ * The accepted arguments of `demo_delay_propose`, or the message to answer with.
+ *
+ * Read as a function so the rule about optional arguments can be executed on the
+ * host: the Tool itself needs [DemoDelayedTaskController], which needs an Android
+ * [android.content.Context].
+ */
+internal sealed interface DelayProposalArguments {
+    class Valid(
+        val delaySeconds: Long,
+        val repeating: Boolean,
+        val instruction: String
+    ) : DelayProposalArguments
+
+    class Refused(val message: String) : DelayProposalArguments
+}
+
+internal fun readDelayProposalArguments(input: JsonObject): DelayProposalArguments {
+    if (input.keys.any { it !in setOf("delaySeconds", "instruction", "repeating") }) {
+        return DelayProposalArguments.Refused("Unknown timer proposal field.")
+    }
+    val delaySeconds = (input["delaySeconds"] as? JsonPrimitive)
+        ?.takeUnless { it.isString }?.longOrNull
+        ?: return DelayProposalArguments.Refused("delaySeconds must be an integer.")
+    if (delaySeconds !in 1L..86400L) {
+        return DelayProposalArguments.Refused("The timer accepts intervals from 1 second to 24 hours.")
+    }
+    // An endpoint that does not fill an optional field emits JSON null for it, and
+    // `JsonNull` is a JsonPrimitive - a Kotlin null test reads it as a supplied
+    // value and refuses the whole proposal over the field nobody filled in.
+    val repeatingElement = input["repeating"]?.takeUnless { it is JsonNull }
+    val repeating = when (repeatingElement) {
+        null -> false
+        is JsonPrimitive -> repeatingElement.takeUnless { it.isString }?.booleanOrNull
+            ?: return DelayProposalArguments.Refused("repeating must be a boolean.")
+        else -> return DelayProposalArguments.Refused("repeating must be a boolean.")
+    }
+    val instruction = (input["instruction"] as? JsonPrimitive)
+        ?.takeIf { it.isString }?.contentOrNull?.trim().orEmpty()
+    if (instruction.isBlank() || instruction.length > 2000) {
+        return DelayProposalArguments.Refused("instruction must contain 1 to 2000 characters.")
+    }
+    return DelayProposalArguments.Valid(delaySeconds, repeating, instruction)
 }

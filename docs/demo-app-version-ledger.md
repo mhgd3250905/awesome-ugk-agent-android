@@ -671,6 +671,7 @@ adb -s emulator-5580 shell am instrument -w -r -e class com.ugk.pi.android.testa
 ### 验收证据与边界
 
 - 九个模块 JVM 单元测试合计 `916` 个（`138` 个测试类）：`910` passed、`6` skipped、0 failure/error；skip 均为 Windows 主机 symlink 限制的既有用例。本轮新增 7 个 JVM 测试类共 17 个用例 + 1 个仪器用例，其中 10 个为缺陷复现用例（修复前确认失败、修复后转绿，取证见 PR 说明），其余为防御边界锁定用例。
+  - > **2026-10-02 更正（追加，原文保留于上）**：上面这行 `916 个 / 138 类` 与 `docs/terminal-runtime-validation.md` §27 同一数字，已被该节 2026-09-28 的更正按 `@Test` 逐提交实测判为**失实记录**（`main@1170268` 实测 `441` tests / `63` 类）。此前只在验证文档做了更正，本台账仍带着无注的旧数字，故在此补指针；当前门禁口径以验证文档 §37 的 `--rerun-tasks` 独占实跑为准。
 - API 35 x86_64 模拟器（`codex_api35`）`:demo-app:connectedDebugAndroidTest` `28/28` 通过（0 failure/0 skipped），含新增 `TerminalBackgroundProcessCleanupInstrumentedTest.naturalExitTerminatesBackgroundChildrenOfTheCall`——对真实原生运行时验证后台子进程随调用结束被清扫。本轮未操作任何真机。
 - `:demo-app:assembleDebug` 通过，APK metadata 为 `versionCode 15 / versionName 0.9.4`。
 - 每个缺陷项均带先红后绿的复现测试；`LocalHttpServerManager` 惰性清理为行为加固，未带专用仪器用例（既有 `LocalHttpServerManagerInstrumentedTest` 全绿）。遗留未修复项（主线程位图解码、相册 URI 权限过期、arm64 16KB、`handle` 残余毫秒级竞态窗口等）记录于 PR 说明，不宣称已解决。

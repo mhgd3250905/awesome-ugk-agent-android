@@ -14,6 +14,7 @@ import kotlinx.coroutines.CancellationException
 import kotlinx.serialization.SerialName
 import kotlinx.serialization.Serializable
 import kotlinx.serialization.json.JsonElement
+import kotlinx.serialization.json.JsonNull
 import kotlinx.serialization.json.JsonObject
 import kotlinx.serialization.json.JsonPrimitive
 import kotlinx.serialization.json.buildJsonObject
@@ -406,17 +407,19 @@ class AgentTaskUpdateTool(
         }
 
         val now = clock.nowMillis()
-        val schedule = if (call.input["schedule"] != null) {
-            when (val parsed = parseSchedule(call.input["schedule"], now)) {
+        val declaredSchedule = call.input.optionalElement("schedule")
+        val schedule = if (declaredSchedule != null) {
+            when (val parsed = parseSchedule(declaredSchedule, now)) {
                 is ScheduleParseResult.Error -> return errorResult(call, name, parsed.code, parsed.message)
                 is ScheduleParseResult.Success -> parsed.schedule
             }
         } else {
             existing.schedule
         }
-        val action = if (call.input["action"] != null) {
+        val declaredAction = call.input.optionalElement("action")
+        val action = if (declaredAction != null) {
             when (val parsed = parseAction(
-                call.input["action"],
+                declaredAction,
                 supportsBackgroundPromptExecution
             )) {
                 is ActionParseResult.Error -> return errorResult(call, name, parsed.code, parsed.message)
@@ -692,6 +695,16 @@ private fun taskResult(call: ToolCall, toolName: String, task: AgentTask, conten
     )
 }
 
+/**
+ * An optional argument a gateway serialized as JSON null carries the same intent
+ * as one the model left out. `JsonNull` is a value, so a Kotlin null test on
+ * `this[key]` reads it as "the model sent something here" and refuses it - which
+ * for `agent_task_update` meant a title-only edit being rejected over fields the
+ * model never filled in.
+ */
+private fun JsonObject.optionalElement(key: String): JsonElement? =
+    this[key]?.takeUnless { it is JsonNull }
+
 private fun errorResult(call: ToolCall, toolName: String, code: String, message: String): ToolResult {
     return ToolResult(
         toolCallId = call.id,
@@ -752,6 +765,19 @@ private fun taskInputSchema(requireTaskId: Boolean): JsonObject = buildJsonObjec
         }
         putJsonObject("action") {
             put("type", "object")
+        }
+    }
+    // The arguments the tool refuses when they are missing. Advertising no required
+    // list at all told the model everything was optional, so a call written from the
+    // schema came back as MISSING_TASK_ID / MISSING_TITLE - and `agent_task_cancel`
+    // on the same argument already declared it, so the two schemas disagreed.
+    putJsonArray("required") {
+        if (requireTaskId) {
+            add(JsonPrimitive("taskId"))
+        } else {
+            add(JsonPrimitive("title"))
+            add(JsonPrimitive("schedule"))
+            add(JsonPrimitive("action"))
         }
     }
 }

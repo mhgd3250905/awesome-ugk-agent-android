@@ -166,6 +166,14 @@ class AnthropicMessagesProvider(
         var currentToolName: String? = null
         val currentToolInputJson = StringBuilder()
         var completedEmitted = false
+        // Whether the response delivered at least one event this reader actually
+        // understood. A stream that produced no event and no parsable document is
+        // not an empty answer - it is the wrong shape, and completing it blank
+        // stores nothing as the model's final message.
+        var sawUnderstoodEvent = false
+        // Why a whole-body document could not be read, kept so the failure below
+        // names the payload instead of blaming the framing.
+        var documentParseFailure: String? = null
         // Payload fragments of the event currently being read: one event may
         // carry its JSON across several `data:` lines.
         var pendingDataPayload: String? = null
@@ -191,7 +199,13 @@ class AnthropicMessagesProvider(
                 fullBodyApiErrorMessageOrNull(line)?.let { message ->
                     throw IllegalStateException("Anthropic API error: $message")
                 }
-                val parsed = runCatching { parseResponse(line) }.getOrNull()
+                val parsed = runCatching { parseResponse(line) }
+                    .onFailure { failure ->
+                        if (documentParseFailure == null) {
+                            documentParseFailure = failure.message ?: failure::class.java.name
+                        }
+                    }
+                    .getOrNull()
                 if (parsed != null) {
                     if (!parsed.reasoningContent.isNullOrBlank()) {
                         emit(ModelStreamChunk.ThinkingDelta(parsed.reasoningContent))
@@ -237,6 +251,7 @@ class AnthropicMessagesProvider(
             }
             pendingDataPayload = null
             val dataObj = joined as? JsonObject ?: return@collect
+            sawUnderstoodEvent = true
 
             when (dataObj["type"]?.jsonPrimitive?.contentOrNull) {
                 "content_block_start" -> {
@@ -336,7 +351,7 @@ class AnthropicMessagesProvider(
 
                 "error" -> {
                     val errorObj = dataObj["error"] as? JsonObject
-                    val message = errorObj?.get("message")?.jsonPrimitive?.contentOrNull ?: dataStr
+                    val message = errorObj?.textOrNull("message") ?: dataStr
                     throw IllegalStateException("Anthropic SSE stream error: $message")
                 }
             }
@@ -348,6 +363,19 @@ class AnthropicMessagesProvider(
         // prefix as the model's final answer is how a truncated response silently
         // enters the transcript.
         pendingDataPayload?.let { throw malformedSseEvent(it) }
+
+        // Nothing in this response was an event this reader understood, and
+        // nothing was a parsable document. Reporting that as a successful empty
+        // answer is how a framing failure becomes a blank transcript entry. The
+        // document cause is carried along so a body that arrived intact but was
+        // refused by the parser is not misreported as a framing problem.
+        if (!completedEmitted && !sawUnderstoodEvent) {
+            throw IllegalStateException(
+                "Anthropic response carried no SSE event and no parsable JSON document; " +
+                    "the endpoint answered a streaming request with a shape this client cannot read" +
+                    (documentParseFailure?.let { "; the whole-body document failed to parse: $it" } ?: "")
+            )
+        }
 
         // 流正常完结兜底：如果服务端未正常发送 message_stop 便关闭了数据流
         if (!completedEmitted) {
@@ -623,8 +651,7 @@ class AnthropicMessagesProvider(
     private fun fullBodyApiErrorMessageOrNull(body: String): String? {
         val root = runCatching { json.parseToJsonElement(body).jsonObject }.getOrNull() ?: return null
         val errorObj = root["error"] as? JsonObject ?: return null
-        return errorObj["message"]?.jsonPrimitive?.contentOrNull
-            ?: errorObj["type"]?.jsonPrimitive?.contentOrNull
+        return errorObj.textOrNull("message") ?: errorObj.textOrNull("type")
     }
 
     private fun parseResponse(body: String): ModelResponse {
@@ -633,8 +660,8 @@ class AnthropicMessagesProvider(
         // from an overloaded gateway). Parsing it as a message would yield a
         // blank "successful" response and mask the real failure.
         (root["error"] as? JsonObject)?.let { errorObj ->
-            val message = errorObj["message"]?.jsonPrimitive?.contentOrNull
-                ?: errorObj["type"]?.jsonPrimitive?.contentOrNull
+            val message = errorObj.textOrNull("message")
+                ?: errorObj.textOrNull("type")
                 ?: body.take(200)
             throw IllegalStateException("Anthropic API error: $message")
         }

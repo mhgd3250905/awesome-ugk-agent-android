@@ -24,6 +24,7 @@ import kotlinx.coroutines.flow.collect
 import kotlinx.coroutines.flow.flow
 import kotlinx.coroutines.withTimeoutOrNull
 import kotlinx.serialization.json.JsonArray
+import kotlinx.serialization.json.JsonElement
 import kotlinx.serialization.json.JsonNull
 import kotlinx.serialization.json.JsonObject
 import kotlinx.serialization.json.JsonPrimitive
@@ -155,12 +156,16 @@ internal class DemoTeachingSopAgent(private val provider: LLMProvider, private v
                 if (index == null || index !in 1..evidenceBatchCount) {
                     return toolError(call, "请使用 1 到 $evidenceBatchCount 之间的批次编号。")
                 }
-                val offset = if ("offset" in call.input) {
-                    (call.input["offset"] as? JsonPrimitive)?.intOrNull
-                } else 0
-                val includeImages = if ("includeImages" in call.input) {
-                    (call.input["includeImages"] as? JsonPrimitive)?.booleanOrNull
-                } else false
+                val offsetElement = call.input.declaredOrNull("offset")
+                val includeImagesElement = call.input.declaredOrNull("includeImages")
+                val offset = when (offsetElement) {
+                    null -> 0
+                    else -> (offsetElement as? JsonPrimitive)?.intOrNull
+                }
+                val includeImages = when (includeImagesElement) {
+                    null -> false
+                    else -> (includeImagesElement as? JsonPrimitive)?.booleanOrNull
+                }
                 if (offset == null || offset < 0 || includeImages == null) {
                     return toolError(call, "offset 应为非负整数，includeImages 应为 true 或 false。")
                 }
@@ -320,6 +325,14 @@ internal class DemoTeachingSopAgent(private val provider: LLMProvider, private v
 
     private fun JsonObject.text(key: String): String? =
         (get(key) as? JsonPrimitive)?.takeIf { it.isString }?.contentOrNull
+
+    /**
+     * An optional argument a gateway serialized as JSON null carries the same
+     * intent as one the model left out - a raw presence test cannot tell the two
+     * apart, and treated `"offset": null` as a request for a broken offset.
+     */
+    private fun JsonObject.declaredOrNull(key: String): JsonElement? =
+        this[key]?.takeUnless { it is JsonNull }
 
     private fun toolError(call: ToolCall, message: String) = ToolResult(
         toolCallId = call.id, name = call.name, content = message, isError = true

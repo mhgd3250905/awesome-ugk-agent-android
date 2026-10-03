@@ -18,6 +18,47 @@ import java.io.InputStream
 import java.net.HttpURLConnection
 import java.net.URL
 
+/**
+ * True when a response `Content-Type` declares an SSE event stream.
+ *
+ * This is the transport's primary signal for "line framing is the payload, and
+ * each line may be delivered as it arrives". Everything else is treated as one
+ * document: an endpoint that ignores `stream` answers a whole JSON body, and
+ * handing that over line by line takes it apart before a provider can recognise
+ * the shape.
+ *
+ * Parameters are ignored (`text/event-stream; charset=utf-8` still is an event
+ * stream), and a missing or malformed value falls through to
+ * [looksLikeEventStreamLine]. A stream whose very first line is blank *and* whose
+ * media type is also missing falls through to the document branch: the answer is
+ * still read correctly (the reader re-splits the buffered body) but it arrives in
+ * one emission, and a body over `maxResponseBytes` then fails loudly instead of
+ * streaming. Both halves are pinned by name rather than by intent, in
+ * `StreamedResponseTransportContractTest`
+ * (`streamWithABlankFirstLineAndNoContentTypeIsBufferedButStillAnswered` and
+ * `bufferedDocumentOverTheCapFailsLoudlyInsteadOfBeingHandedOverTruncated`), because
+ * buffering is the only way to hand a document over intact.
+ */
+internal fun isEventStreamContentType(contentType: String?): Boolean =
+    contentType?.substringBefore(';')?.trim()?.equals(EVENT_STREAM_MEDIA_TYPE, ignoreCase = true) == true
+
+/**
+ * The secondary signal: a first content line that only an SSE body produces.
+ * Without it, an endpoint that streams real events but forgets the media type
+ * would be buffered into one emission, losing incremental delivery for the whole
+ * answer and putting a stream under the document size cap. The line is trimmed the
+ * way the provider readers trim it, so the two cannot disagree about an indented
+ * stream. Only the prefixes the SSE grammar reserves are recognised, so a JSON
+ * document - pretty-printed or not - can never be mistaken for one.
+ */
+internal fun looksLikeEventStreamLine(firstLine: String): Boolean {
+    val line = firstLine.trimStart()
+    return line.startsWith("data:") || line.startsWith("event:") ||
+        line.startsWith("id:") || line.startsWith("retry:") || line.startsWith(":")
+}
+
+private const val EVENT_STREAM_MEDIA_TYPE = "text/event-stream"
+
 data class HttpRequest(
     val url: String,
     val headers: Map<String, String>,
@@ -39,6 +80,16 @@ interface HttpTransport {
      * Emitting the body as one emission would break every line-oriented parser:
      * an SSE event spanning several lines cannot be parsed as a single line, so
      * the caller would silently see an empty answer.
+     *
+     * The contract has a second half, and both implementations owe it: a response
+     * that is not an SSE event stream is one document and must be handed over
+     * unsplit. [JavaNetHttpTransport] decides that from the response media type
+     * plus the first line, because the socket already delivers line boundaries
+     * that the provider cannot reassemble once they have been emitted separately.
+     * A host transport that implements only [post] inherits the same guarantee
+     * from the default below, which hands the body to [asSseLines] whole - that
+     * fallback recognises a document, it does not bound the body any further than
+     * [post] already does.
      */
     fun postStream(request: HttpRequest): Flow<String> = flow {
         val response = post(request)
@@ -92,19 +143,54 @@ class JavaNetHttpTransport(
                 }
 
                 BufferedInputStream(connection.inputStream, 8 * 1024).use { input ->
-                    var totalStreamedBytes = 0L
-                    while (true) {
-                        val line = input.readUtf8Line(maxResponseBytes) ?: break
-                        // The per-line cap above cannot bound a stream of many
-                        // small SSE events: only the SUM of all line bytes
-                        // does. A hostile or broken endpoint that pushes past
-                        // maxStreamedBytes fails here instead of accumulating
-                        // unbounded data in the host.
-                        totalStreamedBytes += line.byteCount
-                        if (totalStreamedBytes > maxStreamedBytes) {
-                            throw IOException("HTTP stream exceeds maxStreamedBytes=$maxStreamedBytes")
+                    val firstLine = input.readUtf8Line(maxResponseBytes)
+                    if (firstLine == null) {
+                        // An empty body is neither an event stream nor a
+                        // document; the providers report that as a failure
+                        // rather than completing with nothing.
+                        return@use
+                    }
+                    // A response labelled `text/event-stream` is framed by line.
+                    // The label is not enough on its own: an endpoint that drops
+                    // or missets it still has to stream, or the answer arrives in
+                    // one burst at EOF (or fails the document cap). The first line
+                    // carrying SSE framing is that case, and it costs nothing -
+                    // line framing was already the behaviour for both.
+                    val eventStream = isEventStreamContentType(connection.contentType) ||
+                        looksLikeEventStreamLine(firstLine.text)
+                    if (eventStream) {
+                        var totalStreamedBytes = firstLine.byteCount.toLong()
+                        send(firstLine.text)
+                        while (true) {
+                            val line = input.readUtf8Line(maxResponseBytes) ?: break
+                            // The per-line cap above cannot bound a stream of many
+                            // small SSE events: only the SUM of all line bytes
+                            // does. A hostile or broken endpoint that pushes past
+                            // maxStreamedBytes fails here instead of accumulating
+                            // unbounded data in the host.
+                            totalStreamedBytes += line.byteCount
+                            if (totalStreamedBytes > maxStreamedBytes) {
+                                throw IOException("HTTP stream exceeds maxStreamedBytes=$maxStreamedBytes")
+                            }
+                            send(line.text)
                         }
-                        send(line.text)
+                    } else {
+                        // The endpoint did not answer an event stream, so this body
+                        // is one document. Handing it over line by line would take
+                        // it apart before a provider can recognise the shape, so it
+                        // is read whole under the same byte cap the non-streaming
+                        // post() applies - and it is reported, not buffered past it.
+                        val document = StringBuilder().apply { append(firstLine.text) }
+                        var totalDocumentBytes = firstLine.byteCount.toLong()
+                        while (true) {
+                            val line = input.readUtf8Line(maxResponseBytes) ?: break
+                            totalDocumentBytes += line.byteCount
+                            if (totalDocumentBytes > maxResponseBytes) {
+                                throw IOException("HTTP response exceeds maxResponseBytes=$maxResponseBytes")
+                            }
+                            document.append('\n').append(line.text)
+                        }
+                        send(document.toString())
                     }
                 }
                 close()

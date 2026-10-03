@@ -267,11 +267,13 @@
 ## 5. 常用开发与调试命令速查
 
 ```powershell
-# 1. 运行当前全工程单元测试
+# 1. 运行当前全工程单元测试（十个任务 = 全部十个模块；2026-10-02 前此清单漏了
+#    :pi-attention-skill-android，导致按本文档跑的"全量"不会执行该模块用例）
 .\gradlew.bat `
   :ugk-pi-android:testDebugUnitTest `
   :pi-file-skill-android:testDebugUnitTest `
   :pi-schedule-skill-android:testDebugUnitTest `
+  :pi-attention-skill-android:testDebugUnitTest `
   :ugk-agent-task-runtime-android:testDebugUnitTest `
   :pi-system-skill-android:testDebugUnitTest `
   :pi-agent-skill-runtime-android:testDebugUnitTest `
