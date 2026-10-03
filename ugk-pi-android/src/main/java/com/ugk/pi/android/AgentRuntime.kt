@@ -539,7 +539,12 @@ class AgentRuntime(
 
     private fun ModelResponse.isIncompleteFinalResponse(): Boolean {
         if (content.isBlank()) return true
-        return stopReason == "max_tokens" || stopReason == "length"
+        // Normalized the same way the demo-side readers normalize it: a
+        // Gemini-compatible endpoint spells the same condition in caps, and a
+        // trailing space from a proxy must not turn a truncation into a
+        // complete-looking answer.
+        val reason = stopReason?.trim()?.lowercase()
+        return reason != null && reason in TRUNCATED_STOP_REASONS
     }
 
     private fun buildRequestMessages(
@@ -817,6 +822,25 @@ private class CompositeAndroidSkillProvider(
  */
 internal const val DEFAULT_MAX_ITERATIONS = 500
 private const val MAX_INCOMPLETE_RESPONSE_RETRIES = 2
+
+/**
+ * Stop reasons that mean the model ran out of room before finishing.
+ *
+ * These are the reasons this repo already treats as truncation everywhere else:
+ * `DemoTeachingResponseParser.TRUNCATED_STOP_REASONS`,
+ * `DemoTeachingSopAgent.TRUNCATED_STOP_REASONS`, and the inline literals in
+ * `DemoOperationStepReviewer`, `DemoWorkflowCompiler` and `DemoWorkflowRunner`.
+ * The copies cannot be merged because the demo module cannot see an `internal`
+ * member of the published AAR, so they are pinned by behavior instead -
+ * `StopReasonCompletenessContractTest` in this module and
+ * `DemoTeachingTruncationReasonTest` in `demo-app` each refuse a different half
+ * of the same set, and removing a member from either side turns that side red.
+ *
+ * Safety-driven stops (`content_filter`, `sensitive`, `refusal`) are deliberately
+ * absent: a refusal is what the model chose to say, and retrying it three times
+ * would both waste requests and hide the refusal behind a generic failure.
+ */
+private val TRUNCATED_STOP_REASONS = setOf("max_tokens", "length", "max_output_tokens")
 
 /** Fixed stand-in for terminal tools that end the turn with no usable text. */
 private const val TERMINAL_COMPLETION_PLACEHOLDER =
