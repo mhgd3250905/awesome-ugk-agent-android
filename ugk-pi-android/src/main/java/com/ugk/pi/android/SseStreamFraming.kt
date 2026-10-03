@@ -3,8 +3,11 @@ package com.ugk.pi.android
 import kotlinx.coroutines.flow.Flow
 import kotlinx.coroutines.flow.flow
 import kotlinx.serialization.json.Json
+import kotlinx.serialization.json.JsonElement
+import kotlinx.serialization.json.JsonNull
 import kotlinx.serialization.json.JsonObject
 import kotlinx.serialization.json.JsonPrimitive
+import kotlinx.serialization.json.contentOrNull
 
 /**
  * The text of an object field an endpoint may fill with anything.
@@ -21,6 +24,43 @@ import kotlinx.serialization.json.JsonPrimitive
 internal fun JsonObject.textOrNull(key: String): String? =
     (this[key] as? JsonPrimitive)
         ?.takeIf { it.isString }?.content?.takeIf { it.isNotBlank() }
+
+/**
+ * The reason an endpoint gave for an `error`, or null when it gave none.
+ *
+ * One rule for every place a response says "error", because the shapes differ by
+ * gateway and a per-copy check drifts: an object (`Anthropic`/`OpenAI` native), a
+ * plain string (proxies and legacy gateways answer `{"error":"Overloaded"}`), a
+ * number, an array, or `null` meaning "no error" (how a POJO-serialized gateway
+ * fills the field). Recognizing only the object shape made every other shape a
+ * successful blank answer, and for the OpenAI document path it replaced the
+ * endpoint's reason with a guess about a missing response field.
+ *
+ * [error] is read as the raw `error` element so `JsonNull` can be told apart from
+ * an absent key: both mean "nothing was reported" here, which is the same
+ * three-state rule the SDK applies to model-controlled optional arguments.
+ *
+ * [rawFallback] is what to report when the value is present but says nothing
+ * readable (an object without a string `message`/`type`, an array, a blank
+ * scalar). It is bounded: an endpoint must not push an arbitrarily long string
+ * into an exception message that the host logs and the transcript stores. Passing
+ * null leaves the caller's own reading of the body in charge - the whole-body
+ * document path uses that to keep naming the parse refusal instead of the framing.
+ */
+internal fun apiErrorReasonOrNull(error: JsonElement?, rawFallback: String?): String? {
+    if (error == null || error is JsonNull) return null
+    val readable = when (error) {
+        // Folded over the candidate list rather than chained: the first field that
+        // carries text wins, and adding a candidate cannot silently reorder them.
+        is JsonObject -> listOf("message", "type")
+            .firstNotNullOfOrNull { key -> error.textOrNull(key) }
+        is JsonPrimitive -> error.contentOrNull?.takeIf { it.isNotBlank() }
+        else -> null
+    }
+    return readable ?: rawFallback?.trim()?.take(MAX_API_ERROR_ECHO_CHARS)?.takeIf { it.isNotEmpty() }
+}
+
+internal const val MAX_API_ERROR_ECHO_CHARS = 200
 
 /**
  * Splits any emission that carries several lines into one emission per line.

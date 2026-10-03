@@ -3,7 +3,6 @@ package com.ugk.pi.android
 import kotlinx.serialization.json.Json
 import kotlinx.serialization.json.JsonArray
 import kotlinx.serialization.json.JsonElement
-import kotlinx.serialization.json.JsonNull
 import kotlinx.serialization.json.JsonObject
 import kotlinx.serialization.json.JsonPrimitive
 import kotlinx.serialization.json.buildJsonArray
@@ -282,14 +281,12 @@ class OpenAiChatCompletionsProvider(
 
             // OpenAI-compatible gateways push mid-stream failures (rate
             // limits, content filters, upstream disconnects) as a data event
-            // carrying an `error` object. Dropping it here would finish a
-            // truncated answer as a normal completion, so surface the error.
+            // carrying an `error`. Dropping it here would finish a truncated
+            // answer as a normal completion, so surface the error.
             // `"error":null` is how a POJO-serialized gateway spells "no
-            // error", and JsonNull is a value rather than an absent key.
-            val errorElement = dataObj["error"]
-            if (errorElement != null && errorElement !is JsonNull) {
-                val message = (errorElement as? JsonObject)?.textOrNull("message")
-                    ?: dataStr
+            // error", and JsonNull is a value rather than an absent key - both
+            // mean "nothing reported" here, and any other shape means failure.
+            apiErrorReasonOrNull(dataObj["error"], dataStr)?.let { message ->
                 throw IllegalStateException("OpenAI stream error: $message")
             }
 
@@ -524,19 +521,20 @@ class OpenAiChatCompletionsProvider(
 
     private fun fullBodyApiErrorMessageOrNull(body: String): String? {
         val root = runCatching { json.parseToJsonElement(body).jsonObject }.getOrNull() ?: return null
-        val errorObj = root["error"] as? JsonObject ?: return null
-        return errorObj.textOrNull("message") ?: errorObj.textOrNull("type")
+        // No payload echo here on purpose: a body that reports an error this client
+        // cannot read is left to `parseResponse`, whose own failure the stream end
+        // carries as the document cause instead of blaming the framing.
+        return apiErrorReasonOrNull(root["error"], rawFallback = null)
     }
 
     private fun parseResponse(body: String): ModelResponse {
         val root = json.parseToJsonElement(body).jsonObject
-        // A 200 body can still be an API error object (quota exhaustion,
-        // gateway overload). Parsing it as a message would yield a blank
-        // "successful" response and mask the real failure.
-        (root["error"] as? JsonObject)?.let { errorObj ->
-            val message = errorObj.textOrNull("message")
-                ?: errorObj.textOrNull("type")
-                ?: body.take(200)
+        // A 200 body can still be an API error (quota exhaustion, gateway
+        // overload). Parsing it as a message would yield a blank "successful"
+        // response and mask the real failure, whatever shape the gateway chose -
+        // reading only the object shape left `{"error":"..."}` to be reported as
+        // a missing `choices` field, which is not what the endpoint said.
+        apiErrorReasonOrNull(root["error"], body)?.let { message ->
             throw IllegalStateException("OpenAI API error: $message")
         }
         val choices = (root["choices"] as? JsonArray)

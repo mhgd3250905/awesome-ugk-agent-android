@@ -350,8 +350,9 @@ class AnthropicMessagesProvider(
                 }
 
                 "error" -> {
-                    val errorObj = dataObj["error"] as? JsonObject
-                    val message = errorObj?.textOrNull("message") ?: dataStr
+                    // Same rule as the body paths, so a gateway that carries the
+                    // reason as a string is quoted rather than echoed as JSON.
+                    val message = apiErrorReasonOrNull(dataObj["error"], dataStr) ?: dataStr
                     throw IllegalStateException("Anthropic SSE stream error: $message")
                 }
             }
@@ -650,19 +651,19 @@ class AnthropicMessagesProvider(
 
     private fun fullBodyApiErrorMessageOrNull(body: String): String? {
         val root = runCatching { json.parseToJsonElement(body).jsonObject }.getOrNull() ?: return null
-        val errorObj = root["error"] as? JsonObject ?: return null
-        return errorObj.textOrNull("message") ?: errorObj.textOrNull("type")
+        // No payload echo here on purpose: a body that reports an error this client
+        // cannot read is left to `parseResponse`, whose own failure the stream end
+        // carries as the document cause instead of blaming the framing.
+        return apiErrorReasonOrNull(root["error"], rawFallback = null)
     }
 
     private fun parseResponse(body: String): ModelResponse {
         val root = json.parseToJsonElement(body).jsonObject
-        // A 200 body can still be an API error object (e.g. an `error` payload
-        // from an overloaded gateway). Parsing it as a message would yield a
-        // blank "successful" response and mask the real failure.
-        (root["error"] as? JsonObject)?.let { errorObj ->
-            val message = errorObj.textOrNull("message")
-                ?: errorObj.textOrNull("type")
-                ?: body.take(200)
+        // A 200 body can still be an API error (an overloaded or rate-limited
+        // gateway). Parsing it as a message would yield a blank "successful"
+        // response and mask the real failure, whatever shape the gateway chose -
+        // an object, a plain string, or anything else that says "error".
+        apiErrorReasonOrNull(root["error"], body)?.let { message ->
             throw IllegalStateException("Anthropic API error: $message")
         }
         val contentBlocks = root["content"] as? JsonArray ?: JsonArray(emptyList())

@@ -630,6 +630,259 @@ class StreamedResponseTransportContractTest {
     }
 
     /**
+     * An `error` carried as a plain string is still an error.
+     *
+     * Both providers recognized only the object shape, so a proxy or legacy
+     * gateway that answers `{"error":"Overloaded"}` was read as a document whose
+     * content happened to be missing: the Anthropic paths completed with a blank
+     * answer (which is exactly what the object-shape check exists to prevent), and
+     * the OpenAI paths failed with "missing choices[0]" - a cause that sends the
+     * reader to the response shape instead of to the endpoint's own reason.
+     * `"error":null` stays absence: a POJO-serialized gateway spells "no error"
+     * that way, and the two `...ErrorKeyIsExplicitlyNull` cases below are the
+     * controls that keep this from becoming a blanket "non-empty means failure".
+     */
+    @Test
+    fun anthropicReportsAScalarApiErrorFromTheWholeBodyDocument() {
+        val body = """
+            {
+              "error": "Overloaded, retry in 30s"
+            }
+        """.trimIndent()
+        ScriptedEndpoint(body, contentType = "application/json").use { endpoint ->
+            val failure = assertThrows(Exception::class.java) {
+                runBlocking {
+                    AnthropicMessagesProvider(
+                        apiKey = "test-key",
+                        model = "claude-3-7-sonnet",
+                        baseUrl = endpoint.baseUrl,
+                        transport = JavaNetHttpTransport(connectTimeoutMillis = 5_000, readTimeoutMillis = 5_000)
+                    ).generateStream(request()).toList()
+                }
+            }
+            assertTrue(
+                "expected the scalar's own text as the API error, got: ${failure.message}",
+                failure.message?.contains("Anthropic API error") == true &&
+                    failure.message?.contains("Overloaded, retry in 30s") == true
+            )
+        }
+    }
+
+    @Test
+    fun anthropicGenerateReportsAScalarApiErrorFromTheResponseBody() {
+        ScriptedEndpoint("""{"error":"Overloaded, retry in 30s"}""", contentType = "application/json").use { endpoint ->
+            val failure = assertThrows(Exception::class.java) {
+                runBlocking {
+                    AnthropicMessagesProvider(
+                        apiKey = "test-key",
+                        model = "claude-3-7-sonnet",
+                        baseUrl = endpoint.baseUrl,
+                        transport = JavaNetHttpTransport(connectTimeoutMillis = 5_000, readTimeoutMillis = 5_000)
+                    ).generate(request())
+                }
+            }
+            assertTrue(
+                "expected the scalar's own text as the API error, got: ${failure.message}",
+                failure.message?.contains("Anthropic API error") == true &&
+                    failure.message?.contains("Overloaded, retry in 30s") == true
+            )
+        }
+    }
+
+    @Test
+    fun openAiReportsAScalarApiErrorFromTheWholeBodyDocument() {
+        ScriptedEndpoint("""{"error":"upstream refused the connection"}""", contentType = "application/json").use { endpoint ->
+            val failure = assertThrows(Exception::class.java) {
+                runBlocking {
+                    OpenAiChatCompletionsProvider(
+                        apiKey = "test-key",
+                        model = "gpt-test",
+                        endpoint = endpoint.url,
+                        transport = JavaNetHttpTransport(connectTimeoutMillis = 5_000, readTimeoutMillis = 5_000)
+                    ).generateStream(request()).toList()
+                }
+            }
+            assertTrue(
+                "expected the endpoint's own reason, got: ${failure.message}",
+                failure.message?.contains("upstream refused the connection") == true
+            )
+            assertTrue(
+                "a missing-response-field guess must not replace the endpoint's reason: ${failure.message}",
+                failure.message?.contains("missing choices") == false
+            )
+        }
+    }
+
+    @Test
+    fun openAiGenerateReportsAScalarApiErrorFromTheResponseBody() {
+        ScriptedEndpoint("""{"error":"upstream refused the connection"}""", contentType = "application/json").use { endpoint ->
+            val failure = assertThrows(Exception::class.java) {
+                runBlocking {
+                    OpenAiChatCompletionsProvider(
+                        apiKey = "test-key",
+                        model = "gpt-test",
+                        endpoint = endpoint.url,
+                        transport = JavaNetHttpTransport(connectTimeoutMillis = 5_000, readTimeoutMillis = 5_000)
+                    ).generate(request())
+                }
+            }
+            assertTrue(
+                "expected the endpoint's own reason, got: ${failure.message}",
+                failure.message?.contains("upstream refused the connection") == true &&
+                    failure.message?.contains("missing choices") == false
+            )
+        }
+    }
+
+    /**
+     * An error shape this client cannot describe is still reported as an error.
+     *
+     * Reading only the object shape made an array-valued `error` a blank success,
+     * and the point of this landing point is that an endpoint saying "error" must
+     * never become an empty answer whatever the payload looks like: the raw
+     * payload is echoed (bounded) rather than guessed at.
+     */
+    @Test
+    fun anthropicReportsAnApiErrorCarriedAsAnArray() {
+        ScriptedEndpoint("""{"error":["rate_limit","retry_later"]}""", contentType = "application/json").use { endpoint ->
+            val failure = assertThrows(Exception::class.java) {
+                runBlocking {
+                    AnthropicMessagesProvider(
+                        apiKey = "test-key",
+                        model = "claude-3-7-sonnet",
+                        baseUrl = endpoint.baseUrl,
+                        transport = JavaNetHttpTransport(connectTimeoutMillis = 5_000, readTimeoutMillis = 5_000)
+                    ).generateStream(request()).toList()
+                }
+            }
+            assertTrue(
+                "expected the API error to be named, got: ${failure.message}",
+                failure.message?.contains("Anthropic API error") == true
+            )
+        }
+    }
+
+    /**
+     * Folding pin: the mid-stream error *event* reads the same rule as the body.
+     *
+     * It used to keep its own copy, which fell back to echoing the whole event
+     * payload. A scalar reason is short and specific, so the endpoint's text must
+     * appear on its own and the JSON envelope must not be echoed.
+     */
+    @Test
+    fun anthropicSseErrorEventReadsAScalarReasonInsteadOfEchoingThePayload() {
+        val body = """
+            event: error
+            data: {"type":"error","error":"Overloaded, retry in 30s"}
+
+        """.trimIndent()
+        ScriptedEndpoint(body, contentType = "text/event-stream").use { endpoint ->
+            val failure = assertThrows(Exception::class.java) {
+                runBlocking {
+                    AnthropicMessagesProvider(
+                        apiKey = "test-key",
+                        model = "claude-3-7-sonnet",
+                        baseUrl = endpoint.baseUrl,
+                        transport = JavaNetHttpTransport(connectTimeoutMillis = 5_000, readTimeoutMillis = 5_000)
+                    ).generateStream(request()).toList()
+                }
+            }
+            assertTrue(
+                "expected the scalar's own text, got: ${failure.message}",
+                failure.message?.contains("Anthropic SSE stream error: Overloaded, retry in 30s") == true
+            )
+            assertTrue(
+                "the JSON envelope must not stand in for the reason: ${failure.message}",
+                failure.message?.contains("""{"type":"error"""") == false
+            )
+        }
+    }
+
+    @Test
+    fun openAiSseErrorEventReadsAScalarReasonInsteadOfEchoingThePayload() {
+        val body = """
+            data: {"error":"upstream refused the connection"}
+
+        """.trimIndent()
+        ScriptedEndpoint(body, contentType = "text/event-stream").use { endpoint ->
+            val failure = assertThrows(Exception::class.java) {
+                runBlocking {
+                    OpenAiChatCompletionsProvider(
+                        apiKey = "test-key",
+                        model = "gpt-test",
+                        endpoint = endpoint.url,
+                        transport = JavaNetHttpTransport(connectTimeoutMillis = 5_000, readTimeoutMillis = 5_000)
+                    ).generateStream(request()).toList()
+                }
+            }
+            assertTrue(
+                "expected the scalar's own text, got: ${failure.message}",
+                failure.message?.contains("OpenAI stream error: upstream refused the connection") == true
+            )
+            assertTrue(
+                "the JSON envelope must not stand in for the reason: ${failure.message}",
+                failure.message?.contains("""{"error":""") == false
+            )
+        }
+    }
+
+    /** Control: `"error":null` is a POJO gateway's "no error", not a failure. */
+    @Test
+    fun anthropicAnswersTheDocumentWhenTheErrorKeyIsExplicitlyNull() {
+        val body = """
+            {
+              "id": "msg_1",
+              "type": "message",
+              "role": "assistant",
+              "error": null,
+              "content": [{"type": "text", "text": "第一段内容"}],
+              "stop_reason": "end_turn"
+            }
+        """.trimIndent()
+        ScriptedEndpoint(body, contentType = "application/json").use { endpoint ->
+            val chunks = runBlocking {
+                AnthropicMessagesProvider(
+                    apiKey = "test-key",
+                    model = "claude-3-7-sonnet",
+                    baseUrl = endpoint.baseUrl,
+                    transport = JavaNetHttpTransport(connectTimeoutMillis = 5_000, readTimeoutMillis = 5_000)
+                ).generateStream(request()).toList()
+            }
+            assertEquals("第一段内容", chunks.completedOrNull()?.content)
+        }
+    }
+
+    /** Control: the same for the OpenAI document shape. */
+    @Test
+    fun openAiAnswersTheDocumentWhenTheErrorKeyIsExplicitlyNull() {
+        val body = """
+            {
+              "id": "chatcmpl-1",
+              "object": "chat.completion",
+              "error": null,
+              "choices": [
+                {
+                  "index": 0,
+                  "message": {"role": "assistant", "content": "第一段内容"},
+                  "finish_reason": "stop"
+                }
+              ]
+            }
+        """.trimIndent()
+        ScriptedEndpoint(body, contentType = "application/json").use { endpoint ->
+            val chunks = runBlocking {
+                OpenAiChatCompletionsProvider(
+                    apiKey = "test-key",
+                    model = "gpt-test",
+                    endpoint = endpoint.url,
+                    transport = JavaNetHttpTransport(connectTimeoutMillis = 5_000, readTimeoutMillis = 5_000)
+                ).generateStream(request()).toList()
+            }
+            assertEquals("第一段内容", chunks.completedOrNull()?.content)
+        }
+    }
+
+    /**
      * A stream whose only event is `[DONE]` carried nothing this reader could
      * understand. It used to fall through to the end-of-stream completion with an
      * empty body, which is the same silent blank answer this fix exists to stop -
