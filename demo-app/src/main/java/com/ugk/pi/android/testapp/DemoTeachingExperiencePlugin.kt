@@ -48,7 +48,7 @@ internal class DemoTeachingExperiencePlugin(
             // toInt() on "abc" throws NumberFormatException, whose text names
             // neither the tool nor the argument the caller has to fix.
             val revision = revisionText.toIntOrNull()
-                ?: error("revision 必须是整数，收到：$revisionText")
+                ?: error("revision 必须是整数，收到：${revisionText.take(MAX_REJECTED_ARGUMENT_ECHO_CHARS)}")
             val record = withContext(Dispatchers.IO) { store.read(id) } ?: error("经验不存在")
             requireUsable(record, revision)
             val guide = record.guide!!
@@ -84,7 +84,8 @@ internal class DemoTeachingExperiencePlugin(
             require(use.session == context.sessionId && use.turn == turn(context)) { "使用结果不属于当前任务" }
             val outcome = call.text("outcome")
             require(outcome in OUTCOME_VALUES) {
-                "outcome 只能是 ${OUTCOME_VALUES.joinToString("、")}，收到：$outcome"
+                "outcome 只能是 ${OUTCOME_VALUES.joinToString("、")}，" +
+                    "收到：${outcome.take(MAX_REJECTED_ARGUMENT_ECHO_CHARS)}"
             }
             val summary = call.text("summary").trim(); require(summary.length in 1..2000)
             val record = withContext(Dispatchers.IO) { store.read(use.recordId) } ?: error("经验不存在")
@@ -170,7 +171,6 @@ internal class DemoTeachingExperiencePlugin(
      */
     private fun ToolCall.text(key: String): String =
         (input[key] as? JsonPrimitive)
-            ?.takeUnless { it is JsonNull }
             ?.contentOrNull
             ?.takeIf { it.isNotBlank() }
             ?: error("缺少或不可用的参数：$key")
@@ -190,6 +190,7 @@ internal class DemoTeachingExperiencePlugin(
 
     private companion object {
         val OUTCOME_VALUES = listOf("success", "failure", "network_error", "cancelled", "needs_revision")
+        const val MAX_REJECTED_ARGUMENT_ECHO_CHARS = 40
         const val MAX_PENDING_USES = 32
         const val USE_TTL_MILLIS = 24 * 60 * 60 * 1000L
     }

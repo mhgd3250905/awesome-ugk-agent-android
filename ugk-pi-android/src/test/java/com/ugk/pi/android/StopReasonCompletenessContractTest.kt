@@ -12,15 +12,16 @@ import org.junit.Test
  * The runtime's incomplete-response check is the only thing standing between a
  * truncated model answer and the transcript: a response with no tool calls and
  * non-blank content is otherwise stored and shown as the model's final answer.
- * It recognized two reasons and compared them without normalizing, while this
- * repo's own demo layer treats three reasons as truncation and reads them
- * case-insensitively (`DemoTeachingResponseParser.TRUNCATED_STOP_REASONS`,
- * `DemoTeachingSopAgent.TRUNCATED_STOP_REASONS`, and the three inline
- * `require(...)` literals in `DemoOperationStepReviewer`,
- * `DemoWorkflowCompiler` and `DemoWorkflowRunner`). A gateway that answers
- * `max_output_tokens` - the spelling Gemini-compatible endpoints use, and one
- * of the three this repo already rejects on the demo side - therefore finished
- * an agent run with half a sentence as the "complete" answer.
+ * It recognized two reasons and compared them without normalizing, while the demo
+ * layer refused three - and of its six guards only the two teaching readers
+ * (`DemoTeachingResponseParser`, `DemoTeachingSopAgent`) normalized what they
+ * compared; the step reviewer, workflow compiler, workflow runner and
+ * `DemoModelIntentRouter` matched the raw string, and the router knew only two
+ * reasons. A gateway that answers `max_output_tokens` - the spelling
+ * Gemini-compatible endpoints use - therefore finished an agent run with half a
+ * sentence as the "complete" answer, and the same response was "truncated" to one
+ * guard and "finished" to another. `demo-app` now reads all six through
+ * `DemoModelStopReasons`, pinned member by member in `DemoModelStopReasonsTest`.
  *
  * Safety-driven stops (`content_filter`, `sensitive`, `refusal`) are deliberately
  * NOT retried here: the demo side refuses to *save* such an answer as a teaching

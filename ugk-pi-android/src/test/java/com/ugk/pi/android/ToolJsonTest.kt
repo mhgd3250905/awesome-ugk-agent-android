@@ -2,6 +2,8 @@ package com.ugk.pi.android
 
 import kotlinx.serialization.json.JsonNull
 import kotlinx.serialization.json.JsonObject
+import kotlinx.serialization.json.JsonPrimitive
+import kotlinx.serialization.json.booleanOrNull
 import kotlinx.serialization.json.buildJsonObject
 import kotlinx.serialization.json.put
 import org.junit.Assert.assertEquals
@@ -68,5 +70,27 @@ class ToolJsonTest {
         assertEquals(86_400L, input.long("textual"))
         assertNull(input.long("fraction"))
         assertNull(input.long("absent"))
+    }
+
+    /**
+     * The library fact that two KDocs depend on.
+     *
+     * `ToolJson`'s own comment, and the history recorded in
+     * `AgentTaskListActiveOnlyArgumentTest`, both say the deleted
+     * `pi-schedule-skill` copy widened listings because kotlinx `booleanOrNull`
+     * accepted "True"/"FALSE" where the strict parse does not. That has never been
+     * checked here - the claim was inherited from prose. This case is the check: it
+     * asserts the library's behavior directly, so if the sentence is wrong the run
+     * says so instead of the next reader finding out at review time.
+     */
+    @Test
+    fun kotlinxBooleanOrNullIsWhatTheConsolidationStoryClaimsItIs() {
+        assertEquals(true, JsonPrimitive(true).booleanOrNull)
+        assertEquals(true, JsonPrimitive("True").booleanOrNull)
+        assertEquals(false, JsonPrimitive("FALSE").booleanOrNull)
+        // and the accessor that replaced it reads none of those, which is the
+        // behavior change the story is about
+        assertNull(buildJsonObject { put("flag", JsonPrimitive("True")) }.boolean("flag"))
+        assertEquals(true, buildJsonObject { put("flag", JsonPrimitive(true)) }.boolean("flag"))
     }
 }

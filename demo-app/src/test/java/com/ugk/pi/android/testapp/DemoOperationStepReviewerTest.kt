@@ -30,7 +30,9 @@ class DemoOperationStepReviewerTest {
 
     @Test fun rejectsMalformedTruncatedAndOversizedResponsesWithoutRetry() = runBlocking {
         listOf(ModelResponse("SECRET"), ModelResponse("{}", stopReason = "length"), ModelResponse("x".repeat(12_001)),
-            ModelResponse("{}", toolCalls = listOf(ToolCall("1", "click", JsonObject(emptyMap()))))).forEach { response ->
+            ModelResponse("{}", toolCalls = listOf(ToolCall("1", "click", JsonObject(emptyMap())))),
+            ModelResponse("{}", stopReason = "max_output_tokens"),
+            ModelResponse("{}", stopReason = "MAX_OUTPUT_TOKENS")).forEach { response ->
             var calls = 0
             val error = runCatching { reviewer(response) { calls++ }.review(draft, step, "") { byteArrayOf(1) } }.exceptionOrNull()
             assertTrue(error is DemoOperationStepReviewException)

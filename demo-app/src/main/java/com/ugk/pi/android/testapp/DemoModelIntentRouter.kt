@@ -93,9 +93,10 @@ internal class DemoModelIntentRouter(
     }
 
     private fun parseRoute(response: ModelResponse): Route? {
-        if (response.toolCalls.isNotEmpty() || response.stopReason == "length" ||
-            response.stopReason == "max_tokens"
-        ) return null
+        // Routed through the module's one truncation reading: this guard used to
+        // know only two reasons and compare them case-sensitively, so a response
+        // cut off by a gateway that spells the reason differently was still routed.
+        if (response.toolCalls.isNotEmpty() || DemoModelStopReasons.isTruncated(response.stopReason)) return null
         val value = runCatching { Json.parseToJsonElement(response.content.trim()) }.getOrNull()
             as? JsonObject ?: return null
         val kind = (value["route"] as? JsonPrimitive)?.takeIf { it.isString }?.contentOrNull

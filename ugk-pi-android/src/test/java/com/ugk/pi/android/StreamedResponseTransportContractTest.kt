@@ -883,6 +883,217 @@ class StreamedResponseTransportContractTest {
     }
 
     /**
+     * An `error` field that reports nothing is not a failure.
+     *
+     * A gateway that marshals a whole struct leaves `""`, `false`, `0`, `[]` and
+     * `{}` in every field it did not set, alongside a complete answer. Refusing
+     * those would break an integration that works today - strictly worse than the
+     * silence this file's error rule exists to end. The `{}` row is a regression
+     * against the previous code as well: an object with no readable reason used to
+     * fail the whole response even when the same body carried the answer.
+     */
+    @Test
+    fun anthropicAnswersTheDocumentWhenAnUnsetErrorFieldRidesAlongACompleteAnswer() {
+        val sentinels = listOf(
+            "blank string" to "\"\"",
+            "false flag" to "false",
+            "zero" to "0",
+            "empty array" to "[]",
+            "empty object" to "{}"
+        )
+        val failures = sentinels.mapNotNull { (name, json) ->
+            val body = """
+                {
+                  "id": "msg_1",
+                  "type": "message",
+                  "error": $json,
+                  "content": [{"type": "text", "text": "第一段内容"}],
+                  "stop_reason": "end_turn"
+                }
+            """.trimIndent()
+            ScriptedEndpoint(body, contentType = "application/json").use { endpoint ->
+                val outcome = runCatching {
+                    runBlocking {
+                        AnthropicMessagesProvider(
+                            apiKey = "test-key",
+                            model = "claude-3-7-sonnet",
+                            baseUrl = endpoint.baseUrl,
+                            transport = JavaNetHttpTransport(connectTimeoutMillis = 5_000, readTimeoutMillis = 5_000)
+                        ).generateStream(request()).toList()
+                    }
+                }
+                val content = outcome.getOrNull()?.completedOrNull()?.content
+                if (content == "第一段内容") {
+                    null
+                } else {
+                    "$name: expected the answer, got ${outcome.exceptionOrNull()?.message ?: "content=" + content}"
+                }
+            }
+        }
+        assertEquals(emptyList<String>(), failures)
+    }
+
+    @Test
+    fun openAiAnswersTheDocumentWhenAnUnsetErrorFieldRidesAlongACompleteAnswer() {
+        val sentinels = listOf(
+            "blank string" to "\"\"",
+            "false flag" to "false",
+            "zero" to "0",
+            "empty array" to "[]",
+            "empty object" to "{}"
+        )
+        val failures = sentinels.mapNotNull { (name, json) ->
+            val body = """
+                {
+                  "id": "chatcmpl-1",
+                  "object": "chat.completion",
+                  "error": $json,
+                  "choices": [
+                    {"index": 0, "message": {"role": "assistant", "content": "第一段内容"}, "finish_reason": "stop"}
+                  ]
+                }
+            """.trimIndent()
+            ScriptedEndpoint(body, contentType = "application/json").use { endpoint ->
+                val outcome = runCatching {
+                    runBlocking {
+                        OpenAiChatCompletionsProvider(
+                            apiKey = "test-key",
+                            model = "gpt-test",
+                            endpoint = endpoint.url,
+                            transport = JavaNetHttpTransport(connectTimeoutMillis = 5_000, readTimeoutMillis = 5_000)
+                        ).generateStream(request()).toList()
+                    }
+                }
+                val content = outcome.getOrNull()?.completedOrNull()?.content
+                if (content == "第一段内容") {
+                    null
+                } else {
+                    "$name: expected the answer, got ${outcome.exceptionOrNull()?.message ?: "content=" + content}"
+                }
+            }
+        }
+        assertEquals(emptyList<String>(), failures)
+    }
+
+    /**
+     * The protocol's own marker is enough to refuse a document.
+     *
+     * `{"type":"error"}` carries no `error` field at all, so a rule keyed on that
+     * field alone completed the response as an empty answer.
+     */
+    @Test
+    fun anthropicReportsADocumentMarkedAsAnErrorWithoutAnErrorField() {
+        val body = """
+            {
+              "type": "error"
+            }
+        """.trimIndent()
+        ScriptedEndpoint(body, contentType = "application/json").use { endpoint ->
+            val failure = assertThrows(Exception::class.java) {
+                runBlocking {
+                    AnthropicMessagesProvider(
+                        apiKey = "test-key",
+                        model = "claude-3-7-sonnet",
+                        baseUrl = endpoint.baseUrl,
+                        transport = JavaNetHttpTransport(connectTimeoutMillis = 5_000, readTimeoutMillis = 5_000)
+                    ).generateStream(request()).toList()
+                }
+            }
+            assertTrue(
+                "expected the marker to be refused as an API error, got: ${failure.message}",
+                failure.message?.contains("Anthropic API error") == true
+            )
+        }
+    }
+
+    /**
+     * Both bounds hold, because the text is endpoint-supplied.
+     *
+     * The reason becomes part of an exception message the host logs and the
+     * transcript stores; the response body is capped at megabytes, so neither arm
+     * may pass it through whole. The endpoint's own message gets the larger bound,
+     * an unreadable payload the smaller one.
+     */
+    @Test
+    fun anthropicBoundsTheEndpointErrorReasonItQuotes() {
+        val long = "开" + "x".repeat(MAX_API_ERROR_REASON_CHARS) + "ENDMARKER"
+        val body = """{"error":"$long"}"""
+        ScriptedEndpoint(body, contentType = "application/json").use { endpoint ->
+            val failure = assertThrows(Exception::class.java) {
+                runBlocking {
+                    AnthropicMessagesProvider(
+                        apiKey = "test-key",
+                        model = "claude-3-7-sonnet",
+                        baseUrl = endpoint.baseUrl,
+                        transport = JavaNetHttpTransport(connectTimeoutMillis = 5_000, readTimeoutMillis = 5_000)
+                    ).generateStream(request()).toList()
+                }
+            }
+            assertTrue(
+                "the reason's own text must be quoted: ${failure.message?.length}",
+                failure.message?.contains("Anthropic API error: 开") == true
+            )
+            assertTrue(
+                "an endpoint must not push an arbitrary amount of text into the transcript",
+                failure.message?.contains("ENDMARKER") == false &&
+                    (failure.message?.length ?: 0) < MAX_API_ERROR_REASON_CHARS + 200
+            )
+        }
+    }
+
+    @Test
+    fun anthropicBoundsTheUnreadableErrorPayloadItEchoes() {
+        val body = """{"error":["a","b","c${"y".repeat(MAX_API_ERROR_ECHO_CHARS)}TAILMARKER"]}"""
+        ScriptedEndpoint(body, contentType = "application/json").use { endpoint ->
+            val failure = assertThrows(Exception::class.java) {
+                runBlocking {
+                    AnthropicMessagesProvider(
+                        apiKey = "test-key",
+                        model = "claude-3-7-sonnet",
+                        baseUrl = endpoint.baseUrl,
+                        transport = JavaNetHttpTransport(connectTimeoutMillis = 5_000, readTimeoutMillis = 5_000)
+                    ).generateStream(request()).toList()
+                }
+            }
+            assertTrue(
+                "the unreadable payload must be echoed only up to the bound",
+                failure.message?.contains("Anthropic API error") == true &&
+                    failure.message?.contains("TAILMARKER") == false
+            )
+        }
+    }
+
+    /**
+     * Control: a streamed chunk whose `error` is present but empty still fails.
+     *
+     * The event envelope carries no answer to preserve, so "empty" cannot mean
+     * "fine" here - which is why the document rule and the event rule are
+     * deliberately different.
+     */
+    @Test
+    fun openAiStreamEventWithAnEmptyErrorObjectStillFailsTheStream() {
+        val body = """data: {"error":{}}
+
+"""
+        ScriptedEndpoint(body, contentType = "text/event-stream").use { endpoint ->
+            val failure = assertThrows(Exception::class.java) {
+                runBlocking {
+                    OpenAiChatCompletionsProvider(
+                        apiKey = "test-key",
+                        model = "gpt-test",
+                        endpoint = endpoint.url,
+                        transport = JavaNetHttpTransport(connectTimeoutMillis = 5_000, readTimeoutMillis = 5_000)
+                    ).generateStream(request()).toList()
+                }
+            }
+            assertTrue(
+                "expected the empty error event to be refused, got: ${failure.message}",
+                failure.message?.contains("OpenAI stream error") == true
+            )
+        }
+    }
+
+    /**
      * A stream whose only event is `[DONE]` carried nothing this reader could
      * understand. It used to fall through to the end-of-stream completion with an
      * empty body, which is the same silent blank answer this fix exists to stop -

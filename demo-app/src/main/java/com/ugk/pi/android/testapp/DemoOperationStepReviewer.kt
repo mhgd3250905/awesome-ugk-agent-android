@@ -52,7 +52,7 @@ internal class DemoOperationStepReviewer(private val provider: LLMProvider) {
             sessionId = "operation-review-${draft.id}-${step.id}", tools = emptyList(), responseFormat = ModelResponseFormat.JSON_OBJECT,
             messages = listOf(AgentMessage.System(INSTRUCTIONS), AgentMessage.User(evidence.toString())) + images
         )) }
-        require(response.toolCalls.isEmpty() && response.stopReason !in setOf("length", "max_tokens", "max_output_tokens"))
+        require(response.toolCalls.isEmpty() && !DemoModelStopReasons.isTruncated(response.stopReason))
         require(response.content.toByteArray().size <= 12_000)
         val result = Json.parseToJsonElement(response.content.trim()).jsonObject
         require(result.keys == setOf("action", "result", "gaps"))

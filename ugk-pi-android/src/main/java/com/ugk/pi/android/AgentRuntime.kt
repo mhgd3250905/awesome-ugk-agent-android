@@ -826,15 +826,18 @@ private const val MAX_INCOMPLETE_RESPONSE_RETRIES = 2
 /**
  * Stop reasons that mean the model ran out of room before finishing.
  *
- * These are the reasons this repo already treats as truncation everywhere else:
- * `DemoTeachingResponseParser.TRUNCATED_STOP_REASONS`,
- * `DemoTeachingSopAgent.TRUNCATED_STOP_REASONS`, and the inline literals in
- * `DemoOperationStepReviewer`, `DemoWorkflowCompiler` and `DemoWorkflowRunner`.
- * The copies cannot be merged because the demo module cannot see an `internal`
- * member of the published AAR, so they are pinned by behavior instead -
- * `StopReasonCompletenessContractTest` in this module and
- * `DemoTeachingTruncationReasonTest` in `demo-app` each refuse a different half
- * of the same set, and removing a member from either side turns that side red.
+ * Same three reasons the demo layer refuses, spelled the same way: `demo-app`
+ * now reads every one of its guards through `DemoModelStopReasons.truncated`.
+ * The two sets cannot be merged, because `internal` members of the published AAR
+ * are not visible from `demo-app` and promoting two constants would widen the
+ * released API surface - so each side is pinned by behavior instead.
+ * `StopReasonCompletenessContractTest` refuses each reason on this side,
+ * `DemoModelStopReasonsTest` folds over every member of the demo set and its
+ * normalization, and `DemoTeachingTruncationReasonTest` plus
+ * `DemoOperationStepReviewerTest` refuse a representative guard each at the
+ * landing point. Dropping a member from either set turns the side that owns it
+ * red. Before this round four demo guards compared the raw value and one
+ * (`DemoModelIntentRouter`) did not know the third reason at all.
  *
  * Safety-driven stops (`content_filter`, `sensitive`, `refusal`) are deliberately
  * absent: a refusal is what the model chose to say, and retrying it three times

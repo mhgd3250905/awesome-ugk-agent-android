@@ -23,9 +23,10 @@ import kotlinx.serialization.json.longOrNull
  * `agent_task_list.activeOnly` used to be the third consumer and mapped null to
  * `false` too, but there the direction is the opposite: `false` means "no
  * filter", so a declared-but-unusable value silently widened the listing to
- * every row. Round 11 merged the three-state rule into this module's own
- * `optionalElement` reader for `agent_task_update`, and round 12 recorded the
- * widening on the reasoning that no such reader existed here yet. Both filter
+ * every row. Round 11 merged the three-state rule into the schedule module's
+ * own `optionalElement` reader (`pi-schedule-skill-android`, used by
+ * `agent_task_update`), and round 12 recorded the widening on the reasoning that
+ * no such reader existed there yet. Both filter
  * arguments of `agent_task_list` now go through that reader and refuse an
  * unusable declaration by name, pinned by `AgentTaskListActiveOnlyArgumentTest`,
  * `AgentTaskListStatusArgumentTest` and `AgentTaskListFilterSchemaTest`. There is

@@ -3,6 +3,7 @@ package com.ugk.pi.android
 import kotlinx.coroutines.flow.Flow
 import kotlinx.coroutines.flow.flow
 import kotlinx.serialization.json.Json
+import kotlinx.serialization.json.JsonArray
 import kotlinx.serialization.json.JsonElement
 import kotlinx.serialization.json.JsonNull
 import kotlinx.serialization.json.JsonObject
@@ -26,39 +27,90 @@ internal fun JsonObject.textOrNull(key: String): String? =
         ?.takeIf { it.isString }?.content?.takeIf { it.isNotBlank() }
 
 /**
- * The reason an endpoint gave for an `error`, or null when it gave none.
+ * The reason a response document reports for its `error`, or null when it reports none.
  *
- * One rule for every place a response says "error", because the shapes differ by
- * gateway and a per-copy check drifts: an object (`Anthropic`/`OpenAI` native), a
- * plain string (proxies and legacy gateways answer `{"error":"Overloaded"}`), a
- * number, an array, or `null` meaning "no error" (how a POJO-serialized gateway
- * fills the field). Recognizing only the object shape made every other shape a
+ * Reading only the object shape (`{"error":{...}}`) made every other spelling a
  * successful blank answer, and for the OpenAI document path it replaced the
- * endpoint's reason with a guess about a missing response field.
+ * endpoint's reason with a guess about a missing response field: proxies and
+ * legacy gateways answer `{"error":"Overloaded"}`, and an endpoint may carry the
+ * protocol's own `{"type":"error"}` marker with nothing readable inside it.
  *
- * [error] is read as the raw `error` element so `JsonNull` can be told apart from
- * an absent key: both mean "nothing was reported" here, which is the same
- * three-state rule the SDK applies to model-controlled optional arguments.
+ * Two different presence rules are on purpose, and they are the whole design:
  *
- * [rawFallback] is what to report when the value is present but says nothing
- * readable (an object without a string `message`/`type`, an array, a blank
- * scalar). It is bounded: an endpoint must not push an arbitrarily long string
- * into an exception message that the host logs and the transcript stores. Passing
- * null leaves the caller's own reading of the body in charge - the whole-body
- * document path uses that to keep naming the parse refusal instead of the framing.
+ * - a standalone document is read here, where an `error` field that reports
+ *   nothing (`""`, `false`, `0`, `[]`, `{}`, `null`) means "no error", because a
+ *   gateway that serializes a whole struct fills every field - failing a body that
+ *   also contains a complete answer is worse than the silence this rule exists to
+ *   end.
+ * - a mid-stream event is read by [streamErrorReasonOrNull], where any present
+ *   non-`null` `error` fails the stream: there is no answer in that envelope to
+ *   preserve, so "empty" cannot mean "fine".
+ *
+ * Both caps exist because the text comes from the endpoint and lands in an
+ * exception message the host logs and the transcript stores. The reason the
+ * endpoint chose to tell us gets the larger bound; a payload we could not read
+ * gets the smaller one.
  */
-internal fun apiErrorReasonOrNull(error: JsonElement?, rawFallback: String?): String? {
-    if (error == null || error is JsonNull) return null
-    val readable = when (error) {
-        // Folded over the candidate list rather than chained: the first field that
-        // carries text wins, and adding a candidate cannot silently reorder them.
-        is JsonObject -> listOf("message", "type")
-            .firstNotNullOfOrNull { key -> error.textOrNull(key) }
-        is JsonPrimitive -> error.contentOrNull?.takeIf { it.isNotBlank() }
-        else -> null
-    }
-    return readable ?: rawFallback?.trim()?.take(MAX_API_ERROR_ECHO_CHARS)?.takeIf { it.isNotEmpty() }
+internal fun apiErrorReasonOrNull(root: JsonObject, rawFallback: String?): String? {
+    val declared = root["error"]
+    val markerReportsError = (root["type"] as? JsonPrimitive)?.contentOrNull == "error"
+    if (!markerReportsError && (declared == null || !declared.reportsAnything())) return null
+    return boundedApiErrorText(apiErrorReasonText(declared), rawFallback)
 }
+
+/**
+ * The reason a streamed error event reports, or null when it carries no `error`.
+ *
+ * Presence is the test here: a chunk that arrives with an `error` key is a failure
+ * even when the field is empty, because the alternative is to keep streaming and
+ * finish a truncated answer as a normal completion. `"error":null` stays absence -
+ * that is how a POJO-serialized gateway spells "no error" inside every chunk.
+ */
+internal fun streamErrorReasonOrNull(error: JsonElement?, rawPayload: String): String? {
+    if (error == null || error is JsonNull) return null
+    return boundedApiErrorText(apiErrorReasonText(error), rawPayload)
+}
+
+private fun apiErrorReasonText(error: JsonElement?): String? = when (error) {
+    // Folded over the candidate list rather than chained: the first field that
+    // carries text wins, and adding a candidate cannot silently reorder them.
+    is JsonObject -> listOf("message", "type").firstNotNullOfOrNull { key -> error.textOrNull(key) }
+    is JsonPrimitive -> error.contentOrNull?.takeIf { it.isNotBlank() }
+    else -> null
+}
+
+/**
+ * The endpoint's own reason keeps the larger bound; a payload we could not read
+ * keeps the smaller one. The distinction matters because the first is what the
+ * caller needs to see and the second is only evidence of the shape.
+ */
+private fun boundedApiErrorText(reason: String?, rawFallback: String?): String? {
+    val text = reason?.take(MAX_API_ERROR_REASON_CHARS)
+        ?: rawFallback?.trim()?.take(MAX_API_ERROR_ECHO_CHARS)
+    return text?.takeIf { it.isNotEmpty() }
+}
+
+/**
+ * Whether a serialized value says anything at all.
+ *
+ * `JsonNull` is a value rather than an absent key, and a gateway that marshals a
+ * whole struct leaves `""`, `false`, `0`, `[]` and `{}` behind for every field it
+ * did not set. None of those report a problem; a non-zero number, a `true` flag,
+ * a non-blank string or a collection with something in it does.
+ */
+private fun JsonElement.reportsAnything(): Boolean = when (this) {
+    JsonNull -> false
+    is JsonObject -> size > 0
+    is JsonArray -> isNotEmpty()
+    is JsonPrimitive -> when {
+        isString -> content.isNotBlank()
+        else -> content.toBooleanStrictOrNull()?.let { it }
+            ?: content.toDoubleOrNull()?.let { it != 0.0 }
+            ?: content.isNotBlank()
+    }
+}
+
+internal const val MAX_API_ERROR_REASON_CHARS = 1_000
 
 internal const val MAX_API_ERROR_ECHO_CHARS = 200
 

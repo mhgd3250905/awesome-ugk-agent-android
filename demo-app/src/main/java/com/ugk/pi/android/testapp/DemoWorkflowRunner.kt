@@ -126,7 +126,7 @@ internal class DemoWorkflowRunner(
                 // Slow model responses may exceed the SDK's gesture TTL. We accept only
                 // pure verification of an unchanged full tree, never image coordinates.
                 if (fingerprint(capturedTree) != fingerprint(after)) return@repeat
-                verifyRun(response.stopReason !in setOf("length", "max_tokens", "max_output_tokens")) { "视觉判断输出被截断，请接手" }
+                verifyRun(!DemoModelStopReasons.isTruncated(response.stopReason)) { "视觉判断输出被截断，请接手" }
                 verifyRun(response.toolCalls.isEmpty() && response.content.length <= 2048) { "视觉判断返回不合法，请接手" }
                 val raw = response.content.trim().let { text ->
                     if (text.startsWith("```json\n") && text.endsWith("\n```")) text.removePrefix("```json\n").removeSuffix("\n```") else text

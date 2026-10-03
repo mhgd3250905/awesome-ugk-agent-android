@@ -64,7 +64,7 @@ internal class DemoWorkflowCompiler(private val provider: LLMProvider) {
         )) } } catch (cancelled: CancellationException) { throw cancelled }
         catch (_: Exception) { throw DemoWorkflowCompileException("模型请求未完成，请检查网络及支持图片的模型配置；原草稿已保留") }
         require(response.toolCalls.isEmpty()) { "整理结果包含工具调用，已拒绝；请重新整理" }
-        require(response.stopReason !in setOf("length", "max_tokens", "max_output_tokens")) { "模型输出被截断；草稿已保留" }
+        require(!DemoModelStopReasons.isTruncated(response.stopReason)) { "模型输出被截断；草稿已保留" }
         val content = response.content.trim().let { raw ->
             if (raw.startsWith("```")) Regex("\\A```(?:json)?\\s*\\n([\\s\\S]*)\\n```\\z").matchEntire(raw)?.groupValues?.get(1)
                 ?: error("模型JSON围栏不完整") else raw
@@ -72,7 +72,13 @@ internal class DemoWorkflowCompiler(private val provider: LLMProvider) {
         require(content.toByteArray().size <= DemoWorkflowRepository.MAX_BYTES) { "模型输出超过限制" }
         val output = try { Json.parseToJsonElement(content).jsonObject }
         catch (_: Exception) { throw DemoWorkflowCompileException("模型未返回完整有效的步骤格式；原草稿已保留") }
-        output["error"]?.let { throw DemoWorkflowCompileException("演示缺少完成目标所需的证据，请补录缺失步骤或完成画面；原草稿已保留") }
+        // Presence alone is not a report: a plan returned with `"error": null` by a
+        // gateway that serializes every field used to be refused here with a message
+        // about missing evidence, which sent the reader back to the recording instead
+        // of at the model's own answer.
+        if (DemoApiErrorSignal.reportsAnything(output["error"])) {
+            throw DemoWorkflowCompileException("演示缺少完成目标所需的证据，请补录缺失步骤或完成画面；原草稿已保留")
+        }
         val plan = try { DemoWorkflowJson.decodePlan(output) }
         catch (_: Exception) { throw DemoWorkflowCompileException("模型步骤包含不支持的动作、目标或完成条件，请审阅素材后重新整理；原草稿已保留") }
         require(plan.draftId == draft.id) { "整理结果引用了其他草稿" }

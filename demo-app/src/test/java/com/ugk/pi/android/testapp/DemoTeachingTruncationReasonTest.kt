@@ -6,18 +6,17 @@ import org.junit.Assert.assertThrows
 import org.junit.Test
 
 /**
- * The demo half of the truncation-reason set, pinned where it is enforced.
+ * One guard's behavior, at the landing point where it decides.
  *
- * `AgentRuntime.TRUNCATED_STOP_REASONS` in the core module and the copies in
- * `DemoTeachingResponseParser` / `DemoTeachingSopAgent` cannot share one list:
- * the demo module cannot reach an `internal` member of the published AAR, and
- * promoting it would widen the released API for a three-item set. The agreement
- * is therefore pinned by behavior on each side. The existing
+ * The set itself is pinned member by member in `DemoModelStopReasonsTest`; this
+ * class is the evidence that `DemoTeachingResponseParser.requireComplete` actually
+ * consults it, in a code path the table cannot see. The existing
  * `DemoTeachingCompilerTest.truncatedIntermediateNotesStopBeforeFinalGuideAndPreserveRecord`
- * covers `length` through the compiler; these cases cover `max_output_tokens`
- * and its all-caps spelling directly at this landing point, so deleting either
- * member from this module's set turns this red - which is what keeps the two
- * sides from drifting apart silently again.
+ * covers `length` through the compiler, so these two cases cover
+ * `max_output_tokens` and its all-caps spelling here. The core module keeps its
+ * own private copy of the set because `internal` members of the published AAR are
+ * not visible from `demo-app`; the cross-side agreement is carried by
+ * `StopReasonCompletenessContractTest` refusing the same reasons in core.
  */
 class DemoTeachingTruncationReasonTest {
 

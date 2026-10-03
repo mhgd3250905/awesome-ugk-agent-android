@@ -309,9 +309,9 @@ class AnthropicMessagesProvider(
                         // dropped. Dropping only guarantees the fabricated
                         // input is never executed; whether the turn is retried
                         // depends on the runtime's incomplete-response check:
-                        // a stop reason of max_tokens/length retries, while
-                        // any other outcome (e.g. tool_use with non-blank
-                        // content) finishes as a partial-text answer.
+                        // a stop reason the runtime counts as truncation
+                        // retries, while any other outcome (e.g. tool_use with
+                        // non-blank content) finishes as a partial-text answer.
                         val input = parseToolInputOrNull(currentToolInputJson.toString())
                         if (input != null) {
                             toolCalls.add(
@@ -352,7 +352,7 @@ class AnthropicMessagesProvider(
                 "error" -> {
                     // Same rule as the body paths, so a gateway that carries the
                     // reason as a string is quoted rather than echoed as JSON.
-                    val message = apiErrorReasonOrNull(dataObj["error"], dataStr) ?: dataStr
+                    val message = streamErrorReasonOrNull(dataObj["error"], dataStr) ?: dataStr
                     throw IllegalStateException("Anthropic SSE stream error: $message")
                 }
             }
@@ -654,7 +654,7 @@ class AnthropicMessagesProvider(
         // No payload echo here on purpose: a body that reports an error this client
         // cannot read is left to `parseResponse`, whose own failure the stream end
         // carries as the document cause instead of blaming the framing.
-        return apiErrorReasonOrNull(root["error"], rawFallback = null)
+        return apiErrorReasonOrNull(root, rawFallback = null)
     }
 
     private fun parseResponse(body: String): ModelResponse {
@@ -663,7 +663,7 @@ class AnthropicMessagesProvider(
         // gateway). Parsing it as a message would yield a blank "successful"
         // response and mask the real failure, whatever shape the gateway chose -
         // an object, a plain string, or anything else that says "error".
-        apiErrorReasonOrNull(root["error"], body)?.let { message ->
+        apiErrorReasonOrNull(root, body)?.let { message ->
             throw IllegalStateException("Anthropic API error: $message")
         }
         val contentBlocks = root["content"] as? JsonArray ?: JsonArray(emptyList())

@@ -23,8 +23,8 @@ import org.junit.Test
  * included, and reported `ok=true` with a count. The caller asked for one status
  * and got the whole table with no signal that its filter had been dropped.
  *
- * The same module reads a model-declared optional through `optionalElement` for
- * `agent_task_update` a few lines above, and the sibling memory tool in
+ * The same module reads a model-declared optional through `optionalElement` in
+ * `agent_task_update` further down, and the sibling memory tool in
  * `pi-agent-skill-runtime-android` refuses a `category` outside its enum by name
  * (`AgentSkillTools.execute` -> `categoryError`). This tool was the landing point
  * that did neither: unusable values were the only way to get an unfiltered

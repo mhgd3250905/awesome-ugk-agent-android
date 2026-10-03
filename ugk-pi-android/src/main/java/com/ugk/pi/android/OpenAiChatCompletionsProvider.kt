@@ -182,8 +182,8 @@ class OpenAiChatCompletionsProvider(
         // against arguments the model never completed choosing, so the call
         // is dropped. Dropping only guarantees the fabricated input is
         // never executed; whether the turn is retried depends on the
-        // runtime's incomplete-response check: a stop reason of
-        // max_tokens/length retries, while any other outcome (e.g.
+        // runtime's incomplete-response check: a stop reason the runtime
+        // counts as truncation retries, while any other outcome (e.g.
         // tool_use with non-blank content) finishes as a partial-text
         // answer. An empty argument string stays a legitimate no-argument
         // call.
@@ -286,7 +286,7 @@ class OpenAiChatCompletionsProvider(
             // `"error":null` is how a POJO-serialized gateway spells "no
             // error", and JsonNull is a value rather than an absent key - both
             // mean "nothing reported" here, and any other shape means failure.
-            apiErrorReasonOrNull(dataObj["error"], dataStr)?.let { message ->
+            streamErrorReasonOrNull(dataObj["error"], dataStr)?.let { message ->
                 throw IllegalStateException("OpenAI stream error: $message")
             }
 
@@ -524,7 +524,7 @@ class OpenAiChatCompletionsProvider(
         // No payload echo here on purpose: a body that reports an error this client
         // cannot read is left to `parseResponse`, whose own failure the stream end
         // carries as the document cause instead of blaming the framing.
-        return apiErrorReasonOrNull(root["error"], rawFallback = null)
+        return apiErrorReasonOrNull(root, rawFallback = null)
     }
 
     private fun parseResponse(body: String): ModelResponse {
@@ -534,7 +534,7 @@ class OpenAiChatCompletionsProvider(
         // response and mask the real failure, whatever shape the gateway chose -
         // reading only the object shape left `{"error":"..."}` to be reported as
         // a missing `choices` field, which is not what the endpoint said.
-        apiErrorReasonOrNull(root["error"], body)?.let { message ->
+        apiErrorReasonOrNull(root, body)?.let { message ->
             throw IllegalStateException("OpenAI API error: $message")
         }
         val choices = (root["choices"] as? JsonArray)

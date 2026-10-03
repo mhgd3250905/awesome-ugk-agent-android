@@ -58,7 +58,7 @@ internal class DemoTeachingModelProvider(config: ApiProviderConfig) : LLMProvide
 
     private fun checkServiceResponse(status: Int, body: String) {
         val hasError = runCatching {
-            (Json.parseToJsonElement(body) as? JsonObject)?.get("error") is JsonObject
+            DemoApiErrorSignal.reportedBy(Json.parseToJsonElement(body) as? JsonObject ?: JsonObject(emptyMap()))
         }.getOrDefault(false)
         if (status !in 200..299 || hasError) throw DemoTeachingRequestFailure.http(status, body)
     }

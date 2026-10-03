@@ -363,7 +363,7 @@ class AgentTaskListTool(
 
     override suspend fun execute(call: ToolCall, context: ToolExecutionContext): ToolResult {
         // Both filters are model-controlled optionals and both go through the
-        // rule this module already uses for `agent_task_update` just above: a key
+        // rule this module already applies in `agent_task_update` further down: a key
         // that is absent, or present as JSON null, means "not declared"; a value
         // that is declared and unusable is refused by name. The previous reading
         // (`runCatching { valueOf }` for status, the strict boolean accessor with a

@@ -28,10 +28,12 @@ import org.junit.Test
  * Round 12 recorded that widening instead of fixing it, on the reasoning that the
  * three-state mechanism was arriving in PR #13 and a second one-off reader would
  * leave the module with two competing rules. That premise expired when PR #13
- * merged: this module already has the rule (`optionalElement`, used by
- * `agent_task_update` a few lines above this tool), and `AgentTaskListTool` was
- * the one landing point in the file that did not use it. The fix is therefore to
- * route this tool through the rule the module already has, not to invent one.
+ * merged: the module gained `optionalElement`, which `agent_task_update` uses
+ * further down the same file. `AgentTaskListTool` was the landing point where an
+ * unusable declaration was still read as absence instead of refused, so the fix
+ * routes it through the rule the module already has rather than inventing one.
+ * `agent_task_create` needs no routing: its nested `schedule`/`action` readers
+ * already refuse a declared non-object by name (`parseSchedule`).
  *
  * Note the direction relative to `main`: this is a tightening. A declared value
  * this tool cannot honor is now refused by name instead of being read as absence,
