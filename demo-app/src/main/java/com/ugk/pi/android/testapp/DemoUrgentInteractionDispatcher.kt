@@ -187,9 +187,9 @@ internal class DemoUrgentInteractionDispatcher(
  *
  * Split out of [DemoUrgentInteractionDispatcher] because nothing in that class
  * can be reached from a host test: it needs an Android Context, an overlay
- * window and a live Agent run, and the module's unit tests contain no reference
- * to urgent interactions at all. The bookkeeping below is pure, and it is where
- * the defect was.
+ * window and a live Agent run, and until this split no unit test could reach
+ * the bookkeeping below. The bookkeeping is pure, and it is where the defect
+ * was; `DemoUrgentInteractionLedgerTest` pins it now.
  *
  * The rule: a presentation id is remembered while its event is queued or has
  * been delivered, and released as soon as the event is dropped without being
