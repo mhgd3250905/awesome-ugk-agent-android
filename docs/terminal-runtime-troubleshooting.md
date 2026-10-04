@@ -157,7 +157,7 @@ process-group 控制，服务只绑定 `127.0.0.1`。
 
 **修复**：当前 `MainActivity` 使用 `singleTask`/`alwaysRetainTaskState`，`DemoActivityState` 保留会话，`DemoAgentRunCoordinator` 保留 Job、运行代次和队列，确认 presenter/悬浮窗也在进程级复用；Activity saved state 只保留有界输入草稿；同一进程的权限提示只弹一次。通过启动器或 HOME 返回时应复用同一个 task/Activity，发生 Activity 重建时只重新绑定观察者。
 
-**验证**：API35 x86_64/4 KB 模拟器上，HOME→`am start -W -n com.ugk.pi.android.testapp/.MainActivity` 后，ActivityRecord 和进程 PID 保持不变，输入草稿 `draft123` 保留；没有出现应用异常。若系统彻底杀死进程，当前只保证 API 配置恢复，完整运行中的 Agent Tool 任务不会后台续跑。
+**验证**：API35 x86_64/4 KB 模拟器上，HOME→`am start -W -n com.ugk.pi.agent/com.ugk.pi.android.testapp.MainActivity` 后（2026-10-04 订正组件形式：`6f88115` 起安装包是 `com.ugk.pi.agent`，`com.ugk.pi.android.testapp` 只是 namespace；观测结论不变），ActivityRecord 和进程 PID 保持不变，输入草稿 `draft123` 保留；没有出现应用异常。若系统彻底杀死进程，当前只保证 API 配置恢复，完整运行中的 Agent Tool 任务不会后台续跑。
 
 ## 18. 无悬浮窗权限时打开外部 App 导致 demo-app 崩溃
 

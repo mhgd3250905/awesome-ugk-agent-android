@@ -1,19 +1,18 @@
 package com.ugk.pi.android.testapp
 
 import com.ugk.pi.android.ModelResponse
-import java.util.Locale
 import kotlinx.serialization.SerializationException
 import kotlinx.serialization.json.*
 
 /** Text response completeness plus legacy JSON decoding; SOP content has no required business schema. */
 internal object DemoTeachingResponseParser {
     fun requireComplete(response: ModelResponse) {
-        val reason = response.stopReason?.trim()?.lowercase(Locale.ROOT)
-        if (reason != null && reason in TRUNCATED_STOP_REASONS) {
+        val reason = DemoModelStopReasons.normalized(response.stopReason)
+        if (reason != null && reason in DemoModelStopReasons.truncated) {
             fail("OUTPUT_TRUNCATED", "模型达到输出上限（$reason），返回内容已截断，原始教学记录已保留",
                 "stopReason=$reason")
         }
-        if (reason != null && reason in SAFETY_STOP_REASONS) {
+        if (reason != null && reason in DemoModelStopReasons.safety) {
             fail("OUTPUT_BLOCKED", "模型因安全策略停止输出（$reason），本次结果不能保存为教学经验",
                 "stopReason=$reason")
         }
@@ -165,8 +164,6 @@ internal object DemoTeachingResponseParser {
         throw DemoTeachingCompileException(code, message, detail)
 
     private const val MAX_RAW_CHARS = 120_000
-    private val TRUNCATED_STOP_REASONS = setOf("length", "max_tokens", "max_output_tokens")
-    private val SAFETY_STOP_REASONS = setOf("content_filter", "sensitive", "refusal")
     private val FENCE_OPENING = Regex("```(?:json)?[ \\t]*", RegexOption.IGNORE_CASE)
     private val STEP_FIELDS = linkedSetOf("facts", "corrections", "completionEvidence", "uncertainties")
     private val GUIDE_REQUIRED_FIELDS = linkedSetOf("title", "goal", "prerequisites", "steps", "corrections", "completionChecks", "uncertainties")

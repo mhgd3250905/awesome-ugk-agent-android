@@ -1,4 +1,6 @@
-> **历史快照声明**：本文为 2026-09-01 时点历史快照，已 superseded；当前状态以 `docs/demo-app-version-ledger.md` 与 `docs/terminal-runtime-baseline.md` 为准。
+> **历史快照声明**：本文 §0–§4 与 §6 为 2026-09-01 前后时点的历史快照，已 superseded；当前状态以 `docs/demo-app-version-ledger.md` 与 `docs/terminal-runtime-baseline.md` 为准。
+>
+> **例外（2026-10-04 收窄）**：§5「常用开发与调试命令速查」不是历史快照——其中十任务全量门禁清单在 2026-10-02 被更新过（`docs/terminal-runtime-validation.md` §39 记着「照本文档跑全量不会执行 attention 模块用例」这条订正），而 §5 至今仍被当作跑全量的入口。原横幅把整篇宣告为已作废，与「§5 是现时指导」这两处事实矛盾：一条现时指导不会因为同一文件里另有历史小节而失效。另记：§5 第 4 步的 `am start -n com.ugk.pi.android.testapp/.MainActivity` 组件形式早于 applicationId 变更（`6f88115`，2026-09-02），实际重跑要用 `com.ugk.pi.agent/com.ugk.pi.android.testapp.MainActivity`；该行连同其真机 serial 与原作者机器上的工作副本路径都是本机专属，不属于源码事实。
 
 # awesome-ugk-agent-android 项目交接文档 (Handover Document)
 

@@ -309,9 +309,9 @@ class AnthropicMessagesProvider(
                         // dropped. Dropping only guarantees the fabricated
                         // input is never executed; whether the turn is retried
                         // depends on the runtime's incomplete-response check:
-                        // a stop reason of max_tokens/length retries, while
-                        // any other outcome (e.g. tool_use with non-blank
-                        // content) finishes as a partial-text answer.
+                        // a stop reason the runtime counts as truncation
+                        // retries, while any other outcome (e.g. tool_use with
+                        // non-blank content) finishes as a partial-text answer.
                         val input = parseToolInputOrNull(currentToolInputJson.toString())
                         if (input != null) {
                             toolCalls.add(
@@ -350,8 +350,18 @@ class AnthropicMessagesProvider(
                 }
 
                 "error" -> {
-                    val errorObj = dataObj["error"] as? JsonObject
-                    val message = errorObj?.textOrNull("message") ?: dataStr
+                    // Same rule as the body paths, so a gateway that carries the
+                    // reason as a string is quoted rather than echoed as JSON.
+                    // The tail is the only place left where the raw payload can
+                    // become the message: an error event with no readable reason
+                    // still fails the stream, and its echo rides the same
+                    // 200-character bound every other SSE echo rides. The tail
+                    // stays here rather than inside [streamErrorReasonOrNull]:
+                    // for the OpenAI reader a null return means "no error, keep
+                    // streaming", not "fall back to the payload".
+                    val message = streamErrorReasonOrNull(dataObj["error"], dataStr)
+                        ?: dataStr.trim().take(MAX_API_ERROR_ECHO_CHARS)
+                            .ifEmpty { "error event carried no readable reason" }
                     throw IllegalStateException("Anthropic SSE stream error: $message")
                 }
             }
@@ -650,19 +660,19 @@ class AnthropicMessagesProvider(
 
     private fun fullBodyApiErrorMessageOrNull(body: String): String? {
         val root = runCatching { json.parseToJsonElement(body).jsonObject }.getOrNull() ?: return null
-        val errorObj = root["error"] as? JsonObject ?: return null
-        return errorObj.textOrNull("message") ?: errorObj.textOrNull("type")
+        // No payload echo here on purpose: a body that reports an error this client
+        // cannot read is left to `parseResponse`, whose own failure the stream end
+        // carries as the document cause instead of blaming the framing.
+        return apiErrorReasonOrNull(root, rawFallback = null)
     }
 
     private fun parseResponse(body: String): ModelResponse {
         val root = json.parseToJsonElement(body).jsonObject
-        // A 200 body can still be an API error object (e.g. an `error` payload
-        // from an overloaded gateway). Parsing it as a message would yield a
-        // blank "successful" response and mask the real failure.
-        (root["error"] as? JsonObject)?.let { errorObj ->
-            val message = errorObj.textOrNull("message")
-                ?: errorObj.textOrNull("type")
-                ?: body.take(200)
+        // A 200 body can still be an API error (an overloaded or rate-limited
+        // gateway). Parsing it as a message would yield a blank "successful"
+        // response and mask the real failure, whatever shape the gateway chose -
+        // an object, a plain string, or anything else that says "error".
+        apiErrorReasonOrNull(root, body)?.let { message ->
             throw IllegalStateException("Anthropic API error: $message")
         }
         val contentBlocks = root["content"] as? JsonArray ?: JsonArray(emptyList())

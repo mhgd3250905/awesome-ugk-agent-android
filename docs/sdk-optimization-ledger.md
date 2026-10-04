@@ -2,6 +2,8 @@
 
 更新时间：2026-09-24
 
+> **时点限定（2026-10-04 追加）**：本文的「当前」一律指 2026-09-24 时点，条目本身不改写。截至 2026-10-04 实测：`ugk-terminal-runtime-android` 早已不是 `NO-SOURCE`（`src/test` 有 8 个文件，本轮基线门禁里 60 项），demo-app 当前为 `1.13.0 / versionCode 126`。自查：`git ls-files ugk-terminal-runtime-android/src/test | wc -l`、`grep -n versionName demo-app/build.gradle.kts`。
+
 ## 版本与推进规则
 
 - 本台账记录 SDK 架构优化步骤，不替代 `demo-app` 的产品版本台账。
@@ -85,7 +87,7 @@
   --console=plain
 ```
 
-结果：两组命令均通过；`ugk-terminal-runtime-android:testDebugUnitTest` 当前为 `NO-SOURCE`；
+结果：两组命令均通过；`ugk-terminal-runtime-android:testDebugUnitTest` 当时为 `NO-SOURCE`（2026-10-04 已不成立，见文首时点限定）；
 `git diff --check` 通过。默认接口方法实际编译为 JVM default method。
 
 兼容性影响：新增方法均提供默认实现，现有 Plugin 源码和已有唯一注册路径无需修改；新增

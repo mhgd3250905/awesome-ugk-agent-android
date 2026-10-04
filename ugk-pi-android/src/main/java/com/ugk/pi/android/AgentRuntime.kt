@@ -539,7 +539,12 @@ class AgentRuntime(
 
     private fun ModelResponse.isIncompleteFinalResponse(): Boolean {
         if (content.isBlank()) return true
-        return stopReason == "max_tokens" || stopReason == "length"
+        // Normalized the same way the demo-side readers normalize it: a
+        // Gemini-compatible endpoint spells the same condition in caps, and a
+        // trailing space from a proxy must not turn a truncation into a
+        // complete-looking answer.
+        val reason = stopReason?.trim()?.lowercase()
+        return reason != null && reason in TRUNCATED_STOP_REASONS
     }
 
     private fun buildRequestMessages(
@@ -817,6 +822,28 @@ private class CompositeAndroidSkillProvider(
  */
 internal const val DEFAULT_MAX_ITERATIONS = 500
 private const val MAX_INCOMPLETE_RESPONSE_RETRIES = 2
+
+/**
+ * Stop reasons that mean the model ran out of room before finishing.
+ *
+ * Same three reasons the demo layer refuses, spelled the same way: `demo-app`
+ * now reads every one of its guards through `DemoModelStopReasons.truncated`.
+ * The two sets cannot be merged, because `internal` members of the published AAR
+ * are not visible from `demo-app` and promoting two constants would widen the
+ * released API surface - so each side is pinned by behavior instead.
+ * `StopReasonCompletenessContractTest` refuses each reason on this side,
+ * `DemoModelStopReasonsTest` folds over every member of the demo set and its
+ * normalization, and `DemoTeachingTruncationReasonTest` plus
+ * `DemoOperationStepReviewerTest` refuse a representative guard each at the
+ * landing point. Dropping a member from either set turns the side that owns it
+ * red. Before this round four demo guards compared the raw value and one
+ * (`DemoModelIntentRouter`) did not know the third reason at all.
+ *
+ * Safety-driven stops (`content_filter`, `sensitive`, `refusal`) are deliberately
+ * absent: a refusal is what the model chose to say, and retrying it three times
+ * would both waste requests and hide the refusal behind a generic failure.
+ */
+private val TRUNCATED_STOP_REASONS = setOf("max_tokens", "length", "max_output_tokens")
 
 /** Fixed stand-in for terminal tools that end the turn with no usable text. */
 private const val TERMINAL_COMPLETION_PLACEHOLDER =

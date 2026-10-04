@@ -110,14 +110,14 @@ internal class DemoTeachingSopAgent(private val provider: LLMProvider, private v
             }
 
             private fun checkedResponse(response: ModelResponse): ModelResponse {
-                val stopReason = response.stopReason?.trim()?.lowercase()
-                if (stopReason in SAFETY_STOP_REASONS) {
+                val stopReason = DemoModelStopReasons.normalized(response.stopReason)
+                if (stopReason in DemoModelStopReasons.safety) {
                     throw DemoTeachingCompileException(
                         "SOP_REVIEW_REJECTED", "模型未能完成这次指南核对，原始记录已保留。"
                     )
                 }
                 // A cut-off response cannot approve delivery. Let the Runtime ask for a complete response.
-                return if (stopReason in TRUNCATED_STOP_REASONS) {
+                return if (stopReason in DemoModelStopReasons.truncated) {
                     response.copy(toolCalls = emptyList(), stopReason = "length")
                 } else response
             }
@@ -346,8 +346,6 @@ internal class DemoTeachingSopAgent(private val provider: LLMProvider, private v
         const val MAX_REVIEW_NOTES_CHARS = 12_000
         const val MAX_EVIDENCE_PAGE_CHARS = 12_000
         const val MAX_ROUND_EVIDENCE_CHARS = 24_000
-        val TRUNCATED_STOP_REASONS = setOf("length", "max_tokens", "max_output_tokens")
-        val SAFETY_STOP_REASONS = setOf("content_filter", "sensitive", "refusal")
         val REVIEW_TOOL_PROTOCOL = """
             本次审核最多 $MAX_MODEL_REQUESTS 次模型请求，整理方法及交付标准见当前教学整理 Skill。
             read_teaching_evidence 按 index/offset 回查，每页最多 $MAX_EVIDENCE_PAGE_CHARS 字符，
