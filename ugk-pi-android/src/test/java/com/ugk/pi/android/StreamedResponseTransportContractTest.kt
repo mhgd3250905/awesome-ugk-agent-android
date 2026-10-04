@@ -799,6 +799,43 @@ class StreamedResponseTransportContractTest {
         }
     }
 
+    /**
+     * An error event whose `error` field is absent leaves the fallback echo as
+     * the only message text. That echo is endpoint-controlled, so it rides the
+     * same 200-character bound every other SSE echo in this file rides - the
+     * unbounded `?: dataStr` fallback could put a multi-megabyte event payload
+     * into an exception message, the host log and the transcript.
+     */
+    @Test
+    fun anthropicBoundsTheFallbackEchoWhenAnErrorEventCarriesNoReadableReason() {
+        val filler = buildString { repeat(2_000) { append('x') } }
+        val body = """
+            event: error
+            data: {"type":"error","diagnostics":"${filler}TAILMARKER"}
+
+        """.trimIndent()
+        ScriptedEndpoint(body, contentType = "text/event-stream").use { endpoint ->
+            val failure = assertThrows(Exception::class.java) {
+                runBlocking {
+                    AnthropicMessagesProvider(
+                        apiKey = "test-key",
+                        model = "claude-3-7-sonnet",
+                        baseUrl = endpoint.baseUrl,
+                        transport = JavaNetHttpTransport(connectTimeoutMillis = 5_000, readTimeoutMillis = 5_000)
+                    ).generateStream(request()).toList()
+                }
+            }
+            assertTrue(
+                "expected a stream failure, got: ${failure.message}",
+                failure.message?.contains("Anthropic SSE stream error") == true
+            )
+            assertTrue(
+                "the fallback echo must be bounded: message length=${failure.message?.length}",
+                failure.message?.contains("TAILMARKER") == false
+            )
+        }
+    }
+
     @Test
     fun openAiSseErrorEventReadsAScalarReasonInsteadOfEchoingThePayload() {
         val body = """

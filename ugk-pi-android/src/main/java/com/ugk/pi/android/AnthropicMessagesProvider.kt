@@ -352,7 +352,16 @@ class AnthropicMessagesProvider(
                 "error" -> {
                     // Same rule as the body paths, so a gateway that carries the
                     // reason as a string is quoted rather than echoed as JSON.
-                    val message = streamErrorReasonOrNull(dataObj["error"], dataStr) ?: dataStr
+                    // The tail is the only place left where the raw payload can
+                    // become the message: an error event with no readable reason
+                    // still fails the stream, and its echo rides the same
+                    // 200-character bound every other SSE echo rides. The tail
+                    // stays here rather than inside [streamErrorReasonOrNull]:
+                    // for the OpenAI reader a null return means "no error, keep
+                    // streaming", not "fall back to the payload".
+                    val message = streamErrorReasonOrNull(dataObj["error"], dataStr)
+                        ?: dataStr.trim().take(MAX_API_ERROR_ECHO_CHARS)
+                            .ifEmpty { "error event carried no readable reason" }
                     throw IllegalStateException("Anthropic SSE stream error: $message")
                 }
             }
