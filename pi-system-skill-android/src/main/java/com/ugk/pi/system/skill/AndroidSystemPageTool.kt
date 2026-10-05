@@ -47,7 +47,17 @@ class AndroidSystemPageTool(
         call: ToolCall,
         context: ToolExecutionContext
     ): ToolResult {
-        val target = call.input["target"]?.jsonPrimitive?.contentOrNull.orEmpty()
+        if (call.input.declaredNonBlank("target") === DeclaredArgument.Unusable) {
+            return ToolResult(
+                toolCallId = call.id,
+                name = name,
+                content = unusableArgumentMessage("target", call.input["target"]),
+                isError = true
+            )
+        }
+        // Absent keeps the existing "unsupported target" report; only a value sent in an
+        // unreadable shape is named here, where it used to throw out of the Tool.
+        val target = (call.input.declaredNonBlank("target") as? DeclaredArgument.Of)?.value.orEmpty()
         val intent = AndroidSystemPageIntentFactory.intentFor(
             target = target,
             packageName = this.context.packageName

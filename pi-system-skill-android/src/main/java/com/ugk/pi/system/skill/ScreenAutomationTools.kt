@@ -53,6 +53,53 @@ private fun screenRecoveryHint(code: String): String = when (code) {
         "Call screen_read_ui_tree or screen_find_ui_element now and use only its latest snapshotId and nodeId. Do not use terminal_bash_execute or relaunch the app to recover."
 }
 
+/**
+ * An argument that was sent but cannot be read is refused by name, at the Tool,
+ * before anything is dispatched. The private helpers this replaced returned null for
+ * it, and every caller read null as "the model left it out".
+ */
+private fun unusableArgument(
+    call: ToolCall,
+    toolName: String,
+    key: String,
+    input: JsonObject
+): ToolResult = screenErrorResult(
+    callId = call.id,
+    toolName = toolName,
+    code = ScreenAutomationErrorCodes.INVALID_INPUT,
+    message = unusableArgumentMessage(key, input[key])
+)
+
+private val selectorKeys = listOf(
+    "text",
+    "text_exact",
+    "content_desc",
+    "content_desc_exact",
+    "view_id",
+    "type"
+)
+
+private const val DEFAULT_MAX_RESULTS = 20
+private const val MAX_RESULTS_LIMIT = 50
+
+/** Every field the visual target schema declares as required, so none can be missed. */
+private val visualTargetFields = listOf("left", "top", "right", "bottom")
+
+/**
+ * One arm per selector key, and an unknown key matches nothing: adding a selector to
+ * [selectorKeys] without adding its arm here can only ever narrow the result set,
+ * never silently widen it to "everything".
+ */
+private fun ScreenUiElement.matchesSelector(key: String, value: String): Boolean = when (key) {
+    "text" -> text?.contains(value, ignoreCase = true) == true
+    "text_exact" -> text == value
+    "content_desc" -> contentDesc?.contains(value, ignoreCase = true) == true
+    "content_desc_exact" -> contentDesc == value
+    "view_id" -> viewId == value
+    "type" -> type.equals(value, ignoreCase = true)
+    else -> false
+}
+
 private fun screenRecoveryTool(code: String): String = when (code) {
     ScreenAutomationErrorCodes.ACCESSIBILITY_UNAVAILABLE -> "get_android_accessibility_status"
     ScreenAutomationErrorCodes.VISUAL_SCREENSHOT_UNSUPPORTED -> "screen_read_ui_tree"
@@ -86,8 +133,16 @@ class ScreenReadUiTreeTool(
     }
 
     override suspend fun execute(call: ToolCall, context: ToolExecutionContext): ToolResult {
-        val maxDepth = call.input.intValue("max_depth") ?: ScreenAutomationLimits.DEFAULT_MAX_DEPTH
-        val maxNodes = call.input.intValue("max_nodes") ?: ScreenAutomationLimits.DEFAULT_MAX_NODES
+        val maxDepth = when (val declared = call.input.declaredInt("max_depth")) {
+            DeclaredArgument.Undeclared -> ScreenAutomationLimits.DEFAULT_MAX_DEPTH
+            DeclaredArgument.Unusable -> return unusableArgument(call, name, "max_depth", call.input)
+            is DeclaredArgument.Of -> declared.value
+        }
+        val maxNodes = when (val declared = call.input.declaredInt("max_nodes")) {
+            DeclaredArgument.Undeclared -> ScreenAutomationLimits.DEFAULT_MAX_NODES
+            DeclaredArgument.Unusable -> return unusableArgument(call, name, "max_nodes", call.input)
+            is DeclaredArgument.Of -> declared.value
+        }
         val result = backend.readUiTree(context.sessionId, maxDepth, maxNodes)
         val snapshot = result.snapshot
         return if (result.success && snapshot != null) {
@@ -136,22 +191,46 @@ class ScreenFindUiElementTool(
     }
 
     override suspend fun execute(call: ToolCall, context: ToolExecutionContext): ToolResult {
-        val text = call.input.stringValue("text")
-        val textExact = call.input.stringValue("text_exact")
-        val contentDesc = call.input.stringValue("content_desc")
-        val contentDescExact = call.input.stringValue("content_desc_exact")
-        val viewId = call.input.stringValue("view_id")
-        val type = call.input.stringValue("type")
-        if (text == null && textExact == null && contentDesc == null && contentDescExact == null && viewId == null && type == null) {
+        val maxResultsArgument = call.input.declaredInt("max_results")
+        val selectors = linkedMapOf<String, String>()
+        for (key in selectorKeys) {
+            when (val declared = call.input.declaredString(key)) {
+                DeclaredArgument.Undeclared -> Unit
+                DeclaredArgument.Unusable -> return unusableArgument(call, name, key, call.input)
+                is DeclaredArgument.Of -> {
+                    if (declared.value.isBlank()) {
+                        return screenErrorResult(
+                            callId = call.id,
+                            toolName = name,
+                            code = ScreenAutomationErrorCodes.INVALID_INPUT,
+                            message = "'$key' was sent empty. An empty selector does not mean " +
+                                "'no constraint': it would return every element the other " +
+                                "selectors allow. Drop the argument or name what to look for."
+                        )
+                    }
+                    selectors[key] = declared.value
+                }
+            }
+        }
+        // Checked before "give me a selector": an unreadable limit is the argument the
+        // caller has to fix, and a refusal that names a different one sends them away.
+        if (maxResultsArgument === DeclaredArgument.Unusable) {
+            return unusableArgument(call, name, "max_results", call.input)
+        }
+        if (selectors.isEmpty()) {
             return screenErrorResult(
                 callId = call.id,
                 toolName = name,
                 code = ScreenAutomationErrorCodes.INVALID_INPUT,
-                message = "Provide at least one selector: text, text_exact, content_desc, content_desc_exact, view_id, or type."
+                message = "Provide at least one selector: ${selectorKeys.joinToString(", ")}."
             )
         }
 
-        val maxResults = (call.input.intValue("max_results") ?: 20).coerceIn(1, 50)
+        val maxResults = when (maxResultsArgument) {
+            DeclaredArgument.Undeclared -> DEFAULT_MAX_RESULTS
+            is DeclaredArgument.Of -> maxResultsArgument.value.coerceIn(1, MAX_RESULTS_LIMIT)
+            else -> DEFAULT_MAX_RESULTS
+        }
         val read = backend.readUiTree(
             sessionId = context.sessionId,
             maxDepth = ScreenAutomationLimits.DEFAULT_MAX_DEPTH,
@@ -168,12 +247,7 @@ class ScreenFindUiElementTool(
         }
 
         val allMatches = snapshot.elements.filter { element ->
-            (text == null || element.text?.contains(text, ignoreCase = true) == true) &&
-                (textExact == null || element.text == textExact) &&
-                (contentDesc == null || element.contentDesc?.contains(contentDesc, ignoreCase = true) == true) &&
-                (contentDescExact == null || element.contentDesc == contentDescExact) &&
-                (viewId == null || element.viewId == viewId) &&
-                (type == null || element.type.equals(type, ignoreCase = true))
+            selectors.all { (key, value) -> element.matchesSelector(key, value) }
         }
         val matches = allMatches.take(maxResults)
 
@@ -330,37 +404,75 @@ class ScreenVisualGestureTool(
     }
 
     override suspend fun execute(call: ToolCall, context: ToolExecutionContext): ToolResult {
-        val targetObject = call.input["target"] as? JsonObject
-        val left = targetObject?.doubleValue("left")
-        val top = targetObject?.doubleValue("top")
-        val right = targetObject?.doubleValue("right")
-        val bottom = targetObject?.doubleValue("bottom")
-        val target = if (left != null && top != null && right != null && bottom != null) {
-            ScreenVisualTarget(
-                left = left,
-                top = top,
-                right = right,
-                bottom = bottom
-            )
-        } else {
-            null
+        val observationId = call.input.declaredNonBlank("observationId")
+        val action = call.input.declaredNonBlank("action")
+        val targetDescription = call.input.declaredNonBlank("targetDescription")
+        // Every declared argument is checked before the target block, and an absent
+        // required argument is reported as absent: a refusal that says "was sent as an
+        // unreadable value" about a key nobody sent sends the caller after the wrong fix.
+        listOf(
+            "observationId" to observationId,
+            "action" to action,
+            "targetDescription" to targetDescription
+        ).forEach { (key, declared) ->
+            if (declared === DeclaredArgument.Unusable) {
+                return unusableArgument(call, name, key, call.input)
+            }
         }
-        if (target == null) {
-            return screenErrorResult(
+        val targetObject = call.input["target"] as? JsonObject
+            ?: return screenErrorResult(
                 callId = call.id,
                 toolName = name,
                 code = ScreenAutomationErrorCodes.VISUAL_TARGET_INVALID,
-                message = "target must include numeric left, top, right, and bottom values in normalized 0..1 coordinates."
+                message = if (call.input.containsKey("target")) {
+                    unusableArgumentMessage("target", call.input["target"])
+                } else {
+                    "target is required: an object with numeric left, top, right and bottom " +
+                        "values in normalized 0..1 coordinates."
+                }
             )
+        val targetValues = linkedMapOf<String, Double>()
+        for (field in visualTargetFields) {
+            when (val declared = targetObject.declaredDouble(field)) {
+                is DeclaredArgument.Of -> targetValues[field] = declared.value
+                else -> return screenErrorResult(
+                    callId = call.id,
+                    toolName = name,
+                    code = ScreenAutomationErrorCodes.VISUAL_TARGET_INVALID,
+                    message = if (declared === DeclaredArgument.Unusable) {
+                        unusableArgumentMessage("target." + field, targetObject[field])
+                    } else {
+                        "target." + field + " is missing; target needs numeric left, top, right " +
+                            "and bottom values in normalized 0..1 coordinates."
+                    }
+                )
+            }
         }
+        val target = ScreenVisualTarget(
+            left = targetValues.getValue("left"),
+            top = targetValues.getValue("top"),
+            right = targetValues.getValue("right"),
+            bottom = targetValues.getValue("bottom")
+        )
 
         val result = backend.performVisualGesture(
             sessionId = context.sessionId,
             request = ScreenVisualGestureRequest(
-                observationId = call.input.stringValue("observationId"),
-                action = call.input.stringValue("action").orEmpty(),
+                observationId = when (val declared = call.input.declaredNonBlank("observationId")) {
+                    DeclaredArgument.Unusable ->
+                        return unusableArgument(call, name, "observationId", call.input)
+                    else -> (declared as? DeclaredArgument.Of)?.value
+                },
+                action = when (val declared = call.input.declaredNonBlank("action")) {
+                    DeclaredArgument.Unusable -> return unusableArgument(call, name, "action", call.input)
+                    else -> (declared as? DeclaredArgument.Of)?.value.orEmpty()
+                },
                 target = target,
-                targetDescription = call.input.stringValue("targetDescription")
+                targetDescription = when (val declared = call.input.declaredNonBlank("targetDescription")) {
+                    DeclaredArgument.Unusable ->
+                        return unusableArgument(call, name, "targetDescription", call.input)
+                    else -> (declared as? DeclaredArgument.Of)?.value
+                }
             )
         )
         return result.toToolResult(call.id, name)
@@ -402,12 +514,31 @@ class ScreenPerformActionTool(
     }
 
     override suspend fun execute(call: ToolCall, context: ToolExecutionContext): ToolResult {
-        val action = call.input.stringValue("action").orEmpty()
+        call.input.firstStructuredArgument(listOf("snapshotId", "nodeId", "action", "text"))?.let { key ->
+            return unusableArgument(call, name, key, call.input)
+        }
+        val action = when (val declared = call.input.declaredNonBlank("action")) {
+            DeclaredArgument.Unusable -> return unusableArgument(call, name, "action", call.input)
+            else -> (declared as? DeclaredArgument.Of)?.value.orEmpty()
+        }
+        val textArgument = call.input.declaredString("text")
+        if (textArgument === DeclaredArgument.Unusable) {
+            return unusableArgument(call, name, "text", call.input)
+        }
         val request = ScreenActionRequest(
-            snapshotId = call.input.stringValue("snapshotId"),
-            nodeId = call.input.stringValue("nodeId").orEmpty(),
+            snapshotId = when (val declared = call.input.declaredNonBlank("snapshotId")) {
+                DeclaredArgument.Unusable -> return unusableArgument(call, name, "snapshotId", call.input)
+                else -> (declared as? DeclaredArgument.Of)?.value
+            },
+            nodeId = when (val declared = call.input.declaredNonBlank("nodeId")) {
+                DeclaredArgument.Unusable -> return unusableArgument(call, name, "nodeId", call.input)
+                else -> (declared as? DeclaredArgument.Of)?.value.orEmpty()
+            },
             action = action,
-            text = call.input["text"]?.jsonPrimitive?.contentOrNull
+            // An empty text is a real request here: it clears the field. Only JSON
+            // null and a missing key mean "no text given", which the backend refuses
+            // rather than reading as an implicit clear.
+            text = (textArgument as? DeclaredArgument.Of)?.value
         )
         return backend.performAction(context.sessionId, request).toToolResult(call.id, name)
     }
@@ -438,11 +569,30 @@ class ScreenGestureTool(
     }
 
     override suspend fun execute(call: ToolCall, context: ToolExecutionContext): ToolResult {
+        call.input.firstStructuredArgument(listOf("action", "x", "y"))?.let { key ->
+            return unusableArgument(call, name, key, call.input)
+        }
         val result = backend.performGesture(
             ScreenGestureRequest(
-                action = call.input.stringValue("action").orEmpty(),
-                x = call.input.intValue("x"),
-                y = call.input.intValue("y")
+                action = when (val declared = call.input.declaredNonBlank("action")) {
+                    DeclaredArgument.Unusable -> return unusableArgument(call, name, "action", call.input)
+                    else -> (declared as? DeclaredArgument.Of)?.value.orEmpty()
+                },
+                // An argument nobody sent keeps its existing downstream code, so the
+                // backend's missing-coordinate report does not change class; a value
+                // that WAS sent in an unreadable shape is refused by name here, because
+                // it used to be indistinguishable from "not sent" and then blamed the
+                // screen bounds.
+                x = when (val declared = call.input.declaredInt("x")) {
+                    DeclaredArgument.Unusable -> return unusableArgument(call, name, "x", call.input)
+                    is DeclaredArgument.Of -> declared.value
+                    else -> null
+                },
+                y = when (val declared = call.input.declaredInt("y")) {
+                    DeclaredArgument.Unusable -> return unusableArgument(call, name, "y", call.input)
+                    is DeclaredArgument.Of -> declared.value
+                    else -> null
+                }
             )
         )
         return result.toToolResult(call.id, name)
@@ -468,9 +618,11 @@ class ScreenPressKeyTool(
     }
 
     override suspend fun execute(call: ToolCall, context: ToolExecutionContext): ToolResult {
-        return backend.pressKey(
-            ScreenKeyRequest(call.input.stringValue("key").orEmpty())
-        ).toToolResult(call.id, name)
+        val key = when (val declared = call.input.declaredNonBlank("key")) {
+            DeclaredArgument.Unusable -> return unusableArgument(call, name, "key", call.input)
+            else -> (declared as? DeclaredArgument.Of)?.value.orEmpty()
+        }
+        return backend.pressKey(ScreenKeyRequest(key)).toToolResult(call.id, name)
     }
 }
 
@@ -494,7 +646,12 @@ class ScreenGlobalActionTool(
 
     override suspend fun execute(call: ToolCall, context: ToolExecutionContext): ToolResult {
         return backend.performGlobalAction(
-            ScreenGlobalActionRequest(call.input.stringValue("action").orEmpty())
+            ScreenGlobalActionRequest(
+                when (val declared = call.input.declaredNonBlank("action")) {
+                    DeclaredArgument.Unusable -> return unusableArgument(call, name, "action", call.input)
+                    else -> (declared as? DeclaredArgument.Of)?.value.orEmpty()
+                }
+            )
         ).toToolResult(call.id, name)
     }
 }
@@ -590,15 +747,6 @@ private fun ScreenOperationResult.toToolResult(toolCallId: String, toolName: Str
         metadata = resultMetadata
     )
 }
-
-private fun JsonObject.stringValue(name: String): String? =
-    this[name]?.jsonPrimitive?.contentOrNull?.takeIf { it.isNotBlank() }
-
-private fun JsonObject.intValue(name: String): Int? =
-    this[name]?.jsonPrimitive?.contentOrNull?.toIntOrNull()
-
-private fun JsonObject.doubleValue(name: String): Double? =
-    this[name]?.jsonPrimitive?.contentOrNull?.toDoubleOrNull()
 
 private fun ScreenVisualObservation.toJson(): JsonObject = buildJsonObject {
     put("observationId", observationId)

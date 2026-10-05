@@ -12,6 +12,7 @@ import android.net.Uri
 import android.provider.MediaStore
 import kotlinx.serialization.json.JsonObject
 import kotlinx.serialization.json.JsonElement
+import kotlinx.serialization.json.JsonNull
 import kotlinx.serialization.json.JsonPrimitive
 import kotlinx.serialization.json.buildJsonObject
 import kotlinx.serialization.json.contentOrNull
@@ -151,10 +152,19 @@ internal fun JsonObject.appIntentParameters(): Map<String, String>? {
     return value.stringParameters()
 }
 
-private fun Map<String, JsonElement>.stringParameters(): Map<String, String> {
-    return mapNotNull { (key, value) ->
-        (value as? JsonPrimitive)?.contentOrNull?.let { key to it }
-    }.toMap()
+private fun Map<String, JsonElement>.stringParameters(): Map<String, String>? {
+    val parameters = linkedMapOf<String, String>()
+    for ((key, value) in this) {
+        when {
+            // The same unfilled field the rest of this reader tolerates.
+            value is JsonNull -> Unit
+            value is JsonPrimitive -> parameters[key] = value.contentOrNull ?: return null
+            // An entry that is an object or array was supplied, and dropping it would
+            // dispatch an Intent missing an extra the caller named.
+            else -> return null
+        }
+    }
+    return parameters
 }
 
 private fun invalidTargetOrParameters(call: ToolCall, toolName: String, target: String): ToolResult =
