@@ -185,6 +185,63 @@ class DemoToolArgumentShapeTest {
         )
         .build()
 
+    /**
+     * Every branch that renders an argument is driven with a structured value in the
+     * slot it reads, because the first version of this round's fix only proved the two
+     * branches someone happened to test. The expected count is asserted independently:
+     * if a branch or key is dropped from the table, the fold no longer claims coverage
+     * it does not have.
+     */
+    @Test
+    fun everyLabelBranchSurvivesAStructuredArgumentInItsOwnSlot() {
+        val probes = linkedMapOf(
+            "screen_find_ui_element" to listOf("text", "content_desc", "view_id", "type"),
+            "clipboard_write_text" to listOf("text", "sensitive"),
+            "screen_visual_gesture" to listOf("action", "targetDescription"),
+            "launch_android_app" to listOf("package_name"),
+            "screen_perform_action" to listOf("action", "text", "nodeId"),
+            "screen_gesture" to listOf("action"),
+            "screen_press_key" to listOf("key"),
+            "bash" to listOf("command", "cmd"),
+            "file_read" to listOf("path", "file"),
+            "show_user_confirmation_dialog" to listOf("message", "prompt"),
+            "some_future_tool" to listOf("anything")
+        )
+        assertEquals("every reading branch of the mapper must be in the table", 21, probes.values.sumOf { it.size })
+
+        probes.forEach { (tool, keys) ->
+            keys.forEach { key ->
+                val structured = buildJsonObject { put("nested", 1) }
+                val failure = runCatching {
+                    DemoToolSemanticMapper.formatInputSummary(tool, JsonObject(mapOf(key to structured)))
+                }.exceptionOrNull()
+                assertTrue(
+                    "$tool.$key: a display label must never throw, got: $failure",
+                    failure == null
+                )
+            }
+        }
+
+        val logProbes = linkedMapOf(
+            "screen_visual_gesture" to listOf("action", "observationId"),
+            "screen_perform_action" to listOf("action", "snapshotId", "nodeId")
+        )
+        logProbes.forEach { (tool, keys) ->
+            keys.forEach { key ->
+                val structured = buildJsonObject { put("nested", 1) }
+                val failure = runCatching {
+                    DemoScreenAutomationPolicy.screenToolCallDetail(
+                        ToolCall("probe", tool, JsonObject(mapOf(key to structured)))
+                    )
+                }.exceptionOrNull()
+                assertTrue(
+                    "$tool.$key: the floating-window log line must never throw, got: $failure",
+                    failure == null
+                )
+            }
+        }
+    }
+
     private companion object {
         const val UNREADABLE_MARKER = "无法解析"
     }

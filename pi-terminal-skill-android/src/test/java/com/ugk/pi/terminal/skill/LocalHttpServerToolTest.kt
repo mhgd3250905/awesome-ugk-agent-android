@@ -3,6 +3,7 @@ package com.ugk.pi.terminal.skill
 import com.ugk.pi.android.ToolCall
 import com.ugk.pi.android.ToolExecutionContext
 import com.ugk.pi.android.ToolResult
+import com.ugk.pi.terminal.runtime.DEFAULT_LOCAL_HTTP_SERVER_PORT
 import com.ugk.pi.terminal.runtime.LocalHttpServerController
 import com.ugk.pi.terminal.runtime.LocalHttpServerException
 import com.ugk.pi.terminal.runtime.LocalHttpServerRequest
@@ -196,6 +197,81 @@ class LocalHttpServerToolTest {
             assertTrue(result.content.startsWith("INVALID_INPUT: "))
         }
         assertEquals(null, controller.lastStart)
+    }
+
+    /**
+     * The three Tools read `directory` and `port` through `element.jsonPrimitive`, which
+     * measured raises IllegalArgumentException for an object or array. `runToolCall`
+     * catches IllegalArgumentException as an input problem, so the code stayed
+     * `INVALID_INPUT` - but the sentence the caller reads was the serialization
+     * library's own, which names no argument they can fix. Measured before this case
+     * was folded: `build/review-evidence/r14-terminal-baseline-red.log`.
+     * A refusal must name the argument the caller has to fix.
+     */
+    @Test
+    fun structuredArgumentSlotsAreRefusedByTheirOwnName() = runBlocking {
+        val controller = RecordingController()
+        val structured = buildJsonObject { put("nested", 1) }
+        val cases = listOf(
+            Triple(
+                LocalHttpServerStartTool(controller),
+                kotlinx.serialization.json.JsonObject(mapOf("directory" to structured)),
+                "directory"
+            ),
+            Triple(
+                LocalHttpServerStartTool(controller),
+                buildJsonObject {
+                    put("directory", "weather-site")
+                    put("port", structured)
+                },
+                "port"
+            ),
+            Triple(
+                LocalHttpServerStatusTool(controller),
+                kotlinx.serialization.json.JsonObject(mapOf("port" to structured)),
+                "port"
+            ),
+            Triple(
+                LocalHttpServerStopTool(controller),
+                kotlinx.serialization.json.JsonObject(mapOf("port" to structured)),
+                "port"
+            )
+        )
+
+        cases.forEachIndexed { index, (tool, input, namedArgument) ->
+            val result = tool.execute(
+                ToolCall(id = "structured-$index", name = tool.name, input = input),
+                ToolExecutionContext(sessionId = "session")
+            )
+            assertTrue("$namedArgument: must be an error", result.isError)
+            assertEquals("$namedArgument: must be an input problem", "INVALID_INPUT", errorCode(result))
+            assertTrue(
+                "$namedArgument: refusal must name the argument, got: ${result.content}",
+                result.content.contains(namedArgument)
+            )
+            assertTrue(
+                "$namedArgument: must not quote the serialization library: ${result.content}",
+                !result.content.contains("JsonPrimitive") && !result.content.contains("JsonObject")
+            )
+        }
+        assertEquals("no server may start while an argument is unreadable", null, controller.lastStart)
+
+        // The other direction: the fold must not turn a legal call into a refusal.
+        // JSON null in the port slot is an endpoint's unfilled field and still means
+        // "use the documented default", exactly as before.
+        val tolerated = LocalHttpServerStartTool(controller).execute(
+            ToolCall(
+                id = "null-port",
+                name = "local_http_server_start",
+                input = buildJsonObject {
+                    put("directory", "weather-site")
+                    put("port", kotlinx.serialization.json.JsonNull)
+                }
+            ),
+            ToolExecutionContext(sessionId = "session")
+        )
+        assertTrue("a null-valued port is absence, not an error: ${tolerated.content}", !tolerated.isError)
+        assertEquals(DEFAULT_LOCAL_HTTP_SERVER_PORT, controller.lastStart?.port)
     }
 
     @Test

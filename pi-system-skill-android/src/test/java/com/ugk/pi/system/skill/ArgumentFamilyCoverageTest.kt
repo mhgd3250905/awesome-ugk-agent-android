@@ -243,6 +243,67 @@ class ArgumentFamilyCoverageTest {
         )
     }
 
+    /**
+     * The pre-pass exists because an argument-check order can answer with a true
+     * sentence about the WRONG argument: `clipboard_write_text` with only an object in
+     * the `label` slot used to be refused as "text is required", which is accurate about
+     * `text` and sends the caller away from the value they actually broke.
+     */
+    @Test
+    fun anUnreadableArgumentIsNamedEvenWhenAnotherOneIsMissing() {
+        val result = runBlocking {
+            ClipboardWriteTextTool(RecordingClipboard()).execute(
+                ToolCall("write", "clipboard_write_text", JsonObject(mapOf("label" to structured))),
+                context
+            )
+        }
+        assertTrue(result.isError)
+        assertTrue(
+            "the refusal must name label, not the absent text: " + result.content,
+            result.content.contains("'label'") && !result.content.contains("text is required")
+        )
+    }
+
+    @Test
+    fun theSharedRuleSeparatesAnUnfilledFieldFromAnUnreadableOne() {
+        val stringArms = listOf(
+            "json-null" to JsonNull,
+            "object" to structured,
+            "array" to kotlinx.serialization.json.JsonArray(listOf(JsonPrimitive(1))),
+            "blank" to JsonPrimitive("  "),
+            "quoted-number" to JsonPrimitive("20"),
+            "text" to JsonPrimitive("note")
+        ).map { (_, element) ->
+            JsonObject(mapOf("v" to element)).declaredString("v")::class.simpleName
+        }
+        assertEquals(
+            "null is absence, an object or array is unusable, and every primitive - blank " +
+                "included - is a value the caller sent",
+            listOf(
+                "Undeclared", "Unusable", "Unusable",
+                "Of", "Of", "Of"
+            ),
+            stringArms
+        )
+        assertEquals(
+            "a blank string is still a string that WAS sent; only non-blank readers collapse it",
+            "  ",
+            (JsonObject(mapOf("v" to JsonPrimitive("  "))).declaredString("v") as DeclaredArgument.Of).value
+        )
+        assertEquals(
+            kotlinx.serialization.json.JsonObject(emptyMap()).declaredNonBlank("v"),
+            DeclaredArgument.Undeclared
+        )
+        assertEquals(
+            JsonObject(mapOf("v" to JsonPrimitive("   "))).declaredNonBlank("v"),
+            DeclaredArgument.Undeclared
+        )
+        assertEquals(
+            JsonObject(mapOf("v" to structured)).declaredNonBlank("v"),
+            DeclaredArgument.Unusable
+        )
+    }
+
     private class RecordingBackend : ScreenAutomationBackend {
         override fun readUiTree(sessionId: String, maxDepth: Int, maxNodes: Int): ScreenReadResult =
             ScreenReadResult(

@@ -12,11 +12,11 @@ import com.ugk.pi.terminal.runtime.LocalHttpServerStatus
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.withContext
 import kotlinx.serialization.json.JsonElement
+import kotlinx.serialization.json.JsonNull
 import kotlinx.serialization.json.JsonObject
 import kotlinx.serialization.json.JsonPrimitive
 import kotlinx.serialization.json.buildJsonObject
 import kotlinx.serialization.json.contentOrNull
-import kotlinx.serialization.json.jsonPrimitive
 import kotlinx.serialization.json.put
 import kotlinx.serialization.json.putJsonArray
 import kotlinx.serialization.json.putJsonObject
@@ -159,28 +159,42 @@ private suspend fun runToolCall(
     }
 }
 
+/**
+ * A declared value that is not a string, or a string that is only whitespace, is
+ * absence for this Tool: `element.jsonPrimitive` used to throw for an object or array,
+ * and although `runToolCall` caught that as an input error, the sentence the caller
+ * read named `kotlinx.serialization.json.JsonObject` instead of `directory`.
+ */
 private fun JsonObject.requiredString(name: String): String {
-    return this[name]
-        ?.jsonPrimitive
-        ?.contentOrNull
-        ?.takeIf { it.isNotBlank() }
+    val declared = this[name]?.takeUnless { it is JsonNull }
+    val primitive = declared as? JsonPrimitive
+        ?: throw IllegalArgumentException(if (declared == null) "$name is required" else "$name must be a string")
+    return primitive.contentOrNull?.takeIf { it.isNotBlank() }
         ?: throw IllegalArgumentException("$name is required")
 }
 
+/** The same rule for the port slot: JSON null is "no port asked for", a structured
+ *  value is refused by name rather than by the serialization library's wording. */
+private fun JsonObject.portPrimitive(name: String): JsonPrimitive? {
+    val declared = this[name]?.takeUnless { it is JsonNull } ?: return null
+    return declared as? JsonPrimitive
+        ?: throw IllegalArgumentException("$name must be an integer")
+}
+
 private fun JsonObject.startPort(): Int {
-    val value = this["port"]?.jsonPrimitive?.contentOrNull ?: return DEFAULT_LOCAL_HTTP_SERVER_PORT
-    return value.toIntOrNull() ?: throw IllegalArgumentException("port must be an integer")
+    val primitive = portPrimitive("port") ?: return DEFAULT_LOCAL_HTTP_SERVER_PORT
+    return primitive.contentOrNull?.toIntOrNull() ?: throw IllegalArgumentException("port must be an integer")
 }
 
 private fun JsonObject.optionalPort(): Int? {
-    val value = this["port"]?.jsonPrimitive?.contentOrNull ?: return null
-    return value.toIntOrNull() ?: throw IllegalArgumentException("port must be an integer")
+    val primitive = portPrimitive("port") ?: return null
+    return primitive.contentOrNull?.toIntOrNull() ?: throw IllegalArgumentException("port must be an integer")
 }
 
 private fun JsonObject.requiredPort(): Int {
-    val value = this["port"]?.jsonPrimitive?.contentOrNull
+    val primitive = portPrimitive("port")
         ?: throw IllegalArgumentException("port is required")
-    return value.toIntOrNull() ?: throw IllegalArgumentException("port must be an integer")
+    return primitive.contentOrNull?.toIntOrNull() ?: throw IllegalArgumentException("port must be an integer")
 }
 
 private fun LocalHttpServerStatus.toJson(): JsonObject {
