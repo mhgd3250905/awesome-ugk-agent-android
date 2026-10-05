@@ -10,8 +10,6 @@ import android.content.Intent
 import kotlinx.serialization.json.JsonObject
 import kotlinx.serialization.json.JsonPrimitive
 import kotlinx.serialization.json.buildJsonObject
-import kotlinx.serialization.json.contentOrNull
-import kotlinx.serialization.json.jsonPrimitive
 import kotlinx.serialization.json.put
 import kotlinx.serialization.json.putJsonArray
 import kotlinx.serialization.json.putJsonObject
@@ -47,7 +45,8 @@ class AndroidLaunchAppTool(
         call: ToolCall,
         context: ToolExecutionContext
     ): ToolResult {
-        if (call.input.declaredNonBlank("package_name") === DeclaredArgument.Unusable) {
+        val nameArgument = call.input.declaredTrimmed("package_name")
+        if (nameArgument === DeclaredArgument.Unusable) {
             return error(
                 call,
                 "INVALID_PACKAGE_NAME",
@@ -56,9 +55,9 @@ class AndroidLaunchAppTool(
         }
         // An absent name keeps the existing pattern refusal; only a name sent in an
         // unreadable shape is named here, where it used to throw out of the Tool.
-        val packageName = (call.input.declaredNonBlank("package_name") as? DeclaredArgument.Of)
-            ?.value
-            .orEmpty()
+        // The trim is load-bearing: the pattern is anchored, and a gateway that pads the
+        // value would otherwise be refused for a package name it did supply.
+        val packageName = (nameArgument as? DeclaredArgument.Of)?.value.orEmpty()
         if (!PACKAGE_NAME_PATTERN.matches(packageName)) {
             return error(call, "INVALID_PACKAGE_NAME", "package_name must be an exact Android package name.")
         }

@@ -12,16 +12,21 @@ import kotlinx.serialization.json.intOrNull
 import kotlin.math.roundToInt
 
 /**
- * What an argument says about one optional scalar field - the same three states as
- * [DeclaredStringList], because the private scalar readers in this module collapsed
- * them the same way.
+ * What an argument says about one optional scalar field.
  *
- * Measured on this build (build/review-evidence/r14-shape-oracle.txt): `intOrNull` is
- * null for `20.5`, `true` and `"2e3"`, so a bound the model did state was read as "no
- * bound requested" and the documented default took over - for `clipboard_read_text`
- * that default is 8000 characters of clipboard handed to the next model request. And
- * the throwing `element.jsonPrimitive` raised IllegalArgumentException for an object
- * or array, which `AgentRuntime.executeTool` turned into a tool result quoting
+ * The same three states as [DeclaredStringList], with one deliberate difference in what
+ * counts as a value: `declaredStringList` accepts only JSON strings as entries, while
+ * these readers take any primitive's content - `{"maxChars": "500"}` and
+ * `{"text_exact": 20}` are read as the caller's number or text rather than refused.
+ * Quoted scalars were already accepted by every helper this replaced, and a gateway that
+ * stringifies numbers is the normal case, not an attack.
+ *
+ * Measured on this build by `ArgumentFamilyCoverageTest`: `intOrNull` is null for `20.5`,
+ * `true` and `"2e3"`, so a bound the model did state used to be read as "no bound
+ * requested" and the documented default took over - for `clipboard_read_text` that
+ * default is 8000 characters of clipboard handed to the next model request. And the
+ * throwing `element.jsonPrimitive` raised IllegalArgumentException for an object or
+ * array, which `AgentRuntime.executeTool` turned into a tool result quoting
  * `kotlinx.serialization.json.JsonObject`, and which the demo-side display readers
  * turned into an aborted run.
  *
@@ -83,6 +88,21 @@ internal fun JsonObject.declaredNonBlank(key: String): DeclaredArgument<String> 
 }
 
 /**
+ * The same three states for a value whose surrounding whitespace is not part of it.
+ *
+ * `launch_android_app` matches an anchored package-name pattern and `find_android_app`
+ * compares labels directly, so an untrimmed `" com.example.app "` is refused, and a
+ * `" gmail "` query scores zero and the Tool answers ok with no candidates. The round
+ * that added this reader dropped that trim; it lives here now, so the two callers share
+ * one rule and the rule itself is host-testable even though those Tools need a Context.
+ */
+internal fun JsonObject.declaredTrimmed(key: String): DeclaredArgument<String> =
+    when (val declared = declaredNonBlank(key)) {
+        is DeclaredArgument.Of -> DeclaredArgument.Of(declared.value.trim())
+        else -> declared
+    }
+
+/**
  * The first argument slot holding a structured value, or null.
  *
  * Every Tool with more than one argument runs this BEFORE it checks whether anything
@@ -91,6 +111,11 @@ internal fun JsonObject.declaredNonBlank(key: String): DeclaredArgument<String> 
  * different argument, and one that sends the caller to fix the wrong thing while the
  * unreadable one stays. An object or array is unreadable for every reader in this
  * family, so it needs no type knowledge to spot.
+ *
+ * The `Unusable` arms of the string readers below are unreachable while this pre-pass
+ * covers the same slots; the numeric and boolean readers keep live `Unusable` arms,
+ * because for those a primitive that does not parse (`20.5`, `true`) is also unusable
+ * and this scan cannot see it.
  */
 internal fun JsonObject.firstStructuredArgument(keys: List<String>): String? =
     keys.firstOrNull { element ->
@@ -115,5 +140,5 @@ internal fun JsonElement.describeForRefusal(): String = when (this) {
 
 /** The sentence every refusal in this family ends with, so the wording cannot drift. */
 internal fun unusableArgumentMessage(key: String, declared: JsonElement?): String =
-    "The argument '$key' was sent as " + (declared?.describeForRefusal() ?: "an unreadable value") +
-        "; it must be a value this Tool can read. Re-send '$key' alone, in the type its schema declares."
+    "The argument '" + key + "' was sent as " + (declared?.describeForRefusal() ?: "an unreadable value") +
+        "; it must be a value this Tool can read. Re-send '" + key + "' alone, in the type its schema declares."

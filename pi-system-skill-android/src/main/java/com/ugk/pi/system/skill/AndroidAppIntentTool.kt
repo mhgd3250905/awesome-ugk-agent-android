@@ -15,8 +15,6 @@ import kotlinx.serialization.json.JsonElement
 import kotlinx.serialization.json.JsonNull
 import kotlinx.serialization.json.JsonPrimitive
 import kotlinx.serialization.json.buildJsonObject
-import kotlinx.serialization.json.contentOrNull
-import kotlinx.serialization.json.jsonPrimitive
 import kotlinx.serialization.json.put
 import kotlinx.serialization.json.putJsonArray
 import kotlinx.serialization.json.putJsonObject
@@ -68,7 +66,20 @@ class AndroidAppIntentTool(
         call: ToolCall,
         context: ToolExecutionContext
     ): ToolResult {
-        val target = (call.input["target"] as? JsonPrimitive)?.contentOrNull.orEmpty()
+        val targetArgument = call.input.declaredNonBlank("target")
+        if (targetArgument === DeclaredArgument.Unusable) {
+            return ToolResult(
+                toolCallId = call.id,
+                name = name,
+                content = unusableArgumentMessage("target", call.input["target"]),
+                isError = true
+            )
+        }
+        val target = (targetArgument as? DeclaredArgument.Of)?.value.orEmpty()
+        // A rejected parameter map is still refused by the existing
+        // invalid_target_or_parameters code without naming which entry: the map is nested
+        // and the refusal carries the target only. Registered as a remaining diagnosability
+        // gap rather than widened into this fix.
         val parameters = call.input.appIntentParameters()
             ?: return invalidTargetOrParameters(call, name, target)
         val intent = AndroidAppIntentFactory.intentFor(target, parameters)
@@ -158,7 +169,7 @@ private fun Map<String, JsonElement>.stringParameters(): Map<String, String>? {
         when {
             // The same unfilled field the rest of this reader tolerates.
             value is JsonNull -> Unit
-            value is JsonPrimitive -> parameters[key] = value.contentOrNull ?: return null
+            value is JsonPrimitive -> parameters[key] = value.content
             // An entry that is an object or array was supplied, and dropping it would
             // dispatch an Intent missing an extra the caller named.
             else -> return null

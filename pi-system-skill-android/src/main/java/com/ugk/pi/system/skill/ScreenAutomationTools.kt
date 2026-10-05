@@ -7,9 +7,6 @@ import com.ugk.pi.android.ToolResult
 import kotlinx.serialization.json.JsonObject
 import kotlinx.serialization.json.JsonPrimitive
 import kotlinx.serialization.json.buildJsonObject
-import kotlinx.serialization.json.contentOrNull
-import kotlinx.serialization.json.jsonObject
-import kotlinx.serialization.json.jsonPrimitive
 import kotlinx.serialization.json.put
 import kotlinx.serialization.json.putJsonArray
 import kotlinx.serialization.json.putJsonObject
@@ -81,6 +78,14 @@ private val selectorKeys = listOf(
 
 private const val DEFAULT_MAX_RESULTS = 20
 private const val MAX_RESULTS_LIMIT = 50
+
+/**
+ * The selectors that pick an element *out* by an exact value. A blank one of these was
+ * dropped by the old reader and the query then matched more than the caller asked; a
+ * blank substring selector asks for "contains nothing in particular", which the drop
+ * already expresses.
+ */
+private val identitySelectorKeys = setOf("text_exact", "content_desc_exact", "view_id", "type")
 
 /** Every field the visual target schema declares as required, so none can be missed. */
 private val visualTargetFields = listOf("left", "top", "right", "bottom")
@@ -199,16 +204,28 @@ class ScreenFindUiElementTool(
                 DeclaredArgument.Unusable -> return unusableArgument(call, name, key, call.input)
                 is DeclaredArgument.Of -> {
                     if (declared.value.isBlank()) {
-                        return screenErrorResult(
-                            callId = call.id,
-                            toolName = name,
-                            code = ScreenAutomationErrorCodes.INVALID_INPUT,
-                            message = "'$key' was sent empty. An empty selector does not mean " +
-                                "'no constraint': it would return every element the other " +
-                                "selectors allow. Drop the argument or name what to look for."
-                        )
+                        // Split by what a blank value does to the match set, not by
+                        // appearance. An empty *identity* selector (exact text, exact
+                        // description, viewId, type) is a filter the caller stated, and
+                        // the old reader dropped it - so the result set silently grew to
+                        // everything the other selectors allow. An empty *substring*
+                        // selector already means "contains anything", which is exactly
+                        // what dropping it expresses, so refusing it would reject a call
+                        // that asked for nothing different.
+                        if (key in identitySelectorKeys) {
+                            return screenErrorResult(
+                                callId = call.id,
+                                toolName = name,
+                                code = ScreenAutomationErrorCodes.INVALID_INPUT,
+                                message = "'$key' was sent empty. An empty selector of this " +
+                                    "kind does not mean 'no constraint': it would return " +
+                                    "every element the other selectors allow. Drop the " +
+                                    "argument or name what to look for."
+                            )
+                        }
+                    } else {
+                        selectors[key] = declared.value
                     }
-                    selectors[key] = declared.value
                 }
             }
         }
@@ -228,8 +245,10 @@ class ScreenFindUiElementTool(
 
         val maxResults = when (maxResultsArgument) {
             DeclaredArgument.Undeclared -> DEFAULT_MAX_RESULTS
+            // Named arm, not `else`: an `else` here would quietly read an unreadable
+            // limit as the default again if the check above ever moved.
+            DeclaredArgument.Unusable -> return unusableArgument(call, name, "max_results", call.input)
             is DeclaredArgument.Of -> maxResultsArgument.value.coerceIn(1, MAX_RESULTS_LIMIT)
-            else -> DEFAULT_MAX_RESULTS
         }
         val read = backend.readUiTree(
             sessionId = context.sessionId,
@@ -404,16 +423,16 @@ class ScreenVisualGestureTool(
     }
 
     override suspend fun execute(call: ToolCall, context: ToolExecutionContext): ToolResult {
-        val observationId = call.input.declaredNonBlank("observationId")
-        val action = call.input.declaredNonBlank("action")
-        val targetDescription = call.input.declaredNonBlank("targetDescription")
+        val observationIdArgument = call.input.declaredNonBlank("observationId")
+        val actionArgument = call.input.declaredNonBlank("action")
+        val targetDescriptionArgument = call.input.declaredNonBlank("targetDescription")
         // Every declared argument is checked before the target block, and an absent
         // required argument is reported as absent: a refusal that says "was sent as an
         // unreadable value" about a key nobody sent sends the caller after the wrong fix.
         listOf(
-            "observationId" to observationId,
-            "action" to action,
-            "targetDescription" to targetDescription
+            "observationId" to observationIdArgument,
+            "action" to actionArgument,
+            "targetDescription" to targetDescriptionArgument
         ).forEach { (key, declared) ->
             if (declared === DeclaredArgument.Unusable) {
                 return unusableArgument(call, name, key, call.input)
@@ -424,11 +443,13 @@ class ScreenVisualGestureTool(
                 callId = call.id,
                 toolName = name,
                 code = ScreenAutomationErrorCodes.VISUAL_TARGET_INVALID,
-                message = if (call.input.containsKey("target")) {
-                    unusableArgumentMessage("target", call.input["target"])
-                } else {
+                message = if (call.input.optionalElement("target") == null) {
+                    // Absent or JSON null: nobody sent a target. Saying "was sent as an
+                    // unreadable value" here would describe a value that does not exist.
                     "target is required: an object with numeric left, top, right and bottom " +
                         "values in normalized 0..1 coordinates."
+                } else {
+                    unusableArgumentMessage("target", call.input["target"])
                 }
             )
         val targetValues = linkedMapOf<String, Double>()
@@ -458,21 +479,10 @@ class ScreenVisualGestureTool(
         val result = backend.performVisualGesture(
             sessionId = context.sessionId,
             request = ScreenVisualGestureRequest(
-                observationId = when (val declared = call.input.declaredNonBlank("observationId")) {
-                    DeclaredArgument.Unusable ->
-                        return unusableArgument(call, name, "observationId", call.input)
-                    else -> (declared as? DeclaredArgument.Of)?.value
-                },
-                action = when (val declared = call.input.declaredNonBlank("action")) {
-                    DeclaredArgument.Unusable -> return unusableArgument(call, name, "action", call.input)
-                    else -> (declared as? DeclaredArgument.Of)?.value.orEmpty()
-                },
+                observationId = (observationIdArgument as? DeclaredArgument.Of)?.value,
+                action = (actionArgument as? DeclaredArgument.Of)?.value.orEmpty(),
                 target = target,
-                targetDescription = when (val declared = call.input.declaredNonBlank("targetDescription")) {
-                    DeclaredArgument.Unusable ->
-                        return unusableArgument(call, name, "targetDescription", call.input)
-                    else -> (declared as? DeclaredArgument.Of)?.value
-                }
+                targetDescription = (targetDescriptionArgument as? DeclaredArgument.Of)?.value
             )
         )
         return result.toToolResult(call.id, name)
@@ -517,23 +527,11 @@ class ScreenPerformActionTool(
         call.input.firstStructuredArgument(listOf("snapshotId", "nodeId", "action", "text"))?.let { key ->
             return unusableArgument(call, name, key, call.input)
         }
-        val action = when (val declared = call.input.declaredNonBlank("action")) {
-            DeclaredArgument.Unusable -> return unusableArgument(call, name, "action", call.input)
-            else -> (declared as? DeclaredArgument.Of)?.value.orEmpty()
-        }
+        val action = (call.input.declaredNonBlank("action") as? DeclaredArgument.Of)?.value.orEmpty()
         val textArgument = call.input.declaredString("text")
-        if (textArgument === DeclaredArgument.Unusable) {
-            return unusableArgument(call, name, "text", call.input)
-        }
         val request = ScreenActionRequest(
-            snapshotId = when (val declared = call.input.declaredNonBlank("snapshotId")) {
-                DeclaredArgument.Unusable -> return unusableArgument(call, name, "snapshotId", call.input)
-                else -> (declared as? DeclaredArgument.Of)?.value
-            },
-            nodeId = when (val declared = call.input.declaredNonBlank("nodeId")) {
-                DeclaredArgument.Unusable -> return unusableArgument(call, name, "nodeId", call.input)
-                else -> (declared as? DeclaredArgument.Of)?.value.orEmpty()
-            },
+            snapshotId = (call.input.declaredNonBlank("snapshotId") as? DeclaredArgument.Of)?.value,
+            nodeId = (call.input.declaredNonBlank("nodeId") as? DeclaredArgument.Of)?.value.orEmpty(),
             action = action,
             // An empty text is a real request here: it clears the field. Only JSON
             // null and a missing key mean "no text given", which the backend refuses

@@ -2,8 +2,6 @@ package com.ugk.pi.android.testapp
 
 import com.ugk.pi.android.AgentToolInterlockErrorCodes
 import com.ugk.pi.android.ToolCall
-import kotlinx.serialization.json.contentOrNull
-import kotlinx.serialization.json.jsonPrimitive
 import java.util.Locale
 
 /**
@@ -34,12 +32,12 @@ internal object DemoScreenAutomationPolicy {
         "screen_find_ui_element" -> " [snapshot=find]"
         "screen_capture_visual" -> " [visual=observe]"
         "screen_visual_gesture" -> {
-            val action = call.input.displayedText("action")
+            val action = call.input.displayedArgumentText("action")
                 .ifBlank { call.input.displayedPresence("action") }
             " [visualAction=$action observation=${call.input.displayedPresence("observationId")}]"
         }
         "screen_perform_action" -> {
-            val action = call.input.displayedText("action")
+            val action = call.input.displayedArgumentText("action")
                 .ifBlank { call.input.displayedPresence("action") }
             " [action=$action snapshot=${call.input.displayedPresence("snapshotId")} " +
                 "node=${call.input.displayedPresence("nodeId")}]"

@@ -11,8 +11,9 @@ import kotlinx.serialization.json.contentOrNull
  *
  * The three demo surfaces that render or log a Tool call (the run-state label, the
  * floating-window log line, the trace record) each read arguments with
- * `element.jsonPrimitive`, which measured raises IllegalArgumentException for an
- * object or array (build/review-evidence/r14-shape-oracle.txt). Two of them run
+ * `element.jsonPrimitive`, which raises IllegalArgumentException for an object or array
+ * (the fact is pinned on the host by `ArgumentFamilyCoverageTest` in
+ * `pi-system-skill-android`). Two of them run
  * inside `DemoAgentRunCoordinator.dispatch` - the state fold is called outside any
  * `runCatching`, and the event listener is called unguarded - so one argument the
  * model sent in the wrong shape ended the whole conversation turn with
@@ -51,13 +52,33 @@ internal const val UNREADABLE_ARGUMENT_STATE = "unparseable"
 /**
  * A compact, bounded fragment for a log line: user-entered text is never quoted in
  * full, and an unreadable value must not look like an absent one.
+ *
+ * The bound is required rather than defaulted. The trace store reads two different
+ * kinds of value through this: a Tool argument (truncate, it is user-entered text) and
+ * its own error metadata (`recovery`, a whole sentence the next reader needs intact).
+ * A default here silently cut every recorded recovery hint to 32 characters.
  */
-internal fun JsonObject.displayedText(key: String, maxLength: Int = 32): String =
+internal fun JsonObject.displayedText(key: String, maxLength: Int): String =
     when (val argument = displayedArgument(key)) {
         DisplayedArgument.NotSent -> ""
         DisplayedArgument.Unreadable -> UNREADABLE_ARGUMENT_STATE
         is DisplayedArgument.Sent -> argument.text.take(maxLength)
     }
+
+/** A Tool argument for a log line: bounded, because it is user-entered text. */
+internal fun JsonObject.displayedArgumentText(key: String): String = displayedText(key, 32)
+
+/**
+ * A value this SDK wrote into Tool metadata, recorded in full.
+ *
+ * `recovery` is a whole sentence the next reader needs intact to know what to do; it
+ * is not user-entered text, so it must not inherit the 32-character bound that keeps a
+ * screenshot path or typed text out of a log line.
+ */
+internal fun JsonObject.displayedMetadata(key: String): String? =
+    (displayedArgument(key) as? DisplayedArgument.Sent)
+        ?.text
+        ?.takeIf { it.isNotBlank() }
 
 /** Present / missing / unparseable, for the diagnostic suffix the floating window logs. */
 internal fun JsonObject.displayedPresence(key: String): String =

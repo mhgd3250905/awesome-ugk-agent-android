@@ -28,10 +28,12 @@ import org.junit.Test
  * every key of every Tool is driven here rather than sampled, and the expected count
  * is asserted independently so a shrinking table cannot pass.
  *
- * The four Tools in this module that need an Android Context (`find_android_app`,
- * `launch_android_app`, `open_android_system_page`) are covered only through the
- * shared `DeclaredArgument` judgement they route through, not through their own
- * `execute`; that half is stated as a measured limitation in the review record.
+ * Four Tools in this module read a model argument and need an Android Context to run
+ * at all: `find_android_app`, `launch_android_app`, `open_android_settings_page` and
+ * `launch_android_app_intent`. Their argument *decisions* are pinned here through the
+ * shared `DeclaredArgument` readers they route through, including the trim rule; their
+ * `execute` wiring - which error code the refusal carries - is not host-reachable and
+ * is registered as a measured limitation with the device command in the review record.
  */
 class ArgumentFamilyCoverageTest {
     private val context = ToolExecutionContext(sessionId = "family")
@@ -222,14 +224,13 @@ class ArgumentFamilyCoverageTest {
         }
         assertFalse("a legal write must not be refused because of one unreadable flag", result.isError)
         assertEquals("and it must be recorded as sensitive", true, capturedSensitive)
-        assertEquals(null, backend.lastMaxChars)
     }
 
     /**
-     * The library fact this whole rule rests on, pinned so a future reader can check it
-     * instead of re-deriving it: `element.jsonPrimitive` throws for a structured value,
-     * while `as? JsonPrimitive` reads it as "not a primitive". Measured in
-     * build/review-evidence/r14-shape-oracle.txt.
+     * A library fact, not a regression pin: this holds with the production change fully
+     * reverted, and exists so a reader can check the premise instead of re-deriving it.
+     * `element.jsonPrimitive` throws for a structured value while `as? JsonPrimitive`
+     * reads it as "not a primitive"; the fold itself is pinned by the table above.
      */
     @Test
     fun theThrowingAccessorIsWhyTheRuleNeedsToExist() {
@@ -301,6 +302,102 @@ class ArgumentFamilyCoverageTest {
         assertEquals(
             JsonObject(mapOf("v" to structured)).declaredNonBlank("v"),
             DeclaredArgument.Unusable
+        )
+    }
+
+    /**
+     * Blank means different things per selector kind, and getting this wrong either
+     * way is a defect: refusing a blank substring selector rejects a call that asked for
+     * nothing unusual, while dropping a blank exact selector silently widens the match
+     * set the model then acts on.
+     */
+    @Test
+    fun aBlankSubstringSelectorStillMeansNoConstraintAndABlankExactSelectorIsRefused() {
+        val substring = runBlocking {
+            ScreenFindUiElementTool(RecordingBackend()).execute(
+                ToolCall(
+                    "find",
+                    "screen_find_ui_element",
+                    buildJsonObject {
+                        put("text", "")
+                        put("type", "Button")
+                    }
+                ),
+                context
+            )
+        }
+        assertFalse(
+            "an empty substring selector contains everything, exactly as dropping it does: " +
+                substring.content,
+            substring.isError
+        )
+        assertTrue(substring.content, substring.content.contains("node-continue"))
+
+        val identity = runBlocking {
+            ScreenFindUiElementTool(RecordingBackend()).execute(
+                ToolCall(
+                    "find",
+                    "screen_find_ui_element",
+                    buildJsonObject {
+                        put("text_exact", "")
+                        put("type", "Button")
+                    }
+                ),
+                context
+            )
+        }
+        assertTrue(identity.isError)
+        assertTrue(identity.content, identity.content.contains("'text_exact'"))
+    }
+
+    @Test
+    fun anUnreadableLimitIsNamedEvenBesideAValidSelector() {
+        val result = runBlocking {
+            ScreenFindUiElementTool(RecordingBackend()).execute(
+                ToolCall(
+                    "find",
+                    "screen_find_ui_element",
+                    buildJsonObject {
+                        put("type", "Button")
+                        put("max_results", kotlinx.serialization.json.JsonArray(listOf(JsonPrimitive(5))))
+                    }
+                ),
+                context
+            )
+        }
+        assertTrue(result.isError)
+        assertTrue(
+            "the refusal must name max_results, not the healthy selector: " + result.content,
+            result.content.contains("'max_results'")
+        )
+    }
+
+    /**
+     * The trim the round first dropped: `launch_android_app` matches an anchored pattern
+     * and `find_android_app` compares labels directly, so an untrimmed value is either
+     * refused or scores zero and answers ok with nothing. Those two Tools need an
+     * Android Context, so what is pinned here is the shared decision they now both route
+     * through; the Tool-level wiring is a registered device-side gap.
+     */
+    @Test
+    fun theTrimRuleKeepsPaddedValuesUsable() {
+        assertEquals(
+            "com.example.app",
+            (JsonObject(mapOf("v" to JsonPrimitive("  com.example.app "))).declaredTrimmed("v")
+                as DeclaredArgument.Of).value
+        )
+        assertEquals(
+            "a value that is only whitespace is nobody-wrote-it, not an empty name",
+            DeclaredArgument.Undeclared,
+            JsonObject(mapOf("v" to JsonPrimitive("   "))).declaredTrimmed("v")
+        )
+        assertEquals(
+            DeclaredArgument.Undeclared,
+            kotlinx.serialization.json.JsonObject(emptyMap()).declaredTrimmed("v")
+        )
+        assertEquals(
+            DeclaredArgument.Unusable,
+            JsonObject(mapOf("v" to structured)).declaredTrimmed("v")
         )
     }
 

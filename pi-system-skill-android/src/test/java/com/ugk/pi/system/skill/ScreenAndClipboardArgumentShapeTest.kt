@@ -24,9 +24,10 @@ import org.junit.Test
  * shape this client cannot interpret". The first two mean "the caller left it out"
  * and take the documented default; the third is a value the caller DID send.
  *
- * Measured behaviour (build/review-evidence/r14-shape-oracle.txt): `jsonPrimitive`
- * throws IllegalArgumentException on an object or array; `intOrNull` returns null for
- * 20.5, true and "2e3". So a boolean maxChars used to read as "no limit requested"
+ * Measured behaviour, and pinned in the same module by
+ * `ArgumentFamilyCoverageTest.theSharedRuleSeparatesAnUnfilledFieldFromAnUnreadableOne`:
+ * `jsonPrimitive` throws IllegalArgumentException on an object or array, and `intOrNull`
+ * returns null for 20.5, true and 2e3. So a boolean maxChars used to read as "no limit requested"
  * and handed the whole 8000-character clipboard to the next model request, and an
  * empty text_exact used to read as "no selector" and widen the accessibility match
  * set the model then acts on.

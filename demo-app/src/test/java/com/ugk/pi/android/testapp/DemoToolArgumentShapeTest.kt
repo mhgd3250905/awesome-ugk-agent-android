@@ -28,8 +28,8 @@ import org.junit.Test
  * write, only in a shape this client cannot interpret.
  *
  * Both demo-side readers of that shape used the throwing kotlinx accessor
- * (`element.jsonPrimitive`), which measured (build/review-evidence/r14-shape-oracle.txt)
- * raises IllegalArgumentException for an object or array. One of them runs inside
+ * (`element.jsonPrimitive`), which raises IllegalArgumentException for an object or
+ * array. One of them runs inside
  * `DemoRunState.reduce`, which `DemoAgentRunCoordinator.dispatch` calls outside any
  * `runCatching`, so the throw escaped the event fold and the run's own
  * `catch (error: Throwable)` ended the whole conversation turn as Failed - a label

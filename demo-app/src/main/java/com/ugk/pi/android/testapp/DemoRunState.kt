@@ -4,8 +4,6 @@ import com.ugk.pi.android.AgentEvent
 import com.ugk.pi.android.ToolCall
 import com.ugk.pi.android.ToolResult
 import kotlinx.serialization.json.JsonObject
-import kotlinx.serialization.json.contentOrNull
-import kotlinx.serialization.json.JsonPrimitive
 
 /**
  * The small set of states that the demo UI needs to render.
@@ -195,16 +193,16 @@ object DemoToolSemanticMapper {
 
     fun formatInputSummary(name: String, input: JsonObject): String = when (name.lowercase()) {
         "screen_find_ui_element" -> {
-            val selector = input.entries
-                .filter { (key, value) -> key in setOf("text", "content_desc", "view_id", "type") }
-                .joinToString(", ") { (key, value) ->
-                    val shown = if (value is JsonPrimitive) {
-                        value.contentOrNull.orEmpty().take(24)
-                    } else {
-                        UNREADABLE_ARGUMENT_LABEL
-                    }
-                    "$key=$shown"
+            // Six selectors, mirroring ScreenAutomationTools.selectorKeys: leaving out
+            // text_exact and content_desc_exact meant an exact-match find rendered as
+            // the generic "查找屏幕 UI 元素" while the Tool had applied a real filter.
+            val selector = findUiSelectorKeys.mapNotNull { key ->
+                when (val argument = input.displayedArgument(key)) {
+                    DisplayedArgument.NotSent -> null
+                    DisplayedArgument.Unreadable -> "$key=$UNREADABLE_ARGUMENT_LABEL"
+                    is DisplayedArgument.Sent -> "$key=${argument.text.take(24)}"
                 }
+            }.joinToString(", ")
             if (selector.isNotBlank()) "查找: $selector" else "查找屏幕 UI 元素"
         }
         "screen_capture_visual" -> "获取当前屏幕截图并交给视觉模型"
@@ -212,10 +210,11 @@ object DemoToolSemanticMapper {
         "clipboard_write_text" -> {
             val textArgument = input.displayedArgument("text")
             val textLength = (textArgument as? DisplayedArgument.Sent)?.text?.length
-            // An unreadable shape is treated as sensitive, the same fail-closed
-            // direction the Tool itself takes.
-            val sensitive = input.displayedArgument("sensitive") !=
-                DisplayedArgument.Sent("false")
+            // Compared by content, not by instance: DisplayedArgument.Sent is not a data
+            // class, so `!= Sent("false")` was true for every value and this label always
+            // read 敏感. An unreadable shape keeps the Tool's own fail-closed direction.
+            val sensitive = (input.displayedArgument("sensitive") as? DisplayedArgument.Sent)
+                ?.text != "false"
             val sensitivityLabel = if (sensitive) "敏感" else "普通"
             if (textLength != null) "写入剪贴板（${textLength} 字符，$sensitivityLabel）" else "写入剪贴板"
         }
@@ -292,6 +291,15 @@ object DemoToolSemanticMapper {
             DisplayedArgument.Unreadable -> UNREADABLE_ARGUMENT_LABEL
             is DisplayedArgument.Sent -> argument.text.ifBlank { fallback }
         }
+
+    internal val findUiSelectorKeys = listOf(
+        "text",
+        "text_exact",
+        "content_desc",
+        "content_desc_exact",
+        "view_id",
+        "type"
+    )
 
     fun formatResultSummary(result: ToolResult): String {
         if (result.isError) {

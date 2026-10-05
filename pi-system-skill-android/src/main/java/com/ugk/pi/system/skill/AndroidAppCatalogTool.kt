@@ -12,9 +12,6 @@ import java.util.Locale
 import kotlinx.serialization.json.JsonObject
 import kotlinx.serialization.json.JsonPrimitive
 import kotlinx.serialization.json.buildJsonObject
-import kotlinx.serialization.json.contentOrNull
-import kotlinx.serialization.json.intOrNull
-import kotlinx.serialization.json.jsonPrimitive
 import kotlinx.serialization.json.put
 import kotlinx.serialization.json.putJsonArray
 import kotlinx.serialization.json.putJsonObject
@@ -55,12 +52,23 @@ class AndroidAppCatalogTool(
         context: ToolExecutionContext
     ): ToolResult {
         call.input.firstStructuredArgument(listOf("query", "max_results"))?.let { key ->
-            return error(call, "INVALID_QUERY", unusableArgumentMessage(key, call.input[key]))
+            return error(
+                call,
+                // The code the Tool already uses for that argument: answering
+                // INVALID_QUERY about a broken max_results sends the caller to rewrite
+                // the field that was fine.
+                if (key == "max_results") "INVALID_MAX_RESULTS" else "INVALID_QUERY",
+                unusableArgumentMessage(key, call.input[key])
+            )
         }
-        if (call.input.declaredNonBlank("query") === DeclaredArgument.Unusable) {
+        val queryArgument = call.input.declaredTrimmed("query")
+        if (queryArgument === DeclaredArgument.Unusable) {
             return error(call, "INVALID_QUERY", unusableArgumentMessage("query", call.input["query"]))
         }
-        val query = (call.input.declaredNonBlank("query") as? DeclaredArgument.Of)?.value.orEmpty()
+        // Trimmed because the matcher compares label and package text directly: an
+        // untrimmed " gmail " scored zero and the Tool answered ok=true with no
+        // candidates, which is the same success-shaped wrong answer this family produces.
+        val query = (queryArgument as? DeclaredArgument.Of)?.value.orEmpty()
         if (query.isBlank()) {
             return error(call, "INVALID_QUERY", "query must be a non-empty app label or package name.")
         }

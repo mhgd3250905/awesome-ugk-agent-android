@@ -12,8 +12,6 @@ import android.provider.Settings
 import kotlinx.serialization.json.JsonObject
 import kotlinx.serialization.json.JsonPrimitive
 import kotlinx.serialization.json.buildJsonObject
-import kotlinx.serialization.json.contentOrNull
-import kotlinx.serialization.json.jsonPrimitive
 import kotlinx.serialization.json.put
 import kotlinx.serialization.json.putJsonArray
 import kotlinx.serialization.json.putJsonObject
@@ -47,7 +45,8 @@ class AndroidSystemPageTool(
         call: ToolCall,
         context: ToolExecutionContext
     ): ToolResult {
-        if (call.input.declaredNonBlank("target") === DeclaredArgument.Unusable) {
+        val targetArgument = call.input.declaredNonBlank("target")
+        if (targetArgument === DeclaredArgument.Unusable) {
             return ToolResult(
                 toolCallId = call.id,
                 name = name,
@@ -57,7 +56,7 @@ class AndroidSystemPageTool(
         }
         // Absent keeps the existing "unsupported target" report; only a value sent in an
         // unreadable shape is named here, where it used to throw out of the Tool.
-        val target = (call.input.declaredNonBlank("target") as? DeclaredArgument.Of)?.value.orEmpty()
+        val target = (targetArgument as? DeclaredArgument.Of)?.value.orEmpty()
         val intent = AndroidSystemPageIntentFactory.intentFor(
             target = target,
             packageName = this.context.packageName
