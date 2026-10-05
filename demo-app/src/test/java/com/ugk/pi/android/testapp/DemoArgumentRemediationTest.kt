@@ -172,6 +172,47 @@ class DemoArgumentRemediationTest {
         )
     }
 
+    /**
+     * kotlinx `booleanOrNull` measured case-insensitive ("TRUE" -> true, "FALSE" ->
+     * false), so the label has to read the same way or the two surfaces disagree about
+     * whether private text is leaving the device.
+     */
+    @Test
+    fun theSensitivityLabelFollowsTheSameCaseRuleTheToolUses() {
+        listOf("FALSE" to "普通", "false" to "普通", "TRUE" to "敏感", "true" to "敏感", "True" to "敏感")
+            .forEach { (declared, expected) ->
+                val summary = DemoToolSemanticMapper.formatInputSummary(
+                    "clipboard_write_text",
+                    buildJsonObject {
+                        put("text", "abcdefghijklmnop")
+                        put("sensitive", declared)
+                    }
+                )
+                assertEquals("sensitive=\"$declared\"", "写入剪贴板（16 字符，$expected）", summary)
+            }
+    }
+
+    @Test
+    fun aLongModelAuthoredValueIsBoundedInTheLabel() {
+        val huge = "y".repeat(4000)
+        val command = DemoToolSemanticMapper.formatInputSummary(
+            "bash",
+            buildJsonObject { put("command", huge) }
+        )
+        assertTrue(
+            "the label must not paste a 4 KB script into the floating window: length=" + command.length,
+            command.length < 200
+        )
+        val note = DemoToolSemanticMapper.formatInputSummary(
+            "show_user_confirmation_dialog",
+            buildJsonObject { put("message", huge) }
+        )
+        assertTrue(
+            "the confirmation prompt must not be pasted whole into the label: " + note.take(120),
+            note.length < 200
+        )
+    }
+
     @Test
     fun theBoundedAndUnboundedReadersStayDistinct() {
         val long = "x".repeat(200)

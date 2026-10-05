@@ -57,6 +57,11 @@ internal fun JsonObject.declaredInt(key: String): DeclaredArgument<Int> {
     // An endpoint that rounds an integer through a double sends 2e3 or 2000.0; that is
     // the same request. 20.5 of anything countable is not a value a caller can mean.
     val asDouble = primitive.doubleOrNull ?: return DeclaredArgument.Unusable
+    // Measured, not recalled: Kotlin's Double.roundToInt() throws IllegalArgumentException
+    // for NaN and for +/-Infinity, and `doubleOrNull` does accept the quoted forms "NaN"
+    // and "Infinity". Without this check the "never throws" rule this reader exists for
+    // was broken by its own integral-double branch.
+    if (!asDouble.isFinite()) return DeclaredArgument.Unusable
     if (asDouble != asDouble.roundToInt().toDouble()) return DeclaredArgument.Unusable
     return DeclaredArgument.Of(asDouble.roundToInt())
 }
@@ -105,12 +110,20 @@ internal fun JsonObject.declaredTrimmed(key: String): DeclaredArgument<String> =
 /**
  * The first argument slot holding a structured value, or null.
  *
- * Every Tool with more than one argument runs this BEFORE it checks whether anything
- * was supplied at all. Without it, a call like `{"label": {"a":1}}` to
- * `clipboard_write_text` answered "text is required" - a true statement about a
- * different argument, and one that sends the caller to fix the wrong thing while the
- * unreadable one stays. An object or array is unreadable for every reader in this
- * family, so it needs no type knowledge to spot.
+ * Four Tools run this before checking whether anything was supplied at all:
+ * `screen_perform_action`, `screen_gesture`, `clipboard_write_text`, `find_android_app`.
+ * Without it, a call like `{"label": {"a":1}}` to `clipboard_write_text` answered
+ * "text is required" - a true statement about a different argument, and one that sends
+ * the caller to fix the wrong thing while the unreadable one stays. An object or array
+ * is unreadable for every reader in this family, so it needs no type knowledge to spot.
+ *
+ * Not every multi-argument Tool uses it: `screen_read_ui_tree` and
+ * `screen_find_ui_element` refuse each slot inside their own reading loop,
+ * `screen_visual_gesture` scans its three scalar slots before the `target` object, and
+ * `terminal_bash_execute` / `launch_android_app_intent` check the one argument that can
+ * diverge from a confirmation binding. Where an absent argument already produces a
+ * refusal, adding this pre-pass would change nothing except the order of two error
+ * messages.
  *
  * The `Unusable` arms of the string readers below are unreachable while this pre-pass
  * covers the same slots; the numeric and boolean readers keep live `Unusable` arms,

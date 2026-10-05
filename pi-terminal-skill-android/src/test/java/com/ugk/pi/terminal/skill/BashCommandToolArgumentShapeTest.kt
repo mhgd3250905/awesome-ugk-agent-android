@@ -148,6 +148,43 @@ class BashCommandToolArgumentShapeTest {
         )
     }
 
+    /**
+     * The object/array screen alone was not enough: a bare `true` or `20` is a JSON
+     * primitive, and the first version of this guard let it through, so the runtime
+     * created a directory named "true" under the workspace and ran the confirmed command
+     * there. A path argument has to arrive as a string.
+     */
+    @Test
+    fun aNonStringPrimitiveWorkingDirectoryIsRefusedAndCreatesNoDirectory() {
+        listOf(JsonPrimitive(true), JsonPrimitive(20), JsonPrimitive(0.5)).forEach { declared ->
+            val executor = CapturingExecutor()
+            val root = Files.createTempDirectory("ugk-terminal-primitive-cwd").toFile()
+            workspaces += root
+            val result = runBlocking {
+                BashCommandTool(
+                    executor = executor,
+                    workspaceRoot = root,
+                    policy = TerminalToolPolicy(requireUserConfirmation = false)
+                ).execute(
+                    ToolCall(
+                        id = "call-primitive-cwd",
+                        name = "terminal_bash_execute",
+                        input = kotlinx.serialization.json.JsonObject(
+                            mapOf("script" to JsonPrimitive("pwd"), "workingDirectory" to declared)
+                        )
+                    ),
+                    ToolExecutionContext(sessionId = "session")
+                )
+            }
+            assertTrue("$declared must not become a directory name: " + result.content, result.isError)
+            assertFalse("$declared must not reach the process", executor.reached)
+            assertFalse(
+                "and nothing may be created for it",
+                File(root, "true").exists() || File(root, "20").exists()
+            )
+        }
+    }
+
     private fun JsonObjectWith(key: String, value: kotlinx.serialization.json.JsonElement) =
         kotlinx.serialization.json.JsonObject(mapOf("script" to JsonPrimitive("pwd"), key to value))
 }

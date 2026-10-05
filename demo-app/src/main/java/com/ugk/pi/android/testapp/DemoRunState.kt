@@ -194,8 +194,8 @@ object DemoToolSemanticMapper {
     fun formatInputSummary(name: String, input: JsonObject): String = when (name.lowercase()) {
         "screen_find_ui_element" -> {
             // Six selectors, mirroring ScreenAutomationTools.selectorKeys: leaving out
-            // text_exact and content_desc_exact meant an exact-match find rendered as
-            // the generic "查找屏幕 UI 元素" while the Tool had applied a real filter.
+            // text_exact and content_desc_exact made an exact-match find render as the
+            // generic label while the Tool had applied a real filter.
             val selector = findUiSelectorKeys.mapNotNull { key ->
                 when (val argument = input.displayedArgument(key)) {
                     DisplayedArgument.NotSent -> null
@@ -208,27 +208,26 @@ object DemoToolSemanticMapper {
         "screen_capture_visual" -> "获取当前屏幕截图并交给视觉模型"
         "clipboard_read_text" -> "读取当前剪贴板文本"
         "clipboard_write_text" -> {
-            val textArgument = input.displayedArgument("text")
-            val textLength = (textArgument as? DisplayedArgument.Sent)?.text?.length
-            // Compared by content, not by instance: DisplayedArgument.Sent is not a data
-            // class, so `!= Sent("false")` was true for every value and this label always
-            // read 敏感. An unreadable shape keeps the Tool's own fail-closed direction.
+            // Compared the same way the Tool compares it: kotlinx `booleanOrNull` measured
+            // case-insensitive, so "FALSE" must read 普通 here too (the arm list is pinned
+            // in DemoArgumentRemediationTest alongside the Tool's own arm).
             val sensitive = (input.displayedArgument("sensitive") as? DisplayedArgument.Sent)
-                ?.text != "false"
+                ?.text?.equals("false", ignoreCase = true) != true
             val sensitivityLabel = if (sensitive) "敏感" else "普通"
-            if (textLength != null) "写入剪贴板（${textLength} 字符，$sensitivityLabel）" else "写入剪贴板"
+            // The character count is the real length; the text itself is never echoed.
+            val characters = (input.displayedArgument("text") as? DisplayedArgument.Sent)?.text?.length
+            if (characters != null) "写入剪贴板（$characters 字符，$sensitivityLabel）" else "写入剪贴板"
         }
         "clipboard_clear" -> "清空当前剪贴板"
         "screen_visual_gesture" -> {
             val action = shownArgument(input, "action", fallback = "手势")
-            val description = (input.displayedArgument("targetDescription") as? DisplayedArgument.Sent)
-                ?.text?.take(60)
-            if (!description.isNullOrBlank()) "视觉目标: $description ($action)" else "视觉手势: $action"
+            val description = displayedLabel(input.displayedArgument("targetDescription"))
+            if (description != null) "视觉目标: $description ($action)" else "视觉手势: $action"
         }
         "launch_android_app" -> {
-            val pkg = (input.displayedArgument("package_name") as? DisplayedArgument.Sent)?.text
+            val packageLabel = displayedLabel(input.displayedArgument("package_name"))
             when {
-                !pkg.isNullOrBlank() -> "包名: $pkg"
+                packageLabel != null -> "包名: $packageLabel"
                 input.displayedArgument("package_name") === DisplayedArgument.Unreadable ->
                     "准备启动应用（$UNREADABLE_ARGUMENT_LABEL：package_name）"
                 else -> "准备启动应用"
@@ -236,11 +235,11 @@ object DemoToolSemanticMapper {
         }
         "screen_perform_action" -> {
             val action = shownArgument(input, "action", fallback = "操作")
-            val text = (input.displayedArgument("text") as? DisplayedArgument.Sent)?.text
-            val nodeId = (input.displayedArgument("nodeId") as? DisplayedArgument.Sent)?.text
+            val textLabel = displayedLabel(input.displayedArgument("text"))
+            val nodeLabel = displayedLabel(input.displayedArgument("nodeId"))
             when {
-                !text.isNullOrBlank() -> "输入: \"$text\" (节点 $nodeId)"
-                !nodeId.isNullOrBlank() -> "操作: $action (节点 $nodeId)"
+                textLabel != null -> "输入: \"$textLabel\" (节点 ${nodeLabel ?: "无"})"
+                nodeLabel != null -> "操作: $action (节点 $nodeLabel)"
                 input.displayedArgument("action") === DisplayedArgument.Unreadable ||
                     input.displayedArgument("text") === DisplayedArgument.Unreadable ||
                     input.displayedArgument("nodeId") === DisplayedArgument.Unreadable ->
@@ -260,19 +259,19 @@ object DemoToolSemanticMapper {
         }
         "screen_read_ui_tree" -> "读取当前屏幕可见 UI 元素"
         "bash", "terminal_exec" -> {
-            val cmd = (input.displayedArgument("command") as? DisplayedArgument.Sent)?.text
-                ?: (input.displayedArgument("cmd") as? DisplayedArgument.Sent)?.text
-            if (!cmd.isNullOrBlank()) "命令: $cmd" else "执行 Shell 命令"
+            val cmd = displayedLabel(input.displayedArgument("command"))
+                ?: displayedLabel(input.displayedArgument("cmd"))
+            if (cmd != null) "命令: $cmd" else "执行 Shell 命令"
         }
         "file_read", "file_write" -> {
-            val path = (input.displayedArgument("path") as? DisplayedArgument.Sent)?.text
-                ?: (input.displayedArgument("file") as? DisplayedArgument.Sent)?.text
-            if (!path.isNullOrBlank()) "文件: $path" else "文件操作"
+            val path = displayedLabel(input.displayedArgument("path"))
+                ?: displayedLabel(input.displayedArgument("file"))
+            if (path != null) "文件: $path" else "文件操作"
         }
         "show_user_confirmation_dialog" -> {
-            val message = (input.displayedArgument("message") as? DisplayedArgument.Sent)?.text
-                ?: (input.displayedArgument("prompt") as? DisplayedArgument.Sent)?.text
-            if (!message.isNullOrBlank()) "提示: $message" else "等待授权确认"
+            val message = displayedLabel(input.displayedArgument("message"))
+                ?: displayedLabel(input.displayedArgument("prompt"))
+            if (message != null) "提示: $message" else "等待授权确认"
         }
         else -> {
             val first = input.entries.firstOrNull()
@@ -283,14 +282,10 @@ object DemoToolSemanticMapper {
     /**
      * A label must never abort a run: an argument this client cannot read is named as
      * unreadable instead of throwing, and is never shown as one of the values nobody
-     * sent.
+     * sent. The value is bounded by [displayedLabel], not by each branch remembering to.
      */
     private fun shownArgument(input: JsonObject, key: String, fallback: String): String =
-        when (val argument = input.displayedArgument(key)) {
-            DisplayedArgument.NotSent -> fallback
-            DisplayedArgument.Unreadable -> UNREADABLE_ARGUMENT_LABEL
-            is DisplayedArgument.Sent -> argument.text.ifBlank { fallback }
-        }
+        displayedLabel(input.displayedArgument(key)) ?: fallback
 
     internal val findUiSelectorKeys = listOf(
         "text",

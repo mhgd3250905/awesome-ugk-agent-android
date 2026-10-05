@@ -203,16 +203,15 @@ class ScreenFindUiElementTool(
                 DeclaredArgument.Undeclared -> Unit
                 DeclaredArgument.Unusable -> return unusableArgument(call, name, key, call.input)
                 is DeclaredArgument.Of -> {
-                    if (declared.value.isBlank()) {
-                        // Split by what a blank value does to the match set, not by
-                        // appearance. An empty *identity* selector (exact text, exact
-                        // description, viewId, type) is a filter the caller stated, and
-                        // the old reader dropped it - so the result set silently grew to
-                        // everything the other selectors allow. An empty *substring*
-                        // selector already means "contains anything", which is exactly
-                        // what dropping it expresses, so refusing it would reject a call
-                        // that asked for nothing different.
-                        if (key in identitySelectorKeys) {
+                    val value = declared.value
+                    if (key in identitySelectorKeys) {
+                        // An empty *identity* selector (exact text, exact description,
+                        // viewId, type) is a filter the caller stated, and the old reader
+                        // dropped it - so the match set silently grew to everything the
+                        // other selectors allow. Refused, blank included: a whitespace-only
+                        // exact match asks for a field that is all blanks, which no caller
+                        // means and the old code silently widened.
+                        if (value.isBlank()) {
                             return screenErrorResult(
                                 callId = call.id,
                                 toolName = name,
@@ -223,8 +222,12 @@ class ScreenFindUiElementTool(
                                     "argument or name what to look for."
                             )
                         }
+                        selectors[key] = value
                     } else {
-                        selectors[key] = declared.value
+                        // A *substring* selector only means "no constraint" when it is
+                        // literally empty; " " or "\t" is a real filter, and dropping it
+                        // would widen the result set the same way the old reader did.
+                        if (value.isNotEmpty()) selectors[key] = value
                     }
                 }
             }

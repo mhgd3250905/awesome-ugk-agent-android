@@ -49,6 +49,29 @@ internal const val UNREADABLE_ARGUMENT_LABEL = "无法解析"
 /** The machine-facing trace and log word for the same fact, kept distinct from "missing". */
 internal const val UNREADABLE_ARGUMENT_STATE = "unparseable"
 
+/** How much of a caller-written value a label may quote; see `displayedLabel`. */
+internal const val MAX_LABEL_ECHO_CHARS = 60
+
+/**
+ * The text a label may show for an argument: nothing when nobody sent it, the
+ * unreadable marker when a value arrived in a shape this client cannot read, and a
+ * bounded prefix otherwise.
+ *
+ * The bound is part of the rule rather than left to each branch. Model-authored text
+ * reaches these labels from anywhere - a 200 KB script in `terminal_bash_execute`, a
+ * pasted document in `file_write`, the whole prompt of a confirmation dialog - and the
+ * label is copied into the floating window, the timeline and the run-state string. The
+ * round that added this file bounded two branches by hand and claimed in its commit
+ * message that it had bounded them all, which grep disproved.
+ */
+internal fun displayedLabel(argument: DisplayedArgument): String? =
+    when (argument) {
+        DisplayedArgument.NotSent -> null
+        DisplayedArgument.Unreadable -> UNREADABLE_ARGUMENT_LABEL
+        is DisplayedArgument.Sent ->
+            if (argument.text.isBlank()) null else argument.text.take(MAX_LABEL_ECHO_CHARS)
+    }
+
 /**
  * A compact, bounded fragment for a log line: user-entered text is never quoted in
  * full, and an unreadable value must not look like an absent one.

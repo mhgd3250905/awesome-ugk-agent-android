@@ -401,6 +401,61 @@ class ArgumentFamilyCoverageTest {
         )
     }
 
+    /**
+     * Two arms the closing round's own probe found.
+     *
+     * `doubleOrNull` measured NaN and +/-Infinity for both the bare and the quoted
+     * spelling, and Kotlin's `Double.roundToInt()` *throws* on them - so the reader that
+     * exists to never throw was throwing, in its own integral-double branch
+     * (build/review-evidence/r14-value-domain.txt, rows INT "NaN" / NaN / roundToInt=THROWS).
+     *
+     * A whitespace substring selector is a filter the caller stated ("matches anything
+     * containing a space"), not an absent one; only the identity selectors treat a blank
+     * value as meaningless.
+     */
+    @Test
+    fun nonFiniteNumbersAreRefusedInsteadOfThrowing() {
+        listOf<JsonElement>(
+            JsonPrimitive(Double.NaN),
+            JsonPrimitive(Double.POSITIVE_INFINITY),
+            JsonPrimitive(Double.NEGATIVE_INFINITY),
+            JsonPrimitive("NaN"),
+            JsonPrimitive("Infinity"),
+            JsonPrimitive(1e30),
+            JsonPrimitive(2147483648.0)
+        ).forEach { element ->
+            val failure = runCatching { JsonObject(mapOf("v" to element)).declaredInt("v") }
+            assertTrue("declaredInt must not throw for $element", failure.isSuccess)
+            assertEquals(
+                "and must refuse the value rather than default it: $element",
+                DeclaredArgument.Unusable,
+                failure.getOrNull()
+            )
+        }
+    }
+
+    @Test
+    fun aWhitespaceSubstringSelectorIsAFilterNotAnAbsentOne() {
+        val result = runBlocking {
+            ScreenFindUiElementTool(RecordingBackend()).execute(
+                ToolCall(
+                    "find",
+                    "screen_find_ui_element",
+                    buildJsonObject {
+                        put("text", "\t")
+                        put("type", "Button")
+                    }
+                ),
+                context
+            )
+        }
+        assertFalse("a tab filter is a real request: " + result.content, result.isError)
+        assertTrue(
+            "and it must narrow the result set instead of being dropped: " + result.content,
+            result.content.contains("\"totalCount\":0")
+        )
+    }
+
     private class RecordingBackend : ScreenAutomationBackend {
         override fun readUiTree(sessionId: String, maxDepth: Int, maxNodes: Int): ScreenReadResult =
             ScreenReadResult(

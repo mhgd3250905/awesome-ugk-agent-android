@@ -308,7 +308,12 @@ class BashCommandTool(
         // ... workingDirectory"), and the NUL screen below exists for the same reason.
         // JSON null and an absent key still mean the workspace root.
         val declaredWorkingDirectory = call.input.optionalElement("workingDirectory")
-        if (declaredWorkingDirectory != null && declaredWorkingDirectory !is JsonPrimitive) {
+        val pathPrimitive = declaredWorkingDirectory as? JsonPrimitive
+        if (declaredWorkingDirectory != null && pathPrimitive?.isString != true) {
+            // Not only an object or array: a bare `true` or `20` is a JSON primitive, and
+            // the first form of this guard let it through, so the runtime mkdir()-ed a
+            // directory called "true" and ran the confirmed command there while the
+            // confirmation ticket stayed bound to the value `true`.
             return error(
                 call,
                 "INVALID_WORKSPACE_PATH",
@@ -316,9 +321,7 @@ class BashCommandTool(
                     "; it must be a relative path string inside the terminal workspace."
             )
         }
-        val workingDirectory = resolveWorkingDirectory(
-            (declaredWorkingDirectory as? JsonPrimitive)?.contentOrNull
-        )
+        val workingDirectory = resolveWorkingDirectory(pathPrimitive?.contentOrNull)
             ?: return error(
                 call,
                 "INVALID_WORKSPACE_PATH",
@@ -482,7 +485,7 @@ class BashCommandTool(
     private fun describedShape(value: JsonElement): String = when (value) {
         is JsonArray -> "an array of " + value.size + " items"
         is JsonObject -> "an object with " + value.size + (if (value.size == 1) " key" else " keys")
-        else -> "a value this Tool cannot read"
+        else -> "the value " + ((value as? JsonPrimitive)?.content?.take(40) ?: "it cannot read")
     }
 
     /**
