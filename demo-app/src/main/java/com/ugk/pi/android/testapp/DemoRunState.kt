@@ -168,7 +168,7 @@ object DemoToolSemanticMapper {
         "clipboard_read_text" -> "读取剪贴板文本"
         "clipboard_write_text" -> "写入剪贴板文本"
         "clipboard_clear" -> "清空剪贴板"
-        "screen_launch_app" -> "启动应用"
+        "launch_android_app" -> "启动应用"
         "screen_gesture" -> "执行屏幕手势"
         "screen_press_key" -> "触发按键"
         "screen_global_action" -> "系统全局按键"
@@ -310,7 +310,7 @@ object DemoToolSemanticMapper {
             "clipboard_read_text" -> "剪贴板文本已读取（内容仅供本轮模型使用）"
             "clipboard_write_text" -> "剪贴板文本已写入"
             "clipboard_clear" -> "剪贴板已清空"
-            "screen_launch_app" -> "已发起目标应用启动"
+            "launch_android_app" -> "已发起目标应用启动"
             "screen_gesture" -> "手势操作已完成"
             "bash", "terminal_exec" -> {
                 val lines = result.content.lines().filter { it.isNotBlank() }

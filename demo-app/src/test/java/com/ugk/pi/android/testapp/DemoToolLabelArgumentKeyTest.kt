@@ -43,6 +43,27 @@ class DemoToolLabelArgumentKeyTest {
     }
 
     @Test
+    fun theAppLaunchToolIsNamedAndDescribedByItsRegisteredName() {
+        assertEquals(
+            "the friendly-name branch keyed screen_launch_app never fired for a real launch",
+            "启动应用",
+            DemoToolSemanticMapper.friendlyName("launch_android_app")
+        )
+        val summary = DemoToolSemanticMapper.formatResultSummary(
+            com.ugk.pi.android.ToolResult(
+                toolCallId = "call-1",
+                name = "launch_android_app",
+                content = "launched"
+            )
+        )
+        assertEquals(
+            "the result branch keyed screen_launch_app never fired either",
+            "已发起目标应用启动",
+            summary
+        )
+    }
+
+    @Test
     fun anUnknownGestureFallsBackInsteadOfNamingNothing() {
         val summary = DemoToolSemanticMapper.formatInputSummary(
             "screen_gesture",
