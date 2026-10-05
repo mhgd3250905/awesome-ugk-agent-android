@@ -34,19 +34,15 @@ internal object DemoScreenAutomationPolicy {
         "screen_find_ui_element" -> " [snapshot=find]"
         "screen_capture_visual" -> " [visual=observe]"
         "screen_visual_gesture" -> {
-            val action = call.input["action"]?.jsonPrimitive?.contentOrNull ?: "missing"
-            val observation = call.input["observationId"]?.jsonPrimitive?.contentOrNull
-                ?.takeIf { it.isNotBlank() }
-            " [visualAction=$action observation=${if (observation == null) "missing" else "present"}]"
+            val action = call.input.displayedText("action")
+                .ifBlank { call.input.displayedPresence("action") }
+            " [visualAction=$action observation=${call.input.displayedPresence("observationId")}]"
         }
         "screen_perform_action" -> {
-            val action = call.input["action"]?.jsonPrimitive?.contentOrNull ?: "missing"
-            val snapshot = call.input["snapshotId"]?.jsonPrimitive?.contentOrNull
-                ?.takeIf { it.isNotBlank() }
-            val node = call.input["nodeId"]?.jsonPrimitive?.contentOrNull
-                ?.takeIf { it.isNotBlank() }
-            " [action=$action snapshot=${if (snapshot == null) "missing" else "present"} " +
-                "node=${if (node == null) "missing" else "present"}]"
+            val action = call.input.displayedText("action")
+                .ifBlank { call.input.displayedPresence("action") }
+            " [action=$action snapshot=${call.input.displayedPresence("snapshotId")} " +
+                "node=${call.input.displayedPresence("nodeId")}]"
         }
         else -> ""
     }

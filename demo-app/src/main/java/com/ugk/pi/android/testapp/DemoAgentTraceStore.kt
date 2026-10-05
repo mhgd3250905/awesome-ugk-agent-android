@@ -314,7 +314,9 @@ internal object DemoAgentTraceFormatter {
             }
 
             "screen_gesture" -> {
-                call.input.stringValue("gesture")?.take(32)?.let { put("gesture", it) }
+                // The Tool's schema field is `action`; reading `gesture` recorded
+                // nothing for every gesture the Agent performed.
+                call.input.stringValue("action")?.take(32)?.let { put("gesture", it) }
             }
 
             "screen_press_key", "screen_global_action" -> {
@@ -322,8 +324,10 @@ internal object DemoAgentTraceFormatter {
                 call.input.stringValue("action")?.take(32)?.let { put("action", it) }
             }
 
-            "screen_launch_app" -> {
-                put("packageNamePresent", call.input.containsKey("packageName"))
+            "launch_android_app" -> {
+                // No Tool is named `screen_launch_app`; this branch recorded nothing for
+                // any app the Agent actually launched.
+                put("packageNamePresent", call.input.containsKey("package_name"))
             }
         }
     }
@@ -341,7 +345,7 @@ internal object DemoAgentTraceFormatter {
     }
 
     private fun JsonObject.stringValue(key: String): String? =
-        this[key]?.jsonPrimitive?.contentOrNull
+        displayedText(key).takeIf { it.isNotEmpty() }
 
     private fun fingerprint(value: String): String {
         val digest = MessageDigest.getInstance("SHA-256")
