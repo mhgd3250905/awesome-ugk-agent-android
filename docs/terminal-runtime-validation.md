@@ -782,3 +782,182 @@ MODULE pi-file-skill-android          tests=13  failures=0 errors=0 skipped=1
   4. **改判上一轮的「不修」要先看前提还在不在。** F4 的理由在 PR #13 合并那一刻失效。动作：每轮开工把上一轮「已核查不修」表逐条问一遍前提，并把复测命令写回。
   5. **仓库属性探测必须在 checkout 之后**（`.gitattributes`、行尾普查本轮又踩一次）。动作：开工序列固定 fetch → checkout baseline → 属性普查。
   6. **MSYS 的 `git` 不能被子进程执行。** 取证脚本用绝对 `D:\Git\cmd\git.exe`；且在跑会 `git checkout --` 复原的脚本之前必须先提交（本轮两处测试改动当时未提交，若脚本没在第一步就崩，就会被自己的还原逻辑抹掉）。动作：脚本 `assert_clean` + 派发/变异前先 commit（这条第七次记，仍在发生）。
+
+
+## 42. 第十五轮 P0 审查（确认门禁烧掉答案；不可读的整集合快照被当成「没有数据」，基线 `main@de7102f`，2026-10-07）
+
+宿主实测：Windows 10.0.26200.9457、Git Bash、Node v24.15.0、Python 3.14.2、git 2.50.0；
+JDK 17.0.11 在 `E:/Android/Android Studio/jbr`（`java` 不在 PATH）、`GRADLE_USER_HOME=E:/DevCaches/gradle`、
+SDK `E:/Android/SDK`（NDK 28.2.13676358 在位）。磁盘 `C: 200G/183G/17G 92%`、`E: 269G` 可用；
+会话开始空闲物理内存 9037 MB / 32 GB。`adb devices -l` 为空（adb server 在 127.0.0.1:5037 监听），
+无 qemu 进程；按既有纪律不启动新 AVD，设备面整轮未跑。
+正式工作副本 `E:/AII/ugk-android-new` 与 `E:/AII/ugk-cockpit` 服务（pid 30164，
+`--data-directory E:\AII\ugk-cockpit\.data\service`）、`E:\AII_Gemini\ugk-medtrum` 的 cdp-proxy（pid 16624）
+全程未进入、未 kill。
+
+### 门禁口径（每个数字都指向一个日志文件）
+
+- 基线独占全量（`de7102f`，`--rerun-tasks`）：`1034 tests / 3 skipped / 0 failure`，154 份 XML，
+  时间戳全部在 `2026-10-07T03:03:48+0800 … 03:05:51+0800` 窗口内，`EXIT=0`、`AGG_EXIT=0`、
+  `STALE_TIMESTAMP_SUITES=0`。原文 `build/review-evidence/r15-baseline-fullgate.log`。
+  这条实测**证实**了 `AGENTS.md` 现写的 `1034`；第十四轮的 `1077` 只属于未合并分支（PR #18 OPEN）。
+- 交付态独占全量（代码状态 `0e89d17`，同命令同窗口校验）：`1054 tests / 3 skipped / 0 failure`，
+  157 份 XML，`EXIT=0`、`AGG_EXIT=0`、`STALE_TIMESTAMP_SUITES=0`。
+  原文 `build/review-evidence/r15-delivery-fullgate.log`。
+  逐模块（基线 → 交付）：ugk-pi 266→273（+7）、file 17→17、schedule 34→34、attention 18→18、
+  task-runtime 49→49、system-skill 63→63、agent-skill-runtime 101→101、terminal-runtime 60→60、
+  terminal-skill 52→52、demo-app 374→387（+13）。合计 +20 = 本轮新增用例数（核心 7 + demo 13）。
+  **差值声明**：该数字取自 `0e89d17`；本节（`docs/`）与台账追加是其后仅有的文档改动，不含 `src/`。
+- 冲突面：本轮 10 个改动文件与 OPEN 的 PR #18 的 22 个文件**交集为 0**，
+  `git merge-tree --write-tree 38eeee1 HEAD` 退出 0、无冲突标记
+  （`build/review-evidence/r15-pr18-overlap.txt`）。
+
+### 发现与修复
+
+**F1 P1** `UserConfirmationDialogTool.execute` — 弹窗先展示、票据后计算。所有与用户回答无关的失败点
+（`require(sessionId.isNotBlank())`——`AgentSession` 不校验 id、空串合法；`require(isValidNonce)`；
+`sha256(target.input)` 拒绝 `{"count":1e100000}` 这种合法 JSON；`Math.addExact` 时钟溢出）都在弹窗之后。
+`isError` 的确认结果被 `UserConfirmationRequiredTool.immediateDialogResult` 读成「没有确认」，
+受保护 Tool 因此回答「先调用 show_user_confirmation_dialog 再重试」，已经答过一次的用户被再弹一次窗。
+修复：`requireIssuable` 收纳 `issue()` 全部的失败点并由 `issue()` 调用（两侧不会分叉），
+确认 Tool 在调用 presenter 之前跑它、并只抽一次 nonce；时钟仍在答复时读（TTL 从决定起算）。
+红证 `build/review-evidence/r15-fa-baseline-red2.log`（4 红 / 2 对照绿）。
+
+**F2 P0** `DemoConversationStore.decodeStoredConversations` — 整个数组解析失败返回 `emptyList()`，
+而该文件注释写着「One bad element must not discard otherwise valid conversations」，那句只在数组
+本身解析成功时成立。`readAll()` 缓存空结果，随后任一普通动作（首启 `ensureActive()`、`create()`）
+把整份用户对话覆盖成一条。修复：`loadStoredSnapshot` 把「没有存过 / 是空的 / 读不出来 / 读出来但一条可用都没有」
+分开；`salvageStoredConversationArray` 在真解析器裁决下按完整记录回退（最多 16 次前缀，不用正则猜文本），
+完整记录回到应用而不只是回到文件；`DemoUnreadableSnapshotArchive` 在任何写入之前按内容哈希把原始字节
+存进 `filesDir/snapshot-recovery/`（temp+rename、每源限 3 份、写不成则 `Log.w` 报量不静默）。
+该文件自身的 KDoc 早已承诺「treats malformed preferences as recoverable data」——本轮是让代码回到它声称的样子。
+
+**F3 P1** `ApiProviderSettingsJson` — 同一形状的读-改-写：坏值 → `empty()` → 一次「保存」抹掉其余
+provider 与 API key，回执还说「已保存并启用」。同一规则落地；结构修复**故意不做**（容器是对象，
+撕裂尾部无法在不猜嵌套的前提下闭合），登记为剩余缺口。
+兄弟落点普查（第三个整集合 prefs 存储）：`AndroidAgentTaskRuntime` 的 `KEY_TASKS` 早已有
+`writeBackup(raw)` 在 `writeRaw` 之前落盘，规则一致，仅备份槽单份可被下次损坏覆盖（登记不修）。
+
+**F4 P1** `UserConfirmationRequiredTool` 的拒绝集合与 demo `ConfirmationVisualPolicy` 的取消按钮词汇
+是两份手抄清单：`not_now/close/abort/dismiss/later` 被画成 Cancel 按钮却不在 SDK 的 `declinedButtonIds` 里，
+用户点「暂不」得到的是「请先调用确认 Tool 再重试」→ 同一个弹窗回到他们刚做完的决定之上。
+修复：`USER_CONFIRMATION_ACCEPTED_BUTTON_IDS` / `USER_CONFIRMATION_DECLINED_BUTTON_IDS` 成为唯一公开定义，
+demo 的分类派生自它。没有放宽授权面：新增 id 只进拒绝集合，且 `approve` 那条「未知按钮不得说成用户已拒绝」
+的既有用例仍绿（双向都测，§10）。红证 `build/review-evidence/r15-fb1-red3.log`，
+失败落在循环里第一个非规范 id 上而同一条用例的 `cancel` 通过，一次运行同时证明假件与可达性。
+
+**F5–F8 本轮修复自己引入的缺陷**（由「专审整改」那一轮在当前树复跑后成立，修见 `2f2128b`、`0e89d17`）：
+- F5 `salvageStoredConversationArray` 的边界搜索用 `lastIndexOf('}', end - 1)`，而 Java/Kotlin 的
+  `fromIndex` **含**该位；前缀末位正好是 `}` 时返回同一个位置、`end` 不变，16 次预算全耗在同一个候选上后返回 null。
+  「写入停在闭合括号之后」恰是最可能的撕裂偏移。改 `end - 2` 保证边界严格递减。
+  改前在工程 JDK 上实证：`lastIndexOf(e2-1)=51 e2=52`（不前进）对比 `lastIndexOf(e2-2)=26`（回到上一条记录）。
+- F6 「不可读」被定义成「解析不过」，集合错了：`[{"id":""}]`、`{"configs":[{无 id 记录}]}` 解析通过、
+  一条可用都没有，仍会被下次保存抹掉。改为两条落点共用一条规则。
+- F7 provider 存储 `load()` 两次解析（`activeConfig()` 有 9 个生产调用点，每个都新建 store）。合一次。
+- F8 对话归档跑在 `synchronized(cacheLock)` 里，而该文件自己的注释说这把锁不该等磁盘。改为锁内决定、锁外写。
+
+### 变异矩阵（每条整改都要「退回旧实现即判红」）
+
+`build/review-evidence/r15-mutation-matrix-final3.txt`：11 行全部 CONTROL 先绿、注入确实落地（回读断言）、
+指定那一条用例变红、`git checkout --` 复原后 `git status --porcelain` 为空。
+未落地的一次性自检：m5–m10 第一轮整批被控制闸挡下，原因是新加的 provider 用例少了一个 `assertTrue` 导入
+让 demo-app 测试编译失败——**闸门挡住了一次会被读成「注入没抓住」的假结果**，而不是放它过去。
+
+### 已核查但不修（附证据）
+
+1. `ActivityUserConfirmationDialogPresenter` 的 `?: CANCEL_BUTTON_ID` 造一个请求里没有的按钮 id，
+   是 F1 那条「宿主返回未提供 id」在本仓的真实生产者。本轮不修生产者：SDK 侧已把危害压掉
+   （伪造 id 变成绑定票据的「没有用户决定」，不再触发第二次弹窗）；要修得给
+   `UserConfirmationDialogResult` 加一等「用户主动放弃」语义，属公开接口扩面 + 宿主迁移。
+2. `HeadlessConfirmationDialogPresenter` 与 `AgentAuthorizationPolicy` 各自仍留一份按钮词汇表副本
+   （前者 `close` 在、后者 `not_now` 不在）。改它们会移动 `withoutUserDecision` 的语义边界
+   （无 UI 的后台回合会不会被说成「用户拒绝了」），与 F4 的修复方向冲突，登记给下一轮连同用例一起判。
+3. `AndroidAgentTaskRuntime` 的 `KEY_TASKS_BACKUP` 单槽、可被下次损坏覆盖——同族规则已满足（备份先于覆盖写），
+   且没有任何 main 读回它，KDoc 明写「recoverable by hand」，是诚实陈述不是假门禁。
+4. `DemoAgentTraceStore.compact()` 两阈值不自洽：`MAX_BYTES = 512*1024`、`MAX_RETAINED_LINES = 1_500`
+   → 保留行平均超过 349.5 B 时压缩不可能把文件降回阈值以下，此后每次 append 整文件重读重写。
+   算术即证（`git grep -nE "MAX_BYTES|MAX_RETAINED_LINES" -- demo-app/src/main`）。
+   该文件在 OPEN PR #18 的 22 文件清单内，本轮避让。
+5. 一次性 Waiting 任务到点时 `DemoUrgentInteractionDispatcher.timerAllowsInteraction` 返回 false，
+   用户对重要提醒的真实点击被丢弃。第十一轮已把该族拆成 `DemoUrgentInteractionLedger` 并钉住释放规则，
+   本轮复跑其用例仍绿，判为已核查的既定产品门禁而非缺陷。
+6. `UserConfirmationDialogTool(override val name = …)` 允许宿主改名，而受保护 Tool 按常量比对名字，
+   全仓无任何地方检测这种错配；`AGENTS.md`/契约文档要求「引用常量」，实测 main 源码里仍有 5 处字面量
+   `"show_user_confirmation_dialog"`（`DemoRunState.kt` 3 处、`AppPrivateFileTools.kt`、
+   `AndroidAutomationAgentPlugin.kt`、`BashCommandTool.kt` 2 处）。改这些字面量要动的文件里
+   `DemoRunState.kt`、`BashCommandTool.kt` 属 PR #18 清单，本轮不改；后果是 fail-closed（一切都拒绝），
+   不是泄权。
+
+### 被否掉的复核立案（附复测命令）
+
+1. 「教学可在定时任务 Waiting 时启动，于是 `DemoDelayedMessageDispatcher.dispatch()` 的
+   `check(!isScreenOperationOwned())` 会把周期任务永久打死」——**否**。
+   `DemoTeachingHost` 起手里就有 `check(process.delayedTasks.snapshot() is DemoDelayedTaskState.Idle)`；
+   录制、工作流、教学、`MainActivity.runAgent` 四条启动路径都卡非 Idle 定时任务。
+   复测：`git grep -n "delayedTasks.snapshot()" -- demo-app/src/main`。
+2. 「`DemoDelayedTaskController` 的 init 在会话被删时清不掉标记，于是每次启动重复播报中断」——**否**。
+   `appendMessagesAndFlush` 对未知 id 返回 null 而非抛异常，`runCatching{}.onSuccess{ clearMarker() }` 成立。
+3. 「`UserConfirmationRequiredTool` / `show_user_confirmation_dialog` 在 main 源码里不存在」——**否，且方法是错的**：
+   `git grep … -- '*/src/main'` 这条 pathspec 连已知存在的 `class AgentRuntime` 都是零命中。
+   正确姿势：不带 pathspec 再 `| grep "/src/main/"`。见「过程失败登记」第 1 条。
+4. 整改审那一轮说「对话归档那条用例的前提不成立、fixture 其实可救」——**否**。
+   按文件里真实字节重放循环：`{` 位置是相邻的 55/56（`messages` 数组根本没闭合），任何切点都不成数组，
+   归类为不可读是对的、用例为对的原因绿。但 fixture 不真实，已另加 F6 那两条真臂（`m10` 反证了旧的那条
+   钉的是另一条臂）。
+5. 同一轮说「票据 `issue()` 在弹窗之后仍可能抛（注入时钟在两次读取之间变负或饱和）」——**事实成立，本轮不改**。
+   需要注入时钟或设备时钟落到 `Long.MAX_VALUE` 前两分钟之内；替代方案（把时间戳钉在提问时刻）会让
+   读两分钟才答的用户拿到过期票据并被引导再弹一次窗，正是本轮要消除的形状。改为把残余如实写进 KDoc。
+6. 同一轮说「归档目录可能无界增长」——**否**，`pruneOldest` 每前缀限 3 份（约 6 个文件）。
+
+### 未证实项（合并前应跑）
+
+1. 设备/仪器面整轮未跑：`adb devices -l` 空、C: 剩 17 GB。复跑：`:demo-app:installDebug` →
+   `adb shell appops set com.ugk.pi.agent SYSTEM_ALERT_WINDOW allow` →
+   `./gradlew :demo-app:connectedDebugAndroidTest`（26 文件 / 76 个 `@Test`）+
+   `:terminal-probe-demo-a:connectedDebugAndroidTest` + `:terminal-probe-demo-b:connectedDebugAndroidTest`。
+2. `AgentFloatingWindow.clear()` 与 `hideConfirmation()` 都是 `confirmationResult = null` 而不调用它
+   （`selectConfirmation` 才调用），调用点在 `MainActivity` 三处。若悬浮窗确认正挂在
+   `suspendCancellableCoroutine` 上，这条路径是否让宿主回合永久等待**本轮无法在宿主判红**（需要真窗口与 Looper）。
+   合并前应跑悬浮/确认相关仪器用例，或补一条「clear 期间未决确认必须被以 `withoutUserDecision` 结算」的断言。
+3. 「torn SharedPreferences 写」在真机上是否就是 F2/F3 的成因：本轮证明的是「值一旦不可读，下一次保存必然覆盖」
+   这条链条本身，不主张 Android 层的具体撕裂形态。
+4. `scripts/terminal-runtime/verify-runtime.ps1 -CheckPackages` 未跑（本轮未触碰原生载荷）。
+
+### 门禁自身的状态（本轮实测）
+
+- 本仓无 `.github/workflows`（`ls -a .github` → No such file or directory），唯一自动门禁是 `AGENTS.md`
+  的十个 `testDebugUnitTest`；本轮基线与交付两次运行里十个任务全部产出用例，无 `NO-SOURCE` 假绿项。
+- 文档门禁清单**不含** `:demo-app:connectedDebugAndroidTest`，而 JVM 门禁也不编译 `src/androidTest`。
+  本轮实测该源集目前仍可编译（`:demo-app:compileDebugAndroidTestKotlin` `BUILD SUCCESSFUL`、`EXIT=0`，
+  `build/review-evidence/r15-androidtest-compile.log`）——这是「现在还没坏」，不是「有人在把关」。
+  本轮不改 `AGENTS.md`（在 PR #18 清单内），把这一行交给下一次台账收口。
+- 受保护工具名字表活性仍由第十三轮 §40 F2 的用例把住，本轮独占复跑绿：
+  `build/review-evidence/r15-name-liveness-rerun.log`（file 17 / agent-skill-runtime 101，0 failure）。
+
+### 过程失败登记
+
+1. **pathspec 假零**：`git grep -n "<符号>" -- '*/src/main'` 对确实存在的符号返回空（连
+   `class AgentRuntime` 都零命中），一度让我把「确认门禁类不存在」当成发现。此后：先跑一条
+   已知存在符号的对照探针，命中数不符就判定是工具用法而不是事实。
+2. **取证脚本自己的 CRLF 让整轮矩阵作废一次**：Python 在 Windows 上 `print` 走文本模式，
+   `ids` 清单每行尾带 `\r`，`--tests` 过滤器因此匹配 0 个用例，7 行全部「CONTROL 不绿」。
+   矩阵的控制闸把它们全判废而不是给出假绿——修法是喂给 `tr -d '\r'`。
+3. **`bash -c` 里套 Python 字面量再次静默吃掉转义**：补丁写成 `tr -d "<CR 实字符>"`（功能上凑巧正确但不可读），
+   改用行号/字面量脚本 + `cat -A` 回读才定形。同一条教训第八次复发。
+4. **一次「红了但没归因」的取数被自己否掉**：`anUnreadableConversationSnapshot…` 首轮红在
+   `JsonDecodingException`（我的断言先解析了错误文本），是假件问题不是缺陷；调整断言顺序后重跑，
+   红落在 `expected:<0> but was:<1>` 的缺陷语义上（`r15-fa-baseline-red.log` 保留为判废记录）。
+5. **旧矩阵行的锚点在改名/改形之后过期**：m2/m5/m7 三行 `ANCHOR_NOT_UNIQUE`，说明取证脚本的期望集合
+   就是过期断言；按当前字节重钉后全部落地（第十次记，仍在发生）。
+
+### 本轮新增教训（以及该固化成什么动作）
+
+1. **「解析得过」不等于「读得出」**。凡是「读侧容错 + 写侧整体覆盖」的组合，判据必须是
+   *产出了多少可用数据*，而不是*文本是否合法*。动作：给这类落点固定两条控制用例——
+   显式空容器不得触发保留、合法文本里装不可用记录必须触发保留；少一条就是假覆盖。
+2. **边界递减必须由被搜索位排除上一次命中来保证**。`lastIndexOf(ch, i)` 含 `i`，所以「从 `end-1` 往前找」
+   在后缀本身就是目标字符时不前进。动作：凡循环里写「找上一个 X 然后收缩边界」，把
+   「从 `end-2` 起找」和一条「尾部正好停在 X 上」的用例一起写，并优先在宿主 JDK 上跑一次位置断言。
+3. **矩阵的 CONTROL 闸是唯一能区分「注入没被抓住」与「我的取数坏了」的东西**：本轮两次整批作废
+   （CRLF、缺导入）都被它挡住。动作：任何行不绿就丢弃该行的结论，且必须去读控制日志本身，
+   不许把丢弃记成「这条回退不判红」。
