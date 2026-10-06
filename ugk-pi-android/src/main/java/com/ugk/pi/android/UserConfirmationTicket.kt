@@ -66,16 +66,38 @@ data class UserConfirmationTicket(
             }.getOrDefault(false)
         }
 
+        /**
+         * Every way [issue] can refuse a request, checked without consuming one.
+         *
+         * The dialog Tool settles these before a user is asked anything: an answer
+         * cannot be re-collected without raising the modal again on a question the
+         * user already left, so a refusal that only becomes visible after the
+         * dialog is a refusal that should have happened first. [issue] runs this
+         * same set, so the preflight cannot drift from the real construction.
+         */
+        internal fun requireIssuable(
+            sessionId: String,
+            target: UserConfirmationTarget,
+            issuedAtEpochMillis: Long,
+            nonce: String
+        ) {
+            require(sessionId.isNotBlank()) { "sessionId must not be blank" }
+            require(target.toolName.isNotBlank()) { "target.toolName must not be blank" }
+            require(issuedAtEpochMillis >= 0L) { "issuedAtEpochMillis must not be negative" }
+            require(isValidNonce(nonce)) { "nonce must be a URL-safe value containing at least 128 bits" }
+            // Model-authored: the one arm a gateway can reach without any host bug.
+            UserConfirmationInputFingerprint.sha256(target.input)
+            // Saturating clock: the TTL addition throws, and it is part of issue().
+            Math.addExact(issuedAtEpochMillis, DEFAULT_TTL_MILLIS)
+        }
+
         internal fun issue(
             sessionId: String,
             target: UserConfirmationTarget,
             issuedAtEpochMillis: Long,
             nonce: String
         ): UserConfirmationTicket {
-            require(sessionId.isNotBlank()) { "sessionId must not be blank" }
-            require(target.toolName.isNotBlank()) { "target.toolName must not be blank" }
-            require(issuedAtEpochMillis >= 0L) { "issuedAtEpochMillis must not be negative" }
-            require(isValidNonce(nonce)) { "nonce must be a URL-safe value containing at least 128 bits" }
+            requireIssuable(sessionId, target, issuedAtEpochMillis, nonce)
             val expiresAtEpochMillis = Math.addExact(
                 issuedAtEpochMillis,
                 DEFAULT_TTL_MILLIS
