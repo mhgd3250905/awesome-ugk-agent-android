@@ -812,6 +812,16 @@ SDK `E:/Android/SDK`（NDK 28.2.13676358 在位）。磁盘 `C: 200G/183G/17G 92
   `git merge-tree --write-tree 38eeee1 HEAD` 退出 0、无冲突标记
   （`build/review-evidence/r15-pr18-overlap.txt`）。
 
+  **上述一条在本节写下的那一刻起就不成立了，如实登记。** 那条测量是在本轮还只有 9 个文件时跑的；
+  本节自身追加到 `docs/terminal-runtime-validation.md` 末尾，而 PR #18 也在同一位置追加 §41，
+  于是文件集合变了。当前实测（同一命令，`build/review-evidence/r15-pr18-overlap-final.txt`）：
+  本轮共 15 个改动文件，其中 12 个非文档文件与 PR #18 的 22 个文件交集仍为 **0**；
+  唯一冲突是 `docs/terminal-runtime-validation.md` 本身——
+  `CONFLICT (content): Merge conflict in docs/terminal-runtime-validation.md`，
+  两支都在文件末尾追加自己的编号小节，解决方式就是把 §41 与 §42 按顺序都留下。
+  教训回到本仓老规矩：**任何「交集/无冲突」这类状态句要绑定取数时点的文件集合**，
+  否则写下它的那笔提交本身就是第一个反例。
+
 ### 发现与修复
 
 **F1 P1** `UserConfirmationDialogTool.execute` — 弹窗先展示、票据后计算。所有与用户回答无关的失败点
