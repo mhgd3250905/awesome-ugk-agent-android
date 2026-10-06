@@ -14,6 +14,15 @@
 > 同节「宿主无法区分时保持 `false`，SDK 视同一次真实按钮选择」需按此收窄：SDK 会检查该 id
 > 是否在本次请求的按钮集合内，不在则不视为真实选择。自查：
 > `git grep -n "not present in the request" -- ugk-pi-android/src/main`。
+> **第 4 节正文里那句「拒绝按钮集合默认 `cancel/deny/no/reject/decline/stop`」也已过期**：
+> 第十五轮把按钮词汇收成唯一公开定义
+> `USER_CONFIRMATION_DECLINED_BUTTON_IDS`（`ugk-pi-android/.../UserConfirmationRequiredTool.kt`，
+> 实测 11 个 id：另含 `close/abort/dismiss/later/not_now`），因为 demo 正是把这些 id 画成 Cancel 按钮，
+> 用户点「暂不」却被告知「请先调用确认 Tool 再重试」等于把刚做完的决定再弹一次窗。
+> 放宽只发生在**拒绝**一侧，授权集合 `USER_CONFIRMATION_ACCEPTED_BUTTON_IDS` 未变。
+> 仍未解决且如实登记：SDK 比较 id 大小写敏感，而 demo 的可视化分类与 Headless presenter 都先
+> `lowercase()`，所以 `"Not_Now"` 这类混合大小写仍会被画成 Cancel 却读不成拒绝。
+> 自查：`git grep -n "USER_CONFIRMATION_DECLINED_BUTTON_IDS" -- '*/src/main/*'`。
 
 本文是 SDK-OPT-008 的协议设计结果。它先固化确认边界，再进入 Core、System、Terminal 和 Demo 的一次性实现；本文件本身不改变运行时行为。
 

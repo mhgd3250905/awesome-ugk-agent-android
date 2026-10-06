@@ -807,7 +807,9 @@ SDK `E:/Android/SDK`（NDK 28.2.13676358 在位）。磁盘 `C: 200G/183G/17G 92
   逐模块（基线 → 交付）：ugk-pi 266→273（+7）、file 17→17、schedule 34→34、attention 18→18、
   task-runtime 49→49、system-skill 63→63、agent-skill-runtime 101→101、terminal-runtime 60→60、
   terminal-skill 52→52、demo-app 374→387（+13）。合计 +20 = 本轮新增用例数（核心 7 + demo 13）。
-  **差值声明**：该数字取自 `0e89d17`；本节（`docs/`）与台账追加是其后仅有的文档改动，不含 `src/`。
+  **差值声明**：该数字取自代码状态 `0e89d17`。自查方法（不依赖本节是否又被人追加过）：
+  `git log --format='%h %p' <sha>..HEAD --name-only | grep -E "src/|build.gradle"` ——
+  空输出即「测量之后只有文档改动」；本轮截至写作时点，`0e89d17` 之后仅有文档提交。
 - 冲突面：本轮 10 个改动文件与 OPEN 的 PR #18 的 22 个文件**交集为 0**，
   `git merge-tree --write-tree 38eeee1 HEAD` 退出 0、无冲突标记
   （`build/review-evidence/r15-pr18-overlap.txt`）。
@@ -856,11 +858,19 @@ demo 的分类派生自它。没有放宽授权面：新增 id 只进拒绝集�
 的既有用例仍绿（双向都测，§10）。红证 `build/review-evidence/r15-fb1-red3.log`，
 失败落在循环里第一个非规范 id 上而同一条用例的 `cancel` 通过，一次运行同时证明假件与可达性。
 
-**F5–F8 本轮修复自己引入的缺陷**（由「专审整改」那一轮在当前树复跑后成立，修见 `2f2128b`、`0e89d17`）：
+**F5–F8 本轮修复自己引入的缺陷**（由「专审整改」那一轮在当前树复跑后成立；源码修复在 `2b0e02a`，
+`2f2128b` 与 `0e89d17` 只是随后补的那条真臂和它缺的一个导入——本句初稿把哈希写成后两笔，
+被最后一层复核抓到，属本轮自己的「文档哈希要来自同一条命令」旧坑）：
 - F5 `salvageStoredConversationArray` 的边界搜索用 `lastIndexOf('}', end - 1)`，而 Java/Kotlin 的
   `fromIndex` **含**该位；前缀末位正好是 `}` 时返回同一个位置、`end` 不变，16 次预算全耗在同一个候选上后返回 null。
   「写入停在闭合括号之后」恰是最可能的撕裂偏移。改 `end - 2` 保证边界严格递减。
-  改前在工程 JDK 上实证：`lastIndexOf(e2-1)=51 e2=52`（不前进）对比 `lastIndexOf(e2-2)=26`（回到上一条记录）。
+  改前用工程 JDK 的独立 scratch 探针实证过一版（输入长 52：`lastIndexOf('}',51)=51` 不前进、
+  `lastIndexOf('}',50)=26` 回到上一条记录）；改后进一步把**随包用例自己的输入**量出来，
+  数字以这条为准（`build/review-evidence/r15-fixture-indices.txt`，脚本
+  `build/review-evidence/fixture-index-probe.py`）：撕裂串长 114、末位就是 `}`，
+  于是 `lastIndexOf('}', end-1)=113`（旧写法 `end` 原地不动，16 次预算全花在同一个候选上）、
+  `lastIndexOf('}', end-2)=57`（回到 c1 的记录边界），而 `torn[:58] + "]"` 被真解析器接受为
+  单元素数组 `['c1']` —— 即旧代码把这条本该回到应用的数据降格成「只归档、不恢复」。
 - F6 「不可读」被定义成「解析不过」，集合错了：`[{"id":""}]`、`{"configs":[{无 id 记录}]}` 解析通过、
   一条可用都没有，仍会被下次保存抹掉。改为两条落点共用一条规则。
 - F7 provider 存储 `load()` 两次解析（`activeConfig()` 有 9 个生产调用点，每个都新建 store）。合一次。
@@ -892,11 +902,20 @@ demo 的分类派生自它。没有放宽授权面：新增 id 只进拒绝集�
    用户对重要提醒的真实点击被丢弃。第十一轮已把该族拆成 `DemoUrgentInteractionLedger` 并钉住释放规则，
    本轮复跑其用例仍绿，判为已核查的既定产品门禁而非缺陷。
 6. `UserConfirmationDialogTool(override val name = …)` 允许宿主改名，而受保护 Tool 按常量比对名字，
-   全仓无任何地方检测这种错配；`AGENTS.md`/契约文档要求「引用常量」，实测 main 源码里仍有 5 处字面量
-   `"show_user_confirmation_dialog"`（`DemoRunState.kt` 3 处、`AppPrivateFileTools.kt`、
-   `AndroidAutomationAgentPlugin.kt`、`BashCommandTool.kt` 2 处）。改这些字面量要动的文件里
-   `DemoRunState.kt`、`BashCommandTool.kt` 属 PR #18 清单，本轮不改；后果是 fail-closed（一切都拒绝），
-   不是泄权。
+   全仓无任何地方检测这种错配。契约文档要求「引用常量而不是重复字面量」，实测 main 源码里仍有
+   **3 处把名字写成裸字面量**，全部集中在 `DemoRunState.kt`（两个 `when` 分支 + 一个
+   `private const val CONFIRMATION_TOOL`）：`git grep -n '"show_user_confirmation_dialog"' -- '*/src/main/*'`
+   命中 4 行，其中 1 行是 SDK 里 `USER_CONFIRMATION_DIALOG_TOOL_NAME` 的定义本身。
+   另在 `AppPrivateFileTools.kt`、`AndroidAutomationAgentPlugin.kt`、`BashCommandTool.kt` 里出现的是
+   **给模型看的说明文字**里的同名串，不是名字比较，两类不可混为一谈——本句初稿写成「5 处字面量」并
+   把两类并列，被最后一层复核否掉后重数。改这 3 处要动的 `DemoRunState.kt` 属 PR #18 清单，本轮不改；
+   后果是 fail-closed（改名为别的之后所有受保护 Tool 都拒绝），不是泄权。
+7. F4 只统一了 id 集合，**没有统一大小写规则**：SDK 比较 `selectedButtonId` 是大小写敏感的，
+   而 `ConfirmationVisualPolicy.isCancellation`、`HeadlessConfirmationDialogPresenter`、
+   `AgentAuthorizationPolicy.autoApproveButtonId` 都先 `lowercase()`。于是模型写 `"Not_Now"` 这类混合大小写时，
+   按钮仍被画成 Cancel、SDK 却读不成拒绝，再弹一次窗的那条路径仍在。本轮不扩大改动面：
+   只在**拒绝一侧**做大小写归一会改变措辞判定，属可与授权集合分开决定的事，
+   留给下一轮连同 `"Not_Now"` 那条判别用例一起做（先红后绿），授权侧不动。
 
 ### 被否掉的复核立案（附复测命令）
 
@@ -944,6 +963,21 @@ demo 的分类派生自它。没有放宽授权面：新增 id 只进拒绝集�
 - 受保护工具名字表活性仍由第十三轮 §40 F2 的用例把住，本轮独占复跑绿：
   `build/review-evidence/r15-name-liveness-rerun.log`（file 17 / agent-skill-runtime 101，0 failure）。
 
+### 复核层数与最后一层的产出（截至本时点实测）
+
+本轮共跑六层：① 基线缺陷发现与执行取证；② 只读普查（同族落点 + 文档真伪）；③ 专审第一遍整改
+（抓出 F5–F8，即本轮自己写进去的四个缺陷）；④ 按 ③ 的清单修复；⑤ 取值域重举 + 变异矩阵；
+⑥ 专审 ④⑤ 之后那批整改与文档。**第 ⑥ 层 5 条立案在本树复跑后全部成立**，且全部是文字与哈希层面的
+失实（不是代码缺陷），因此本轮没有再改 `src/`：
+
+| 立案 | 复跑结果 |
+|---|---|
+| §42 把 F5–F8 的源码修复记成 `2f2128b`/`0e89d17` | 成立。那两笔只动测试文件，源码在 `2b0e02a`（`git show --name-only` 逐笔核对） |
+| 契约文档 §4 正文仍写拒绝集合默认 6 个 id | 成立。当前 `USER_CONFIRMATION_DECLINED_BUTTON_IDS` 是 11 个，已就地加过期注记与自查命令 |
+| 版本台账订正里引用「第 331/774 行」 | 成立且自打：那笔注记本身插入 10 行，实际在 341/784。改为按句子内容定位，不用行号（本仓反复写的规矩） |
+| §42「5 处字面量」与 F5 的 `51/26` 索引对不上 | 成立。字面量真值 3 处（+SDK 常量定义本身 1 处），其余是模型读的说明文字；`51/26` 来自 scratch 探针而非随包用例，已改成用例自身输入量出来的 `113/57/114` |
+| F4 只统一集合、没统一大小写 | 成立。混合大小写 id 仍会被画成 Cancel 却读不成拒绝，登记为第 7 条「已核查但不修」并指明下一轮该先写那条判别用例 |
+
 ### 过程失败登记
 
 1. **pathspec 假零**：`git grep -n "<符号>" -- '*/src/main'` 对确实存在的符号返回空（连
@@ -959,6 +993,12 @@ demo 的分类派生自它。没有放宽授权面：新增 id 只进拒绝集�
    红落在 `expected:<0> but was:<1>` 的缺陷语义上（`r15-fa-baseline-red.log` 保留为判废记录）。
 5. **旧矩阵行的锚点在改名/改形之后过期**：m2/m5/m7 三行 `ANCHOR_NOT_UNIQUE`，说明取证脚本的期望集合
    就是过期断言；按当前字节重钉后全部落地（第十次记，仍在发生）。
+6. **写进文档的哈希、行号、计数与「无冲突」状态句，四处同时失实**，全被第六层复核抓到（见上表）。
+   共同成因是同一件事：**下笔时引用的是「我记忆里刚才那条命令」的输出，而不是重新跑一遍的输出**。
+   其中「与 PR #18 交集为 0」这一条尤其典型——写下它的那笔提交（追加 §42）正是它的反例。
+   动作：凡引用哈希/计数/文件集合，落笔前重跑该命令并把输出写进同一个证据文件；凡「无冲突/无交集」
+   这类状态句，必须绑定取数时点的文件集合，并在每次新增改动文件后重测（本轮已把差值声明改成
+   一条可自查命令，而不是一个会过期的句子）。
 
 ### 本轮新增教训（以及该固化成什么动作）
 
@@ -971,3 +1011,8 @@ demo 的分类派生自它。没有放宽授权面：新增 id 只进拒绝集�
 3. **矩阵的 CONTROL 闸是唯一能区分「注入没被抓住」与「我的取数坏了」的东西**：本轮两次整批作废
    （CRLF、缺导入）都被它挡住。动作：任何行不绿就丢弃该行的结论，且必须去读控制日志本身，
    不许把丢弃记成「这条回退不判红」。
+4. **统一「集合」不等于统一「判定」**。F4 把两份手抄的按钮 id 清单合成一个公开常量，但两边各自的
+   比较规则（SDK 大小写敏感、demo 先 `lowercase()`）没动，于是混合大小写的 Cancel 按钮仍然读不成拒绝——
+   形状对了、语义没对。动作：凡是把重复清单合成单一来源的改动，同一轮里就把「这套 id 是怎么被比较的」
+   也列成表（大小写、trim、空白、引号、表达式写法），逐处对齐或逐处写明为何故意不同；
+   并先写一条会因未对齐而红的用例（本轮登记为下一轮的第一条待补用例：`"Not_Now"`）。
