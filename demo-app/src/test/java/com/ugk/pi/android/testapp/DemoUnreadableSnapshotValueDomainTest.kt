@@ -91,8 +91,8 @@ class DemoUnreadableSnapshotValueDomainTest {
 
     @Test
     fun aProviderConfigsValueThatIsNotAnArrayIsArchived() {
-        // Valid JSON, valid object, unusable collection: `decode` answers "nobody
-        // configured a provider" and the next upsert writes only its own record.
+        // Valid JSON, then `jsonArray` refuses a string: this is the "no object could
+        // be read at all" arm, and the archive is what keeps the old keys alive.
         val store = ApiProviderSettingsStore(
             contextWith("{\"configs\":\"oops\",\"activeId\":\"p1\"}", PROVIDERS_KEY)
         )
@@ -102,6 +102,29 @@ class DemoUnreadableSnapshotValueDomainTest {
         val archived = recoveryDir.listFiles()?.firstOrNull { it.name.contains("providers") }?.readText()
         assertNotNull("a provider value that yields nothing usable must be kept", archived)
         assertEquals("the archive must hold the original bytes", "{\"configs\":\"oops\",\"activeId\":\"p1\"}", archived)
+    }
+
+    @Test
+    fun providerRecordsThatCannotBeDecodedAreArchivedEvenThoughEverythingParsed() {
+        // The arm the row above cannot reach: the value parses, `configs` is a real
+        // array, and every record inside it is unusable. `load()` answers "nobody
+        // configured a provider" without throwing, so only the
+        // "yields nothing usable and does not say it is empty" rule keeps the bytes.
+        val store = ApiProviderSettingsStore(
+            contextWith("{\"configs\":[{\"baseUrl\":\"https://old\",\"apiKey\":\"sk-keepme\"}]}", PROVIDERS_KEY)
+        )
+
+        assertEquals(emptyList<String>(), store.load().configs.map { it.id })
+
+        val archived = recoveryDir.listFiles()?.firstOrNull { it.name.contains("providers") }?.readText()
+        assertNotNull(
+            "a provider value that parses but yields no usable record must still be kept",
+            archived
+        )
+        assertTrue(
+            "the archived copy must be the whole original value, got: $archived",
+            archived.orEmpty().contains("sk-keepme")
+        )
     }
 
     @Test
