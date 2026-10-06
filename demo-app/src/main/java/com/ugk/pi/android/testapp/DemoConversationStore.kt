@@ -132,7 +132,8 @@ internal fun appendStoredMessages(
  * preferences as recoverable data, not as a reason to crash the host app.
  */
 class DemoConversationStore(context: Context) {
-    private val prefs = context.applicationContext.getSharedPreferences(PREFS_NAME, Context.MODE_PRIVATE)
+    private val appContext = context.applicationContext
+    private val prefs = appContext.getSharedPreferences(PREFS_NAME, Context.MODE_PRIVATE)
     private val cacheLock = Any()
     private val writeExecutor = Executors.newSingleThreadExecutor { runnable ->
         Thread(runnable, "demo-conversation-store").apply { isDaemon = true }
@@ -337,7 +338,24 @@ class DemoConversationStore(context: Context) {
     }
 
     private fun readAllFromPreferences(): List<DemoConversation> =
-        decodeStoredConversations(prefs.getString(KEY_CONVERSATIONS, null).orEmpty())
+        loadStoredSnapshot(prefs.getString(KEY_CONVERSATIONS, null)).let { loaded ->
+            // Preserve before returning: every save path calls this first, so the
+            // bytes are on disk before anything can be written over them.
+            loaded.unreadableRaw?.let { preserveUnreadable(it) }
+            loaded.conversations
+        }
+
+    private fun preserveUnreadable(raw: String) {
+        val filesDir = runCatching { appContext.filesDir }.getOrNull() ?: return
+        val archived = DemoUnreadableSnapshotArchive.preserve(filesDir, "conversations", raw)
+        if (archived != null) {
+            android.util.Log.w(
+                "DemoConversationStore",
+                "Conversations could not be read; the bytes are kept at ${archived.name} " +
+                    "(${raw.toByteArray().size} bytes)"
+            )
+        }
+    }
 
     private fun writeAll(conversations: List<DemoConversation>) {
         val snapshot = conversations
@@ -471,20 +489,68 @@ internal fun encodeStoredConversations(conversations: List<DemoConversation>): S
     return array.toString()
 }
 
-internal fun decodeStoredConversations(raw: String): List<DemoConversation> {
-    if (raw.isBlank()) return emptyList()
-    val root = runCatching { Json.parseToJsonElement(raw) as? JsonArray }.getOrNull()
-        ?: return emptyList()
+/**
+ * A stored value, separated into what could be read and what could not.
+ *
+ * [unreadableRaw] is non-null only when a value was present and no array could be
+ * parsed from it at all. "The user has no conversations" and "the user's
+ * conversations cannot be read" must not arrive through the same door, because the
+ * caller writes the whole collection back either way.
+ */
+internal class StoredSnapshotLoad(
+    val conversations: List<DemoConversation>,
+    val unreadableRaw: String?
+)
 
-    return buildList {
-        // A malformed record is isolated to that record. One bad element must
-        // not discard otherwise valid conversations in the same preference.
-        for (element in root) {
-            val conversation = runCatching { decodeStoredConversation(element) }.getOrNull()
-            if (conversation != null) add(conversation)
-        }
-    }
+internal fun loadStoredSnapshot(raw: String?): StoredSnapshotLoad {
+    if (raw.isNullOrBlank()) return StoredSnapshotLoad(emptyList(), null)
+    val root = salvageStoredConversationArray(raw)
+        ?: return StoredSnapshotLoad(emptyList(), raw)
+
+    return StoredSnapshotLoad(
+        conversations = buildList {
+            // A malformed record is isolated to that record. One bad element must
+            // not discard otherwise valid conversations in the same preference.
+            for (element in root) {
+                val conversation = runCatching { decodeStoredConversation(element) }.getOrNull()
+                if (conversation != null) add(conversation)
+            }
+        },
+        unreadableRaw = null
+    )
 }
+
+internal fun decodeStoredConversations(raw: String): List<DemoConversation> =
+    loadStoredSnapshot(raw).conversations
+
+/**
+ * Reads the stored array, and when that fails reads it again as the torn tail a
+ * half-finished write actually leaves: the earlier records stay complete and only
+ * the closing bracket, the last record, or both are missing.
+ *
+ * The JSON parser alone decides whether a candidate is an array - nothing here
+ * pattern-matches the text. At most [MAX_SALVAGE_CUTS] prefixes are tried, so the
+ * cost stays bounded on a large blob.
+ */
+internal fun salvageStoredConversationArray(raw: String): JsonArray? {
+    parseConversationArray(raw)?.let { return it }
+    var end = raw.length
+    var cuts = 0
+    while (cuts < MAX_SALVAGE_CUTS) {
+        parseConversationArray(raw.substring(0, end) + "]")?.let { return it }
+        val previousBrace = raw.lastIndexOf('}', end - 1)
+        if (previousBrace < 0) break
+        end = previousBrace + 1
+        cuts++
+    }
+    return null
+}
+
+private fun parseConversationArray(candidate: String): JsonArray? =
+    runCatching { Json.parseToJsonElement(candidate) as? JsonArray }.getOrNull()
+
+/** Bound on the torn-tail repair above: each attempt re-parses a prefix of the blob. */
+private const val MAX_SALVAGE_CUTS = 16
 
 private fun JsonElement?.storedStringOrNull(): String? {
     val primitive = this as? JsonPrimitive ?: return null

@@ -71,6 +71,21 @@ object ApiProviderSettingsJson {
         })
     }.toString()
 
+    /**
+     * The stored text when a value is present but no object can be read from it, and
+     * null otherwise. The same rule as `loadStoredSnapshot` in the conversation
+     * store: an unreadable value must not be reported as "nobody configured a
+     * provider", because every save here rewrites the whole collection.
+     *
+     * A value that *does* parse but carries a broken `configs` array is not reported
+     * here - that is the per-record isolation `decode` already performs.
+     */
+    fun unreadableValue(value: String?): String? {
+        if (value.isNullOrBlank()) return null
+        val parsed = runCatching { Json.parseToJsonElement(value).jsonObject }.getOrNull()
+        return if (parsed == null) value else null
+    }
+
     fun decode(value: String?): ApiProviderSettingsState {
         if (value.isNullOrBlank()) return ApiProviderSettingsState.empty()
         return runCatching {
@@ -124,7 +139,24 @@ class ApiProviderSettingsStore(context: Context) {
             }
             return ApiProviderSettingsState.empty()
         }
-        return ApiProviderSettingsJson.decode(prefs.getString(KEY, null))
+        return ApiProviderSettingsJson.decode(prefs.getString(KEY, null).also { raw ->
+            // Preserve before returning: `upsertAndActivate` and `delete` are
+            // read-modify-write over the whole collection, so the next save would
+            // otherwise replace bytes this app simply could not read.
+            ApiProviderSettingsJson.unreadableValue(raw)?.let { preserveUnreadable(it) }
+        })
+    }
+
+    private fun preserveUnreadable(raw: String) {
+        val filesDir = runCatching { appContext.filesDir }.getOrNull() ?: return
+        val archived = DemoUnreadableSnapshotArchive.preserve(filesDir, "providers", raw)
+        if (archived != null) {
+            android.util.Log.w(
+                "ApiProviderSettings",
+                "Provider settings could not be read; the bytes are kept at ${archived.name} " +
+                    "(${raw.toByteArray().size} bytes)"
+            )
+        }
     }
 
     fun activeConfig(): ApiProviderConfig? = load().activeConfig()
