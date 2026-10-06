@@ -2,6 +2,7 @@ package com.ugk.pi.android.testapp
 
 import android.content.Context
 import kotlinx.serialization.json.Json
+import kotlinx.serialization.json.JsonArray
 import kotlinx.serialization.json.JsonObject
 import kotlinx.serialization.json.buildJsonArray
 import kotlinx.serialization.json.buildJsonObject
@@ -51,6 +52,12 @@ data class ApiProviderSettingsState(
 }
 
 object ApiProviderSettingsJson {
+    /** The usable state, plus the stored bytes when they must be kept before replacement. */
+    data class ApiProviderSettingsRead(
+        val state: ApiProviderSettingsState,
+        val unreadableRaw: String?
+    )
+
     fun encode(state: ApiProviderSettingsState): String = buildJsonObject {
         state.activeId?.let { put("activeId", it) }
         put("configs", buildJsonArray {
@@ -72,23 +79,19 @@ object ApiProviderSettingsJson {
     }.toString()
 
     /**
-     * The stored text when a value is present but no object can be read from it, and
-     * null otherwise. The same rule as `loadStoredSnapshot` in the conversation
-     * store: an unreadable value must not be reported as "nobody configured a
-     * provider", because every save here rewrites the whole collection.
+     * The stored value, separated into the state the app can use and the bytes that
+     * must be kept before anything replaces them.
      *
-     * A value that *does* parse but carries a broken `configs` array is not reported
-     * here - that is the per-record isolation `decode` already performs.
+     * The rule is the same one `loadStoredSnapshot` applies to conversations, so the
+     * two whole-collection stores cannot drift apart: unreadable is not the same
+     * thing as empty, and a value that yields no usable config while not *saying*
+     * it is empty must never be allowed to vanish under the next read-modify-write.
      */
-    fun unreadableValue(value: String?): String? {
-        if (value.isNullOrBlank()) return null
-        val parsed = runCatching { Json.parseToJsonElement(value).jsonObject }.getOrNull()
-        return if (parsed == null) value else null
-    }
-
-    fun decode(value: String?): ApiProviderSettingsState {
-        if (value.isNullOrBlank()) return ApiProviderSettingsState.empty()
-        return runCatching {
+    fun read(value: String?): ApiProviderSettingsRead {
+        if (value.isNullOrBlank()) {
+            return ApiProviderSettingsRead(ApiProviderSettingsState.empty(), null)
+        }
+        val parsed = runCatching {
             val root = Json.parseToJsonElement(value).jsonObject
             val configs = root["configs"]?.jsonArray?.mapNotNull { item ->
                 val obj = item.jsonObject
@@ -118,9 +121,20 @@ object ApiProviderSettingsJson {
             } ?: emptyList()
             val activeId = root["activeId"]?.jsonPrimitive?.contentOrNull
                 ?.takeIf { active -> configs.any { it.id == active } }
-            ApiProviderSettingsState(activeId ?: configs.firstOrNull()?.id, configs)
-        }.getOrElse { ApiProviderSettingsState.empty() }
+            ApiProviderSettingsState(activeId ?: configs.firstOrNull()?.id, configs) to root
+        }.getOrNull()
+
+        if (parsed == null) return ApiProviderSettingsRead(ApiProviderSettingsState.empty(), value)
+        val (state, root) = parsed
+        // `{"configs":[]}` is this store's own way of writing "nobody configured a
+        // provider". Anything else that leaves no usable config - a `configs` value of
+        // the wrong type, records this build cannot read - is not an honest empty, and
+        // its bytes have to survive the next upsert or delete.
+        val statedEmpty = root["configs"] is JsonArray && (root["configs"] as JsonArray).isEmpty()
+        return ApiProviderSettingsRead(state, value.takeIf { state.configs.isEmpty() && !statedEmpty })
     }
+
+    fun decode(value: String?): ApiProviderSettingsState = read(value).state
 
     private fun JsonObject.stringValue(name: String): String =
         this[name]?.jsonPrimitive?.contentOrNull.orEmpty()
@@ -139,12 +153,12 @@ class ApiProviderSettingsStore(context: Context) {
             }
             return ApiProviderSettingsState.empty()
         }
-        return ApiProviderSettingsJson.decode(prefs.getString(KEY, null).also { raw ->
-            // Preserve before returning: `upsertAndActivate` and `delete` are
-            // read-modify-write over the whole collection, so the next save would
-            // otherwise replace bytes this app simply could not read.
-            ApiProviderSettingsJson.unreadableValue(raw)?.let { preserveUnreadable(it) }
-        })
+        val read = ApiProviderSettingsJson.read(prefs.getString(KEY, null))
+        // Kept before returning: `upsertAndActivate` and `delete` are read-modify-write
+        // over the whole collection, so the next save would otherwise replace bytes this
+        // app could not turn into a state.
+        read.unreadableRaw?.let { preserveUnreadable(it) }
+        return read.state
     }
 
     private fun preserveUnreadable(raw: String) {
