@@ -209,6 +209,63 @@ class UserConfirmationAnswerConsumedBeforeValidationTest {
         )
     }
 
+    @Test
+    fun anOfferedNegativeButtonTheSdkDoesNotKnowIsStillReportedAsTheUsersDecline() = runBlocking {
+        // The demo's own button vocabulary classifies `not_now`, `close`, `abort`,
+        // `dismiss` and `later` as cancellations - that is what colors them as a
+        // Cancel button in the dialog the user reads. The SDK's refusal set did not
+        // contain them, so a user who tapped 「暂不」 was answered with the generic
+        // "confirmation required, call the dialog first, then retry" wording and the
+        // modal came back on top of a decision they had just made.
+        for (declinedId in listOf("cancel", "not_now", "close", "abort", "dismiss", "later")) {
+            val delegate = RecordingTool()
+            val input = buildJsonObject { put("packageName", "com.example") }
+            val tool = UserConfirmationRequiredTool(delegate, nowEpochMillis = { NOW })
+            val dialog = UserConfirmationDialogTool(
+                presenter = RecordingPresenter(selectedButtonId = declinedId),
+                nowEpochMillis = { NOW },
+                nonceGenerator = { NONCE }
+            )
+            val dialogResult = dialog.execute(
+                dialogCall(
+                    buttons = listOf(
+                        UserConfirmationDialogButton("confirm", "继续"),
+                        UserConfirmationDialogButton(declinedId, "暂不")
+                    ),
+                    targetInput = input
+                ),
+                ToolExecutionContext(sessionId = SESSION)
+            )
+
+            val result = tool.execute(
+                ToolCall("call-1", tool.name, input),
+                ToolExecutionContext(
+                    sessionId = SESSION,
+                    priorMessages = listOf(
+                        AgentMessage.Tool(
+                            ToolResult(
+                                toolCallId = "dialog-1",
+                                name = USER_CONFIRMATION_DIALOG_TOOL_NAME,
+                                content = dialogResult.content,
+                                isError = dialogResult.isError
+                            )
+                        )
+                    )
+                )
+            )
+
+            assertTrue("$declinedId must not authorize the tool", !delegate.executed)
+            assertTrue(
+                "tapping the 「$declinedId」 button is the user declining; got: ${result.content}",
+                result.content.contains("declined")
+            )
+            assertFalse(
+                "a decline must not invite another dialog: ${result.content}",
+                result.content.contains("then retry")
+            )
+        }
+    }
+
     private fun simpleTarget(): JsonObject = buildJsonObject { put("packageName", "com.example") }
 
     private fun button(id: String, label: String): JsonObject =
