@@ -1,8 +1,9 @@
 package com.ugk.pi.android.testapp
 
-import com.ugk.pi.android.USER_CONFIRMATION_DECLINED_BUTTON_IDS
+import com.ugk.pi.android.UserConfirmationButtonIntent
 import com.ugk.pi.android.UserConfirmationDialogButton
 import com.ugk.pi.android.UserConfirmationDialogRequest
+import com.ugk.pi.android.userConfirmationButtonIntent
 import java.util.Locale
 
 /**
@@ -23,14 +24,6 @@ enum class ConfirmationVisualRole {
  * never copied into [AgentOverlayConfirmation].
  */
 object ConfirmationVisualPolicy {
-    /**
-     * The same ids the SDK reads as a refusal. This used to be a second, hand-kept
-     * copy: the button a user taps because it is drawn as Cancel has to be the very
-     * id the protected Tool reports back as their decline, or the answer is a dialog
-     * that comes back after they already chose.
-     */
-    private val cancellationIds = USER_CONFIRMATION_DECLINED_BUTTON_IDS
-
     private val cancellationLabels = setOf(
         "取消",
         "拒绝",
@@ -179,10 +172,22 @@ object ConfirmationVisualPolicy {
         buttons: List<UserConfirmationDialogButton> = request.buttons
     ): List<ConfirmationVisualRole> = buttons.map { classify(request, it) }
 
+    /**
+     * Whether this button should be drawn as the refusal.
+     *
+     * The id is asked of the SDK's own vocabulary instead of a copy kept here. That copy
+     * also compared differently: the button a user taps because it is drawn as Cancel has to
+     * be the very id the protected Tool reports back as their decline - including when the
+     * model spelled it `Not_Now` or `" cancel "` - or the answer is a dialog that comes back
+     * on top of the decision they already made. The label vocabulary stays the host's own,
+     * because it is about what a user reads, not about what the SDK will honour.
+     */
     fun isCancellation(button: UserConfirmationDialogButton): Boolean {
-        val id = button.id.lowercase(Locale.ROOT)
+        if (userConfirmationButtonIntent(button.id) == UserConfirmationButtonIntent.DECLINED) {
+            return true
+        }
         val label = button.label.trim().lowercase(Locale.ROOT)
-        return id in cancellationIds || label in cancellationLabels
+        return label in cancellationLabels
     }
 }
 

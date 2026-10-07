@@ -19,6 +19,11 @@ import kotlinx.serialization.json.jsonObject
  * *authorized*: an id outside the accepted set still runs nothing.
  *
  * Hosts classify buttons against these same sets instead of keeping a second list.
+ *
+ * Comparing them is also one rule: [userConfirmationButtonIntent] trims and lowercases with
+ * `Locale.ROOT` first, because the id is authored by the model and echoed by the host. A
+ * host that draws a button as Cancel classifies it the same way, so the button a user
+ * presses is always the answer the protected Tool reports - mixed case and padding included.
  */
 val USER_CONFIRMATION_ACCEPTED_BUTTON_IDS: Set<String> = setOf("confirm", "continue", "ok", "yes", "allow")
 
@@ -159,7 +164,12 @@ class UserConfirmationRequiredTool(
         val confirmation = immediateDialogResult(call) ?: return false
         val selectedButtonId = confirmation.stringField("selectedButtonId")
             ?: return false
-        if (selectedButtonId !in declinedButtonIds) return false
+        if (
+            userConfirmationButtonIntent(selectedButtonId, acceptedButtonIds, declinedButtonIds) !=
+            UserConfirmationButtonIntent.DECLINED
+        ) {
+            return false
+        }
         if (confirmation.booleanField("withoutUserDecision")) return false
         val ticket = (confirmation["ticket"] as? JsonObject)?.toTicketOrNull()
             ?: return false
@@ -196,7 +206,12 @@ class UserConfirmationRequiredTool(
         val confirmation = immediateDialogResult(call) ?: return false
         val selectedButtonId = confirmation.stringField("selectedButtonId")
             ?: return false
-        if (selectedButtonId !in acceptedButtonIds) return false
+        if (
+            userConfirmationButtonIntent(selectedButtonId, acceptedButtonIds, declinedButtonIds) !=
+            UserConfirmationButtonIntent.ACCEPTED
+        ) {
+            return false
+        }
         // An accepted id is only authorization if somebody actually chose it. The
         // host can resolve a dialog on its own (destroyed window, no UI present),
         // and the ticket it issues is well-formed for exactly that input, so the

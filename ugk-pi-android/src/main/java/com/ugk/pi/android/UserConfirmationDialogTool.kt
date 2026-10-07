@@ -157,12 +157,21 @@ class UserConfirmationDialogTool(
                 nonce = it.nonce
             )
         }
-        if (request.buttons.none { it.id == result.selectedButtonId }) {
+        if (request.buttons.none {
+                normalizeUserConfirmationButtonId(it.id) ==
+                    normalizeUserConfirmationButtonId(result.selectedButtonId)
+            }
+        ) {
             // The dialog is spent and no offered button can be attributed to the
             // user. With a ticket the honest, bound answer is "nobody decided",
             // which a protected Tool reports without sending the model back to the
             // dialog. Without one nothing ties that claim to this exact input, so
             // stay a loud error instead of asserting what the user did not say.
+            //
+            // Compared through the same normalisation the protected Tool uses to read the
+            // answer: a host that echoes an offered id with different case or padding is
+            // still naming a button the user was shown, and treating that as "an id that
+            // was never offered" would discard the choice they made.
             if (ticket != null) {
                 return ToolResult(
                     toolCallId = call.id,
