@@ -52,11 +52,11 @@ API 内容不得复制进源码、文档或提交；Release 默认不嵌入 API 
 # 不是假绿；更早的 `984`、第十一轮 950 与第十二轮 890 的逐模块数值分别见
 # §40、§39 与 §38。）
 # 第十六轮（PR #20，分支 fix/p0-review-round16-20261008）待合并：该分支代码状态
-# `0d6441f` 独占 `--rerun-tasks` 实测 `1154 tests / 3 skipped / 0 failure`，169 份
+# `816fe89` 独占 `--rerun-tasks` 实测 `1155 tests / 3 skipped / 0 failure`，169 份
 # JUnit XML，逐模块差值与窗口原文见 docs/terminal-runtime-validation.md §43。
 # 这个数字属于那个分支，不属于 main：合并后请按本文件下面那十条任务重跑一次并就地
 # 重述，不要让它随 HEAD 自动有效。自查（判断取数之后是否只有文档改动）：
-# `git log --format='%h %p' 0d6441f..HEAD --name-only | grep -E "src/|build.gradle"`。
+# `git log --format='%h %p' 816fe89..HEAD --name-only | grep -E "src/|build.gradle"`。
 .\gradlew.bat `
   :ugk-pi-android:testDebugUnitTest `
   :pi-file-skill-android:testDebugUnitTest `

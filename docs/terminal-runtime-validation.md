@@ -1074,15 +1074,23 @@ SDK `E:/Android/SDK`（NDK 28.2.13676358 在位）。磁盘 `C: 200G/190G/9.9G 9
   这条实测证实了 `AGENTS.md` 当时现写的 `1097`，不是继承文档。逐模块：ugk-pi 273 / file 17 / schedule 34 /
   attention 18 / task-runtime 49 / system-skill 86 / agent-skill-runtime 101 / terminal-runtime 60 /
   terminal-skill 57 / demo-app 402。
-- 交付态独占全量（代码状态 `0d6441f`，同一 runner、同一窗口校验）：`1154 tests / 3 skipped / 0 failure`，
-  169 份 XML，`EXIT=0`、`AGG_EXIT=0`、`STALE_TIMESTAMP_SUITES=0`、`XML_MISSING_MODULES=none`，
-  窗口 `2026-10-08T04:43:24+0800 … 04:44:28+0800`，日志末尾附 `MEASURED_HEAD` 归属块。
-  原文 `build/review-evidence/r16-delivery-fullgate.log`。
+- 交付态独占全量（代码状态 `816fe89` = 本分支交付 HEAD，同一 runner、同一窗口校验）：
+  `1155 tests / 3 skipped / 0 failure`，169 份 XML，`EXIT=0`、`AGG_EXIT=0`、`STALE_TIMESTAMP_SUITES=0`、
+  `XML_MISSING_MODULES=none`、`STATUS_BEFORE=0`、`STATUS_AFTER=0`、`HEAD_BEFORE=816fe89…`，
+  窗口 `2026-10-08T05:18:11+0800 … 05:19:20+0800`。原文 `build/review-evidence/r16-delivery-fullgate-final.log`。
+  这一次是 runner 补上 `HEAD_BEFORE/STATUS_BEFORE/STATUS_AFTER` 三行后的首次使用（前一次取数没有这三行，
+  见「门禁自身的状态」的破例登记）。
   逐模块（基线 → 交付）：ugk-pi 273→290（+17）、file 17→17、schedule 34→34、attention 18→18、
   task-runtime 49→60（+11）、system-skill 86→87（+1）、agent-skill-runtime 101→101、terminal-runtime 60→60、
-  terminal-skill 57→57、demo-app 402→430（+28）。差值 17+11+1+28 = 57 = 1154 − 1097，逐套件相加核对一致。
-  差值声明：`0d6441f` 之后本分支只有文档提交；自查
-  `git log --format='%h %p' 0d6441f..HEAD --name-only | grep -E "src/|build.gradle"` 输出为空即成立。
+  terminal-skill 57→57、demo-app 402→431（+29）。差值 17+11+1+29 = 58 = 1155 − 1097，
+  与逐套件相加一致（差值表与重刷扫描输出留在
+  `build/review-evidence/r16-number-sweep.txt`，不靠手加）。
+  前一次独占全量 `1154 tests / 3 skipped / 0 failure`（代码状态 `0d6441f`，日志
+  `r16-delivery-fullgate.log`）被其后一笔**新增用例**的提交作废，按「新增用例后不得沿用旧全量数」的规矩
+  重跑并以此处为准；那次写进 §43 与 `AGENTS.md` 的 `1154` 已按值全仓扫过重刷（扫描命令见
+  `build/review-evidence/r16-number-sweep.txt`）。
+  差值声明：`816fe89` 之后本分支只有文档提交；自查
+  `git log --format='%h %p' 816fe89..HEAD --name-only | grep -E "src/|build.gradle"` 输出为空即成立。
 - 取数纪律的一次自我破例如实登记：本轮沿用的 `run-full-gate.sh`（第十四轮版本）不像第十三轮那版打印
   `STATUS_BEFORE/STATUS_AFTER`，所以「取数时工作树为空」这条在日志里最初只能靠文末补记；已把 runner 补上
   这两行（下一轮起在脚本内部自证），补记块本身写在该日志末尾。
@@ -1417,6 +1425,9 @@ baseUrl/apiKey）无痕消失。`ApiProviderSettingsJson.read` 上方的注释�
 
 ### 过程失败登记
 
+0. 两次独占全量：`1154@0d6441f` 先写入文档，随后 `6247f57` 新增一条判别用例（demo 430→431），
+   旧数即失效；交付数以 `1155@816fe89` 为准，`AGENTS.md` 与 §43 三处数字按值重刷。
+   这不是「多跑一次保险」，是同一条老规矩（新增用例后不许沿用旧全量）在本轮的一次真实执行。
 1. 第一次取「主干语义」红证用 `git checkout -- <src/main 路径>` 回退——但本轮前 5 笔修复已提交，
    回退只到 HEAD（`09edf9a`），拿到的不是主干语义。发现后改用 `git diff ae457b4 -- <路径>` + `git apply -R`，
    并且只回退不影响测试编译的 10 个文件（`r16-main-semantics-select.patch`）。
