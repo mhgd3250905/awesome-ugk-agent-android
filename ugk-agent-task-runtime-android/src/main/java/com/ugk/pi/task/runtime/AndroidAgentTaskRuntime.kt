@@ -39,6 +39,8 @@ import kotlinx.coroutines.sync.Mutex
 import kotlinx.coroutines.sync.withLock
 import kotlinx.serialization.builtins.ListSerializer
 import kotlinx.serialization.json.Json
+import kotlinx.serialization.json.JsonArray
+import kotlinx.serialization.json.decodeFromJsonElement
 import java.util.concurrent.ConcurrentHashMap
 import java.util.concurrent.Executor
 import java.util.concurrent.Executors
@@ -127,17 +129,29 @@ internal class TaskRecordStore(
      * is not an empty one. Reading the list arms as empty told the model "No scheduled tasks
      * found." about tasks still sitting in the record, left the re-arm loop with nothing to
      * schedule, and let the next `upsert` rewrite the whole record from that empty list.
+     *
+     * The copy-aside runs outside `lock`: the lock is process-wide on purpose (the receiver,
+     * the job service and the host each hold their own instance over one record), `writeBackup`
+     * is a synchronous `commit()`, and `agent_task_list` reaches this read from the model's
+     * tool loop, which runs on the main thread. The bytes are remembered so one corrupt
+     * record is archived once per instance rather than on every read.
      */
     private fun readCurrent(): List<AgentTask> {
-        val raw = readRaw()
-        if (raw.isNullOrBlank()) return emptyList()
-        AgentTaskJsonCodec.decodeOrNull(raw)?.let { return it }
-        // The record exists and cannot be read as written. Keep the bytes before anything
-        // can replace them - best effort, see the writeBackup comment above - then hand back
-        // the complete records a torn tail still holds instead of nothing.
-        writeBackup(raw)
-        return AgentTaskJsonCodec.decodeSalvagedPrefix(raw)
+        val arm = synchronized(lock) {
+            val raw = readRaw()
+            if (raw.isNullOrBlank()) return emptyList()
+            AgentTaskJsonCodec.decodeOrNull(raw)?.let { return it }
+            val preserve = raw != archivedUnreadableRaw
+            archivedUnreadableRaw = raw
+            UnreadableArm(raw = raw, preserve = preserve)
+        }
+        if (arm.preserve) writeBackup(arm.raw)
+        return AgentTaskJsonCodec.decodeUsableRecords(arm.raw)
     }
+
+    private class UnreadableArm(val raw: String, val preserve: Boolean)
+
+    private var archivedUnreadableRaw: String? = null
 
     private companion object {
         val lock = Any()
@@ -150,6 +164,7 @@ internal object AgentTaskJsonCodec {
         ignoreUnknownKeys = true
     }
     private val serializer = ListSerializer(AgentTask.serializer())
+    private val taskSerializer = AgentTask.serializer()
 
     fun encode(tasks: List<AgentTask>): String = json.encodeToString(serializer, tasks)
 
@@ -164,23 +179,53 @@ internal object AgentTaskJsonCodec {
         runCatching { json.decodeFromString(serializer, value) }.getOrNull()
 
     /**
+     * The records this build can read, taken one element at a time out of a payload that
+     * *is* a JSON array.
+     *
+     * A whole-array decode fails on the first element it cannot read, so reading only that
+     * way turns one unreadable record into "the app has no tasks" and erases every record
+     * after it on the next save. Null means the text is not an array at all, which is a
+     * different failure and belongs to the salvage path.
+     */
+    fun decodeElementsOrNull(value: String): List<AgentTask>? {
+        val root = runCatching { json.parseToJsonElement(value) }.getOrNull() as? JsonArray
+            ?: return null
+        return root.mapNotNull { element ->
+            runCatching { json.decodeFromJsonElement(taskSerializer, element) }.getOrNull()
+        }
+    }
+
+    /**
+     * Everything readable in a payload the strict decoder rejected: per element if the text
+     * is still an array, otherwise by reading it again as the torn tail an interrupted write
+     * actually leaves.
+     */
+    fun decodeUsableRecords(value: String): List<AgentTask> =
+        decodeElementsOrNull(value) ?: decodeSalvagedPrefix(value)
+
+    /**
      * The complete records a torn payload still holds, reading it again as the half-written
      * array an interrupted write actually leaves: the earlier tasks stay complete and only
      * the closing bracket, the last record, or both are missing.
      *
-     * The parser alone decides whether a candidate is the array - nothing here
-     * pattern-matches the text - and at most [MAX_SALVAGE_CUTS] prefixes are tried, so the
-     * cost stays bounded on a large blob. Each boundary has to be strictly smaller than the
-     * last: `lastIndexOf(ch, fromIndex)` includes `fromIndex`, so searching from `end - 1`
-     * when the prefix already ends on a brace returns that same brace and spends the whole
-     * budget re-testing one candidate - and a write that stops right after a closing brace
-     * is the most likely torn offset there is.
+     * The premise - that the text is not an array any more - is what makes a *prefix* the
+     * right shape, and it is established by the caller: [decodeElementsOrNull] is tried first,
+     * so a payload that is still an array with one unreadable element keeps the elements after
+     * it instead of losing them to a cut.
+     *
+     * The parser alone decides whether a candidate is an array - nothing here pattern-matches
+     * the text - and at most [MAX_SALVAGE_CUTS] prefixes are tried, so the cost stays bounded
+     * on a large blob. Each boundary has to be strictly smaller than the last:
+     * `lastIndexOf(ch, fromIndex)` includes `fromIndex`, so searching from `end - 1` when the
+     * prefix already ends on a brace returns that same brace and spends the whole budget
+     * re-testing one candidate - and a write that stops right after a closing brace is the
+     * most likely torn offset there is.
      */
     fun decodeSalvagedPrefix(value: String): List<AgentTask> {
         var end = value.length
         var cuts = 0
         while (cuts < MAX_SALVAGE_CUTS && end > 1) {
-            decodeOrNull(value.substring(0, end) + "]")?.let { return it }
+            decodeElementsOrNull(value.substring(0, end) + "]")?.let { return it }
             val previousBrace = value.lastIndexOf('}', end - 2)
             if (previousBrace < 0) break
             end = previousBrace + 1

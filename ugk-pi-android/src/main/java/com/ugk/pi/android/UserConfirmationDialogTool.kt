@@ -241,6 +241,22 @@ class UserConfirmationDialogTool(
                         "`toolName` and an `input` object. `title`, `message` and `buttons` were valid."
                 )
         }
+        // The answer comes back as an id, and ids are compared after trimming and case
+        // folding. Two offered buttons that collapse onto the same normalised id therefore
+        // cannot be told apart by the answer, and a request that offers both an approval and a
+        // refusal under one indistinguishable id is refused before anyone is asked - the
+        // alternative is guessing which button the user pressed on an action the SDK treats as
+        // authorized.
+        buttons.groupBy { normalizeUserConfirmationButtonId(it.id) }
+            .values.firstOrNull { it.size > 1 }
+            ?.let { collided ->
+                return DialogRequestParse.Invalid(
+                    "Two offered buttons share one button id once case and spacing are ignored: " +
+                        collided.joinToString(" and ") { "\"${it.id}\" (${it.label})" } +
+                        ". Every button needs an id this dialog can attribute the answer to; " +
+                        "offer distinct ids."
+                )
+            }
         return DialogRequestParse.Valid(
             UserConfirmationDialogRequest(title, message, buttons, target)
         )

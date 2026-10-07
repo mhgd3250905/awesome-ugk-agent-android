@@ -41,7 +41,12 @@ private val DEFAULT_ACCEPTED_BUTTON_IDS = USER_CONFIRMATION_ACCEPTED_BUTTON_IDS.
 private val DEFAULT_DECLINED_BUTTON_IDS = USER_CONFIRMATION_DECLINED_BUTTON_IDS.asConfirmationButtonIds()
 
 /**
- * The single classification every reader of a confirmation button id must use.
+ * The one classification every reader of a confirmation button id inside this module uses.
+ *
+ * A host that injects its own vocabularies into [UserConfirmationRequiredTool] must pass the
+ * same sets to the three-argument overload; the no-argument form below always reads the
+ * published ones, which is why the host-side classifiers (the demo's visual policy, its
+ * headless fallback and the full-authorization auto-approval) call it without arguments.
  *
  * Accepted wins over declined if a host injects vocabularies that overlap, matching the
  * precedence the protected Tool has always had: an id inside the accepted set is checked
@@ -50,8 +55,8 @@ private val DEFAULT_DECLINED_BUTTON_IDS = USER_CONFIRMATION_DECLINED_BUTTON_IDS.
 fun userConfirmationButtonIntent(buttonId: String): UserConfirmationButtonIntent =
     userConfirmationButtonIntent(
         buttonId = buttonId,
-        acceptedButtonIds = USER_CONFIRMATION_ACCEPTED_BUTTON_IDS,
-        declinedButtonIds = USER_CONFIRMATION_DECLINED_BUTTON_IDS
+        acceptedButtonIds = DEFAULT_ACCEPTED_BUTTON_IDS,
+        declinedButtonIds = DEFAULT_DECLINED_BUTTON_IDS
     )
 
 fun userConfirmationButtonIntent(

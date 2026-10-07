@@ -328,11 +328,18 @@ internal class DemoTeachingCapacityException(message: String) : IllegalStateExce
 
 /** Never persist transient model text, image base64, clipboard values, or terminal output. */
 internal object DemoTeachingEvidence {
+    /** Lower-cased parameter-name fragments whose value must never reach the transcript. */
+    private val REDACTION_MARKERS = listOf("password", "token", "secret", "apikey", "api_key")
+
     fun input(call: ToolCall): JsonObject {
         if (call.name.startsWith("terminal_") || call.name.startsWith("clipboard_")) return buildJsonObject { put("redacted", true) }
         fun scrub(value: JsonElement, key: String = ""): JsonElement = when {
-            key.lowercase().contains("password") || key.lowercase().contains("token") || key.lowercase().contains("secret") ||
-                key.lowercase().contains("apikey") || key == "text" && call.name == "screen_perform_action" -> JsonPrimitive("[已省略输入值]")
+            // Locale.ROOT on purpose: on a Turkish device "APIKEY".lowercase() is "apıkey"
+            // with a dotless ı, so the device locale would decide whether a credential gets
+            // written into the teaching transcript. The marker list is compared against the
+            // normalised key, never the raw one.
+            REDACTION_MARKERS.any { marker -> key.lowercase(java.util.Locale.ROOT).contains(marker) } ||
+                key == "text" && call.name == "screen_perform_action" -> JsonPrimitive("[已省略输入值]")
             value is JsonObject -> JsonObject(value.mapValues { (k, v) -> scrub(v, k) })
             value is JsonArray -> JsonArray(value.take(100).map { scrub(it) })
             value is JsonPrimitive && value.isString -> JsonPrimitive(value.content.take(2000))

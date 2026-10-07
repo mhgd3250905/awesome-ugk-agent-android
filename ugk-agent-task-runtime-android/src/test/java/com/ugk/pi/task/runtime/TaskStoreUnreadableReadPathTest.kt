@@ -9,6 +9,7 @@ import org.junit.Assert.assertNotNull
 import org.junit.Assert.assertNull
 import org.junit.Assert.assertTrue
 import org.junit.Test
+import java.util.concurrent.atomic.AtomicInteger
 import java.util.concurrent.atomic.AtomicReference
 
 /**
@@ -154,6 +155,87 @@ class TaskStoreUnreadableReadPathTest {
         assertNotNull(
             "an array that parsed but produced nothing usable still holds bytes the app cannot use",
             backedUp.get()
+        )
+    }
+
+    /**
+     * A record this build cannot read does not make the records after it unreadable. Reading
+     * the array only as a *prefix* would stop at the first bad element and the next save would
+     * write that shortened list back, erasing a declared task that was perfectly readable - the
+     * same erasure this file exists to prevent, one record further down.
+     */
+    @Test
+    fun aMiddleUnreadableRecordDoesNotDiscardTheCompleteOnesAfterIt() {
+        val readable = AgentTaskJsonCodec.encode(listOf(task("task_1"))).removeSurrounding("[", "]")
+        val newerBuildRecord = """{"id":"task_2","kind":"FROM_A_FUTURE_BUILD"}"""
+        val stored = "[$readable,$newerBuildRecord,${
+            AgentTaskJsonCodec.encode(listOf(task("task_3"))).removeSurrounding("[", "]")
+        }]"
+
+        val backedUp = AtomicReference<String?>(null)
+        val store = store(readRaw = { stored }, backedUp = backedUp)
+
+        assertEquals(
+            "the records on both sides of the unreadable one must survive: $stored",
+            listOf("task_1", "task_3"),
+            store.list().map { it.id }
+        )
+        assertNotNull(
+            "the payload is still not what this build reads, so its bytes are preserved",
+            backedUp.get()
+        )
+    }
+
+    /**
+     * The archive is a copy-aside, not a per-read disk write. `agent_task_list` and every
+     * trigger lookup read the same record again, some of them from the model's tool loop on
+     * the main thread, so one corrupt record must not become one synchronous commit each.
+     */
+    @Test
+    fun oneUnreadableRecordIsArchivedOnceHoweverManyTimesItIsRead() {
+        val torn = "{ not json"
+        val archives = AtomicInteger()
+        val store = TaskRecordStore(
+            readRaw = { torn },
+            writeRaw = { },
+            writeBackup = { archives.incrementAndGet() }
+        )
+
+        repeat(5) {
+            assertEquals(emptyList<AgentTask>(), store.list())
+            assertNull(store.get("task_1"))
+        }
+
+        assertEquals(
+            "ten reads of one unreadable record must not each write to disk",
+            1,
+            archives.get()
+        )
+    }
+
+    /**
+     * A torn write that stops on a *nested* closing brace: `prefix + "]"` is still not an
+     * array, and the boundary search must move. `lastIndexOf(ch, fromIndex)` includes
+     * `fromIndex`, so searching from `end - 1` returns the brace the prefix already ends on,
+     * leaves `end` where it was, and burns the whole budget on one candidate - the shape a
+     * sibling fix already removed from the conversation reader.
+     */
+    @Test
+    fun aTornWriteThatStopsOnANestedClosingBraceStillReturnsTheEarlierTasks() {
+        val firstEncoded = AgentTaskJsonCodec.encode(listOf(task("task_1")))
+        val secondBody = AgentTaskJsonCodec.encode(listOf(task("task_2")))
+            .removeSurrounding("[", "]")
+        val actionStart = secondBody.indexOf("\"action\":")
+        assertTrue("fixture must contain the action object", actionStart >= 0)
+        val nestedClose = secondBody.indexOf('}', actionStart)
+        val torn = firstEncoded.dropLast(1) + "," + secondBody.substring(0, nestedClose + 1)
+
+        val store = store(readRaw = { torn }, backedUp = AtomicReference(null))
+
+        assertEquals(
+            "the complete record before a torn one has to come back: $torn",
+            listOf("task_1"),
+            store.list().map { it.id }
         )
     }
 

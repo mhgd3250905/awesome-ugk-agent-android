@@ -1,13 +1,16 @@
 package com.ugk.pi.android
 
 import kotlinx.coroutines.runBlocking
+import kotlinx.serialization.json.JsonArray
 import kotlinx.serialization.json.JsonObject
 import kotlinx.serialization.json.buildJsonObject
 import kotlinx.serialization.json.put
+import kotlinx.serialization.json.putJsonObject
 import org.junit.Assert.assertEquals
 import org.junit.Assert.assertFalse
 import org.junit.Assert.assertTrue
 import org.junit.Test
+import java.util.Locale
 
 /**
  * The button the host drew as a Cancel button has to be the id the protected Tool reads
@@ -103,15 +106,169 @@ class UserConfirmationButtonVocabularyTest {
     }
 
     /**
-     * A blank-ish id is not a decline either: the reader that supplies it would otherwise
-     * be able to silence a protected Tool with an empty string.
+     * A blank-ish id is not a decline either, asserted on the classifier itself: the Tool
+     * cannot receive one, because its reader already rejects a blank `selectedButtonId`, so a
+     * case driven through the Tool could never tell the two apart.
      */
     @Test
-    fun aBlankSelectedButtonIdIsNotReadAsTheUsersDecline() = runBlocking {
-        val outcome = executeProtectedAfterDialog("   ")
+    fun aBlankIdIsNeitherApprovalNorRefusalAtTheClassifier() {
+        listOf("", "   ", "\t\n").forEach { blank ->
+            assertEquals(
+                "\"$blank\" must not be read as a decision",
+                UserConfirmationButtonIntent.UNRECOGNIZED,
+                userConfirmationButtonIntent(blank)
+            )
+        }
+    }
 
-        assertTrue(outcome.isError)
-        assertFalse(outcome.content, outcome.content.contains("declined"))
+    /**
+     * The value domain of the comparison, spelled through the classifier. Every spelling here
+     * is something a model can write into `buttons[].id`, and the host draws the button from
+     * the same normalisation, so the two must never disagree about what the user pressed.
+     */
+    @Test
+    fun everySpellingOfThePublishedVocabulariesReadsTheSameWay() {
+        USER_CONFIRMATION_ACCEPTED_BUTTON_IDS.forEach { id ->
+            assertEquals(id, UserConfirmationButtonIntent.ACCEPTED, userConfirmationButtonIntent(id))
+            assertEquals(id, UserConfirmationButtonIntent.ACCEPTED, userConfirmationButtonIntent(id.uppercase(Locale.ROOT)))
+            assertEquals(id, UserConfirmationButtonIntent.ACCEPTED, userConfirmationButtonIntent(" $id "))
+            assertEquals(id, UserConfirmationButtonIntent.ACCEPTED, userConfirmationButtonIntent(id.replaceFirstChar { c -> c.uppercaseChar() }))
+        }
+        USER_CONFIRMATION_DECLINED_BUTTON_IDS.forEach { id ->
+            assertEquals(id, UserConfirmationButtonIntent.DECLINED, userConfirmationButtonIntent(id))
+            assertEquals(id, UserConfirmationButtonIntent.DECLINED, userConfirmationButtonIntent(id.uppercase(Locale.ROOT)))
+            assertEquals(id, UserConfirmationButtonIntent.DECLINED, userConfirmationButtonIntent("\t$id\n"))
+            assertEquals(id, UserConfirmationButtonIntent.DECLINED, userConfirmationButtonIntent(id.replaceFirstChar { c -> c.uppercaseChar() }))
+        }
+        // Neither, and it stays neither: the fold must not become "anything that is not an
+        // accepted id is a refusal".
+        listOf("approve", "maybe", "use", "review_later", "confirm2", "oka", "cancell").forEach { id ->
+            assertEquals(id, UserConfirmationButtonIntent.UNRECOGNIZED, userConfirmationButtonIntent(id))
+        }
+    }
+
+    /**
+     * Turkish dotted-I is the reachable reason the comparison pins `Locale.ROOT`: with the
+     * device locale in charge, `DISMISS` and `CONTINUE` stop matching their vocabularies, so
+     * one device would honour the user's decline and another would ask them again.
+     */
+    @Test
+    fun theReadingDoesNotDependOnTheDeviceLocale() {
+        val previous = Locale.getDefault()
+        try {
+            Locale.setDefault(Locale.forLanguageTag("tr-TR"))
+            assertEquals(UserConfirmationButtonIntent.DECLINED, userConfirmationButtonIntent("DISMISS"))
+            assertEquals(UserConfirmationButtonIntent.ACCEPTED, userConfirmationButtonIntent("CONTINUE"))
+        } finally {
+            Locale.setDefault(previous)
+        }
+    }
+
+    @Test
+    fun anOverlappingInjectedVocabularyStaysAnAuthorizationNotARefusal() {
+        // Documented precedence: accepted is checked first, so a host that injects an id into
+        // both sets cannot have an approval silently re-read as the user's "no".
+        val shared = "confirm"
+        assertEquals(
+            UserConfirmationButtonIntent.ACCEPTED,
+            userConfirmationButtonIntent(
+                buttonId = shared.uppercase(Locale.ROOT),
+                acceptedButtonIds = setOf(shared),
+                declinedButtonIds = setOf(shared)
+            )
+        )
+    }
+
+    @Test
+    fun normalizationTrimsAndFoldsCaseWithoutInventingAnId() {
+        assertEquals("not_now", normalizeUserConfirmationButtonId("  Not_Now \t"))
+        assertEquals("", normalizeUserConfirmationButtonId("   "))
+        // A dotless-i mapping would produce "dısmıss"; the root fold must not.
+        assertEquals("dismiss", normalizeUserConfirmationButtonId("DISMISS"))
+    }
+
+    /**
+     * Control, green on main: a host that echoes exactly the id it was offered is not read as
+     * "an id that was never offered".
+     */
+    @Test
+    fun anOfferedIdEchoedVerbatimIsStillTheUsersChoice() = runBlocking {
+        val outcome = runDialog(listOf("cancel" to "取消"), echo = "cancel")
+
+        assertFalse(outcome.content, outcome.isError)
+        assertTrue(outcome.content, outcome.content.contains("\"selectedButtonId\":\"cancel\""))
+    }
+
+    @Test
+    fun aHostThatEchoesAnOfferedIdInAnotherSpellingIsStillTheUsersChoice() = runBlocking {
+        val outcome = runDialog(listOf("ok" to "确认"), echo = "OK")
+
+        assertFalse(
+            "the button was shown to the user; echoing its id with different case is the same " +
+                "choice, not a dialog nobody answered: ${outcome.content}",
+            outcome.isError
+        )
+        assertTrue(outcome.content, outcome.content.contains("\"selectedButtonId\":\"OK\""))
+        assertFalse(outcome.content, outcome.content.contains("withoutUserDecision"))
+    }
+
+    /**
+     * The answer is an id, so an offer whose ids collapse onto one normalised id cannot be
+     * attributed. Refused before anybody is asked, rather than resolved by a guess about which
+     * button the user pressed.
+     */
+    @Test
+    fun aRequestWhoseButtonIdsCollideAfterNormalisationIsRefusedBeforeTheUserIsAsked() = runBlocking {
+        val outcome = runDialog(listOf("OK" to "确认", "ok " to "取消"), echo = "ok")
+
+        assertTrue(
+            "an ambiguous offer must not be presented at all: ${outcome.content}",
+            outcome.isError
+        )
+        assertTrue(outcome.content, outcome.content.contains("share one button id"))
+        assertFalse(
+            "the user was never asked, so nothing may read as their decision: ${outcome.content}",
+            outcome.content.contains("selectedButtonId")
+        )
+    }
+
+    private suspend fun runDialog(
+        offered: List<Pair<String, String>>,
+        echo: String
+    ): ToolResult {
+        val presenter = object : UserConfirmationDialogPresenter {
+            override suspend fun showConfirmationDialog(
+                request: UserConfirmationDialogRequest
+            ) = UserConfirmationDialogResult(selectedButtonId = echo)
+        }
+        val dialog = UserConfirmationDialogTool(
+            presenter = presenter,
+            nowEpochMillis = { NOW },
+            nonceGenerator = { NONCE }
+        )
+        val dialogInput = buildJsonObject {
+            put("title", "确认")
+            put("message", "是否执行")
+            put(
+                "buttons",
+                JsonArray(
+                    offered.map { (id, label) ->
+                        buildJsonObject {
+                            put("id", id)
+                            put("label", label)
+                        }
+                    }
+                )
+            )
+            putJsonObject("target") {
+                put("toolName", "launch_android_app_intent")
+                put("input", buildJsonObject { put("target", "open_url") })
+            }
+        }
+        return dialog.execute(
+            ToolCall("dialog-1", dialog.name, dialogInput),
+            ToolExecutionContext(sessionId = SESSION)
+        )
     }
 
     /**

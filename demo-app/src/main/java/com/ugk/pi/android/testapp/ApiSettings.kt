@@ -159,9 +159,20 @@ class ApiProviderSettingsStore(context: Context) {
         // Kept before returning: `upsertAndActivate` and `delete` are read-modify-write
         // over the whole collection, so the next save would otherwise replace bytes this
         // app could not turn into a state.
-        read.unreadableRaw?.let { preserveUnreadable(it) }
+        //
+        // Remembered per instance because `load()` has no cache and `activeConfig()` sits on
+        // several render paths: without this, one unreadable record would hash and write on
+        // every redraw, on the main thread.
+        read.unreadableRaw?.let { raw ->
+            if (raw != preservedUnreadableRaw) {
+                preservedUnreadableRaw = raw
+                preserveUnreadable(raw)
+            }
+        }
         return read.state
     }
+
+    private var preservedUnreadableRaw: String? = null
 
     private fun preserveUnreadable(raw: String) {
         val filesDir = runCatching { appContext.filesDir }.getOrNull() ?: return

@@ -1,10 +1,22 @@
 package com.ugk.pi.android.testapp
 
+import com.ugk.pi.android.AgentMessage
+import com.ugk.pi.android.AgentTool
+import com.ugk.pi.android.ToolCall
+import com.ugk.pi.android.ToolExecutionContext
+import com.ugk.pi.android.ToolResult
 import com.ugk.pi.android.USER_CONFIRMATION_ACCEPTED_BUTTON_IDS
 import com.ugk.pi.android.USER_CONFIRMATION_DECLINED_BUTTON_IDS
 import com.ugk.pi.android.UserConfirmationDialogButton
 import com.ugk.pi.android.UserConfirmationDialogRequest
+import com.ugk.pi.android.UserConfirmationDialogTool
+import com.ugk.pi.android.UserConfirmationRequiredTool
 import kotlinx.coroutines.runBlocking
+import kotlinx.serialization.json.JsonArray
+import kotlinx.serialization.json.JsonObject
+import kotlinx.serialization.json.buildJsonObject
+import kotlinx.serialization.json.put
+import kotlinx.serialization.json.putJsonObject
 import org.junit.Assert.assertEquals
 import org.junit.Assert.assertFalse
 import org.junit.Assert.assertTrue
@@ -38,13 +50,27 @@ class ConfirmationButtonVocabularyAgreementTest {
 
     @Test
     fun aCancelButtonSpellingWithSurroundingSpacesIsStillDrawnAsCancel() {
+        // The label deliberately carries no refusal meaning: "取消" is itself in the host's
+        // label vocabulary, so a fixture using it would pass without the id arm existing at
+        // all and prove nothing about the id.
         val id = "  cancel  "
         assertTrue(
             "the SDK reads a padded decline as the user's refusal; the classifier that colours " +
                 "the button has to agree or the button the user pressed is not the one the " +
                 "answer describes",
-            ConfirmationVisualPolicy.isCancellation(button(id, "取消"))
+            ConfirmationVisualPolicy.isCancellation(button(id, "暂不"))
         )
+    }
+
+    @Test
+    fun aButtonWhoseIdMeansYesIsNeverDrawnAsTheRefusal() {
+        listOf("OK", "Confirm", " ok ", "YES").forEach { id ->
+            assertFalse(
+                "$id is the id the protected Tool reads as the user's approval, so painting it " +
+                    "with the refusal's colour would promise a no and then run the operation",
+                ConfirmationVisualPolicy.isCancellation(button(id, "取消"))
+            )
+        }
     }
 
     @Test
@@ -66,23 +92,113 @@ class ConfirmationButtonVocabularyAgreementTest {
         }
     }
 
+    /**
+     * What actually matters about an unattended run: nothing executes. The fallback picks an
+     * id for a user who is not there, so the answer must never read as an approval - whether
+     * the model spelled its refusal `cancel` or `Not_Now`. Green on main and green here, which
+     * is the point: the safety property did not move, only the wording of the answer does, and
+     * this is the arm no reader may cross.
+     */
     @Test
-    fun theFallbackForAnUnattendedRunResolvesWithAnIdThatCannotReadAsApproval() {
-        val result = runBlocking {
-            HeadlessConfirmationDialogPresenter.showConfirmationDialog(
-                UserConfirmationDialogRequest(
-                    title = "确认",
-                    message = "执行操作",
-                    buttons = listOf(button("confirm", "确认"), button("Dismiss", "关闭"))
+    fun anUnattendedRunNeverAuthorizesTheProtectedTool() {
+        listOf(
+            emptyList(),
+            listOf(button("confirm", "确认")),
+            listOf(button("Confirm", "确认"), button("cancel", "取消")),
+            listOf(button("confirm", "确认"), button("Not_Now", "暂不")),
+            listOf(button("OK", "确认"), button(" LATER ", "稍后"))
+        ).forEach { offered ->
+            val delegate = RefusingTool()
+            val outcome = runBlocking {
+                val dialog = UserConfirmationDialogTool(
+                    presenter = HeadlessConfirmationDialogPresenter,
+                    nowEpochMillis = { NOW },
+                    nonceGenerator = { NONCE }
                 )
+                val dialogInput = buildJsonObject {
+                    put("title", "确认")
+                    put("message", "执行操作")
+                    put(
+                        "buttons",
+                        JsonArray(
+                            if (offered.isEmpty()) {
+                                listOf(buildJsonObject {
+                                    put("id", "confirm")
+                                    put("label", "确认")
+                                })
+                            } else {
+                                offered.map { b ->
+                                    buildJsonObject {
+                                        put("id", b.id)
+                                        put("label", b.label)
+                                    }
+                                }
+                            }
+                        )
+                    )
+                    putJsonObject("target") {
+                        put("toolName", delegate.name)
+                        put("input", buildJsonObject { put("command", "erase_everything") })
+                    }
+                }
+                val first = dialog.execute(
+                    ToolCall("dialog-1", dialog.name, dialogInput),
+                    ToolExecutionContext(sessionId = SESSION)
+                )
+                UserConfirmationRequiredTool(delegate, nowEpochMillis = { NOW }).execute(
+                    ToolCall("protected-1", delegate.name, buildJsonObject { put("command", "erase_everything") }),
+                    ToolExecutionContext(
+                        sessionId = SESSION,
+                        priorMessages = if (first.isError) emptyList() else listOf(AgentMessage.Tool(first))
+                    )
+                )
+            }
+
+            assertTrue(
+                "an unattended run executed nothing and answered: ${outcome.content}",
+                outcome.isError
+            )
+            assertFalse("the protected Tool ran with no user in the loop", delegate.executed)
+        }
+    }
+
+    /**
+     * The presenter's documented rule held to the published vocabulary instead of a private
+     * six-id copy: when the offer does contain a cancellation button the answer stays a plain
+     * refusal rather than "nobody decided", so the model keeps the do-not-ask-again wording.
+     */
+    @Test
+    fun theHeadlessFallbackTreatsEveryPublishedRefusalAsACancellation() {
+        listOf("not_now", "ABORT", "Dismiss", " LATER ", "decline").forEach { refusal ->
+            val result = runBlocking {
+                HeadlessConfirmationDialogPresenter.showConfirmationDialog(
+                    UserConfirmationDialogRequest(
+                        title = "确认",
+                        message = "执行操作",
+                        buttons = listOf(button("confirm", "确认"), button(refusal, "暂不"))
+                    )
+                )
+            }
+
+            assertEquals("the fallback resolves with $refusal", refusal, result.selectedButtonId)
+            assertFalse(
+                "$refusal is in the published refusal vocabulary, so a cancellation button was " +
+                    "offered and the documented rule applies to it exactly as it does to cancel",
+                result.withoutUserDecision
             )
         }
+    }
 
-        assertFalse(
-            "the headless fallback answered with ${result.selectedButtonId}, which the SDK " +
-                "reads as the user's approval",
-            result.selectedButtonId.trim().lowercase(Locale.ROOT) in USER_CONFIRMATION_ACCEPTED_BUTTON_IDS
-        )
+    private class RefusingTool : AgentTool {
+        var executed = false
+        override val name: String = "dangerous_tool"
+        override val description: String = "Test protected tool."
+        override val inputSchema: JsonObject = JsonObject(emptyMap())
+
+        override suspend fun execute(call: ToolCall, context: ToolExecutionContext): ToolResult {
+            executed = true
+            return ToolResult(call.id, name, "executed")
+        }
     }
 
     /**
@@ -145,4 +261,10 @@ class ConfirmationButtonVocabularyAgreementTest {
 
     private fun button(id: String, label: String): UserConfirmationDialogButton =
         UserConfirmationDialogButton(id, label)
+
+    private companion object {
+        const val SESSION = "s1"
+        const val NOW = 1_000L
+        const val NONCE = "AAAAAAAAAAAAAAAAAAAAAA"
+    }
 }

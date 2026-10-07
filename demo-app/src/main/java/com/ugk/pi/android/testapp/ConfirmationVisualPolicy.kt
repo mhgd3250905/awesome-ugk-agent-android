@@ -183,8 +183,17 @@ object ConfirmationVisualPolicy {
      * because it is about what a user reads, not about what the SDK will honour.
      */
     fun isCancellation(button: UserConfirmationDialogButton): Boolean {
-        if (userConfirmationButtonIntent(button.id) == UserConfirmationButtonIntent.DECLINED) {
-            return true
+        when (userConfirmationButtonIntent(button.id)) {
+            UserConfirmationButtonIntent.DECLINED -> return true
+            // An id the SDK will honour as the user's approval cannot be drawn as the
+            // refusal, whatever the label says. The protected Tool reads the id and nothing
+            // else, so painting it as the "no" button would promise the user a refusal and
+            // then run the operation: {"id":"OK","label":"取消"} is exactly that, and before
+            // the id comparison was normalised it only took the exact lowercase "ok" to hit
+            // it. A button may be drawn DANGER for the same operation; it may not be drawn
+            // as the answer the SDK will not obey.
+            UserConfirmationButtonIntent.ACCEPTED -> return false
+            UserConfirmationButtonIntent.UNRECOGNIZED -> Unit
         }
         val label = button.label.trim().lowercase(Locale.ROOT)
         return label in cancellationLabels

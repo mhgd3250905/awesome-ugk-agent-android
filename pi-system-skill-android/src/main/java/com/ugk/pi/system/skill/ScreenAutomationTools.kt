@@ -204,6 +204,10 @@ class ScreenFindUiElementTool(
                 put("description", "Maximum matches to return. Default 20, capped at 50.")
             }
         }
+        // The closed set the reader enforces: `execute` refuses a key outside
+        // [findUiElementArgumentKeys], so the schema must not keep telling the model that an
+        // extra selector is legal. Same rule, both sides of one contract.
+        put("additionalProperties", false)
     }
 
     override suspend fun execute(call: ToolCall, context: ToolExecutionContext): ToolResult {

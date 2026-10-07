@@ -491,11 +491,19 @@ internal fun encodeStoredConversations(conversations: List<DemoConversation>): S
 /**
  * A stored value, separated into what could be read and what could not.
  *
- * [unreadableRaw] is non-null when a value was present and this build could not turn every
- * record it declared into a conversation - an array that failed to parse, and an array that
- * parsed but dropped a record on the way, both. "The user has no conversations" and "some of
- * the user's conversations cannot be read" must not arrive through the same door, because the
- * caller writes the whole collection back either way.
+ * [unreadableRaw] is non-null when a value was present, the array was read whole (or
+ * salvaged), and some record *inside that array* could not be decoded - or when no record at
+ * all could be. A tail the write never finished is deliberately not one of those: after a
+ * salvage the array the app recovered *is* everything the payload declared, so
+ * `conversations.size < root.size` stays false and nothing is archived. That is the
+ * distinction round 15 pinned in `DemoUnreadableSnapshotValueDomainTest`, and it differs from
+ * `TaskRecordStore`, which archives any payload the strict decoder rejected - the task record
+ * keeps no per-element salvage of a *whole* array, so it cannot tell the two shapes apart and
+ * preserves the bytes instead.
+ *
+ * "The user has no conversations" and "some of the user's conversations cannot be read" must
+ * not arrive through the same door, because the caller writes the whole collection back
+ * either way.
  */
 internal class StoredSnapshotLoad(
     val conversations: List<DemoConversation>,
