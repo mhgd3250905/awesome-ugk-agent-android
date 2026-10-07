@@ -82,10 +82,10 @@ object ApiProviderSettingsJson {
      * The stored value, separated into the state the app can use and the bytes that
      * must be kept before anything replaces them.
      *
-     * The rule is the same one `loadStoredSnapshot` applies to conversations, so the
-     * two whole-collection stores cannot drift apart: unreadable is not the same
-     * thing as empty, and a value that yields no usable config while not *saying*
-     * it is empty must never be allowed to vanish under the next read-modify-write.
+     * The rule is the one `loadStoredSnapshot` applies to conversations, so the two
+     * whole-collection stores cannot drift apart: unreadable is not the same thing as
+     * empty, and a payload whose records did not all come back usable must never be
+     * allowed to vanish under the next read-modify-write.
      */
     fun read(value: String?): ApiProviderSettingsRead {
         if (value.isNullOrBlank()) {
@@ -126,12 +126,14 @@ object ApiProviderSettingsJson {
 
         if (parsed == null) return ApiProviderSettingsRead(ApiProviderSettingsState.empty(), value)
         val (state, root) = parsed
-        // `{"configs":[]}` is this store's own way of writing "nobody configured a
-        // provider". Anything else that leaves no usable config - a `configs` value of
-        // the wrong type, records this build cannot read - is not an honest empty, and
-        // its bytes have to survive the next upsert or delete.
-        val statedEmpty = root["configs"] is JsonArray && (root["configs"] as JsonArray).isEmpty()
-        return ApiProviderSettingsRead(state, value.takeIf { state.configs.isEmpty() && !statedEmpty })
+        // The same rule `loadStoredSnapshot` applies to conversations, per record: the bytes
+        // are kept unless every config the payload declared came back usable.
+        // `{"configs":[]}` is this store's own way of writing "nobody configured a provider";
+        // a `configs` value of the wrong type, a missing key, or records this build cannot read
+        // are not an honest empty, and their bytes have to survive the next upsert or delete.
+        val declaredConfigs = (root["configs"] as? JsonArray)?.size
+        val everyDeclaredConfigIsAccountedFor = declaredConfigs != null && state.configs.size == declaredConfigs
+        return ApiProviderSettingsRead(state, value.takeIf { !everyDeclaredConfigIsAccountedFor })
     }
 
     fun decode(value: String?): ApiProviderSettingsState = read(value).state
