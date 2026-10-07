@@ -456,6 +456,60 @@ class ArgumentFamilyCoverageTest {
         )
     }
 
+    /**
+     * A selector key this tool does not implement is not a constraint, and dropping it is
+     * not neutral: the match set then holds everything the *remaining* selectors allow, which
+     * is wider than the caller asked for and is what the model then acts on. The
+     * `else -> false` arm of `matchesSelector` cannot cover this - the argument reader never
+     * hands an unknown key to the matcher - so the refusal belongs where the arguments are
+     * read, naming the key it cannot honour.
+     */
+    @Test
+    fun aSelectorKeyThisToolDoesNotImplementIsRefusedInsteadOfSilentlyDropped() {
+        val widened = runBlocking {
+            ScreenFindUiElementTool(RecordingBackend()).execute(
+                ToolCall(
+                    "find",
+                    "screen_find_ui_element",
+                    buildJsonObject {
+                        put("text", "Continue")
+                        put("textContains", "Exit")
+                    }
+                ),
+                context
+            )
+        }
+
+        assertTrue(
+            "an unsupported selector key silently removed one constraint: ${widened.content}",
+            widened.isError
+        )
+        assertTrue(
+            "the refusal must name the key the caller has to fix: ${widened.content}",
+            widened.content.contains("textContains")
+        )
+
+        // The other direction: the new check must not reject a call that only used the
+        // keys this tool implements.
+        val supported = runBlocking {
+            ScreenFindUiElementTool(RecordingBackend()).execute(
+                ToolCall(
+                    "find",
+                    "screen_find_ui_element",
+                    buildJsonObject {
+                        put("text", "Continue")
+                        put("max_results", 3)
+                    }
+                ),
+                context
+            )
+        }
+        assertFalse(
+            "a supported selector and a supported limit must still run: ${supported.content}",
+            supported.isError
+        )
+    }
+
     private class RecordingBackend : ScreenAutomationBackend {
         override fun readUiTree(sessionId: String, maxDepth: Int, maxNodes: Int): ScreenReadResult =
             ScreenReadResult(
