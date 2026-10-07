@@ -1135,10 +1135,6 @@ class MainActivity : ComponentActivity() {
     private fun refreshRuntime() {
         if (DemoCapabilityInterlock.isScreenOperationOwned()) return
         val config = apiStore.activeConfig()
-        // Read once and hand the same value to both sides of the comparison: the flag
-        // decides which Tools the new runtime registers, so reading it twice could make the
-        // installed and requested identities disagree forever and rebuild on every resume.
-        val fullAuthorizationEnabled = authorizationStore.isFullAuthorizationEnabled()
         when (
             DemoRuntimeLifecyclePolicy.decide(
                 // Read from the process-level runtime: after an Activity
@@ -1146,16 +1142,41 @@ class MainActivity : ComponentActivity() {
                 // on the process-owned instance, which must map to REUSE.
                 runtimeExists = conversationRuntime.agentRuntime != null,
                 installedConfig = conversationRuntime.appliedRuntimeConfig,
-                requestedConfig = DemoRuntimeConfig.from(config, fullAuthorizationEnabled)
+                requestedConfig = DemoRuntimeConfig.from(config)
             )
         ) {
             DemoRuntimeRefreshAction.CREATE,
-            DemoRuntimeRefreshAction.REBUILD -> rebuildRuntime(config, fullAuthorizationEnabled)
+            DemoRuntimeRefreshAction.REBUILD -> rebuildRuntime(config)
             DemoRuntimeRefreshAction.REUSE -> refreshRuntimeState(config)
         }
+        // A resume is also the moment the authorization preference may have moved, and the
+        // registered Tool set was decided once, at the build above.
+        syncAuthorizationMode()
     }
 
-    private fun rebuildRuntime(config: ApiProviderConfig?, fullAuthorizationEnabled: Boolean) {
+    /**
+     * Rebuild when the stored authorization preference no longer matches what this runtime
+     * registered, but never while the user has a turn in flight or a timer waiting.
+     * `runAgent` asks it again before starting a run, so a change made mid-turn is applied by
+     * the next turn instead of destroying the current one.
+     */
+    private fun syncAuthorizationMode() {
+        val current = authorizationStore.isFullAuthorizationEnabled()
+        if (!DemoRuntimeAuthorizationSync.shouldRebuild(
+                runtimeExists = conversationRuntime.agentRuntime != null,
+                applied = conversationRuntime.appliedAuthorizationMode,
+                current = current,
+                runInFlight = runState.isBusy || runCoordinator.isRunning() ||
+                    delayedTasks.snapshot() !is DemoDelayedTaskState.Idle
+            )
+        ) {
+            return
+        }
+        rebuildRuntime(apiStore.activeConfig())
+    }
+
+    private fun rebuildRuntime(config: ApiProviderConfig?) {
+        val fullAuthorizationEnabled = authorizationStore.isFullAuthorizationEnabled()
         stopAgent(clearQueuedMessages = true)
         conversationRuntime.agentRuntime?.close()
         val processAuthorizationStore = AgentAuthorizationSettingsStore(applicationContext)
@@ -1170,7 +1191,8 @@ class MainActivity : ComponentActivity() {
             toolDecorator = capabilityInterlock.toolDecorator(),
             supportsBackgroundPromptExecution = false
         )
-        conversationRuntime.appliedRuntimeConfig = DemoRuntimeConfig.from(config, fullAuthorizationEnabled)
+        conversationRuntime.appliedRuntimeConfig = DemoRuntimeConfig.from(config)
+        conversationRuntime.appliedAuthorizationMode = fullAuthorizationEnabled
         refreshRuntimeState(config)
     }
 
@@ -1369,6 +1391,9 @@ class MainActivity : ComponentActivity() {
         if (DemoCapabilityInterlock.isScreenOperationOwned() || delayedTasks.snapshot() !is DemoDelayedTaskState.Idle ||
             runState.isBusy || runCoordinator.isRunning()
         ) return false
+        // Nothing is in flight here, so this is the safe place to apply an authorization
+        // change a resume had to leave pending.
+        syncAuthorizationMode()
         val currentRuntime = conversationRuntime.agentRuntime ?: return false
         val effectiveText = if (text.isBlank() && images.isNotEmpty()) {
             resolveDefaultImagePromptText(images.size)

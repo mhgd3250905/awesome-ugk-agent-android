@@ -120,9 +120,7 @@ class DemoConversationRuntimeTest {
         protocol = ProviderProtocol.AUTO,
         contextWindow = "200K",
         autoCompaction = true,
-        compactionThreshold = 0.70,
-        // The stored preference this runtime was built under; part of the installed identity.
-        fullAuthorizationEnabled = false
+        compactionThreshold = 0.70
     )
 
     private fun newAgentRuntime(): AgentRuntime = AgentRuntime.Builder()

@@ -56,6 +56,13 @@ class DemoConversationRuntime private constructor(
     var agentRuntime: AgentRuntime? = null
     internal var appliedRuntimeConfig: DemoRuntimeConfig? = null
 
+    /**
+     * The authorization mode the registered Tool set was built under. Separate from
+     * [appliedRuntimeConfig] on purpose: a provider-config change may stop the turn it
+     * belongs to, while an authorization change must not.
+     */
+    internal var appliedAuthorizationMode: Boolean? = null
+
     val sessions: MutableMap<String, AgentSession> = mutableMapOf()
 
     var activeContextWindow: String? = null
