@@ -131,6 +131,9 @@ class DemoRuntimeLifecyclePolicyTest {
     private class RuntimeRefreshTracer {
         private var runtimeExists = false
         private var installedConfig: DemoRuntimeConfig? = null
+
+        /** Mirrors `AgentAuthorizationSettingsStore.isFullAuthorizationEnabled()` for the resume. */
+        var fullAuthorizationEnabled = false
         var runtimeIdentity: Int = 0
             private set
         val events = mutableListOf<String>()
@@ -140,7 +143,7 @@ class DemoRuntimeLifecyclePolicyTest {
                 DemoRuntimeLifecyclePolicy.decide(
                     runtimeExists = runtimeExists,
                     installedConfig = installedConfig,
-                    requestedConfig = DemoRuntimeConfig.from(config)
+                    requestedConfig = DemoRuntimeConfig.from(config, fullAuthorizationEnabled)
                 )
             ) {
                 DemoRuntimeRefreshAction.CREATE -> create(config)
@@ -155,7 +158,7 @@ class DemoRuntimeLifecyclePolicyTest {
 
         private fun create(config: ApiProviderConfig?) {
             runtimeExists = true
-            installedConfig = DemoRuntimeConfig.from(config)
+            installedConfig = DemoRuntimeConfig.from(config, fullAuthorizationEnabled)
             runtimeIdentity++
             events += "create"
         }
@@ -165,13 +168,16 @@ class DemoRuntimeLifecyclePolicyTest {
     private class ProcessOwnedRuntimeState {
         var agentRuntimeExists = false
         var appliedRuntimeConfig: DemoRuntimeConfig? = null
+
+        /** The stored preference: process-level, read by whichever Activity resumes. */
+        var fullAuthorizationEnabled = false
         var agentRuntimeIdentity = 0
             private set
         val events = mutableListOf<String>()
 
         fun createRuntime(config: ApiProviderConfig?) {
             agentRuntimeExists = true
-            appliedRuntimeConfig = DemoRuntimeConfig.from(config)
+            appliedRuntimeConfig = DemoRuntimeConfig.from(config, fullAuthorizationEnabled)
             agentRuntimeIdentity++
             events += "create"
         }
@@ -184,7 +190,7 @@ class DemoRuntimeLifecyclePolicyTest {
                 DemoRuntimeLifecyclePolicy.decide(
                     runtimeExists = process.agentRuntimeExists,
                     installedConfig = process.appliedRuntimeConfig,
-                    requestedConfig = DemoRuntimeConfig.from(config)
+                    requestedConfig = DemoRuntimeConfig.from(config, process.fullAuthorizationEnabled)
                 )
             ) {
                 DemoRuntimeRefreshAction.CREATE,

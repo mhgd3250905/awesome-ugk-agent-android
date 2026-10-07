@@ -1135,6 +1135,10 @@ class MainActivity : ComponentActivity() {
     private fun refreshRuntime() {
         if (DemoCapabilityInterlock.isScreenOperationOwned()) return
         val config = apiStore.activeConfig()
+        // Read once and hand the same value to both sides of the comparison: the flag
+        // decides which Tools the new runtime registers, so reading it twice could make the
+        // installed and requested identities disagree forever and rebuild on every resume.
+        val fullAuthorizationEnabled = authorizationStore.isFullAuthorizationEnabled()
         when (
             DemoRuntimeLifecyclePolicy.decide(
                 // Read from the process-level runtime: after an Activity
@@ -1142,16 +1146,16 @@ class MainActivity : ComponentActivity() {
                 // on the process-owned instance, which must map to REUSE.
                 runtimeExists = conversationRuntime.agentRuntime != null,
                 installedConfig = conversationRuntime.appliedRuntimeConfig,
-                requestedConfig = DemoRuntimeConfig.from(config)
+                requestedConfig = DemoRuntimeConfig.from(config, fullAuthorizationEnabled)
             )
         ) {
             DemoRuntimeRefreshAction.CREATE,
-            DemoRuntimeRefreshAction.REBUILD -> rebuildRuntime(config)
+            DemoRuntimeRefreshAction.REBUILD -> rebuildRuntime(config, fullAuthorizationEnabled)
             DemoRuntimeRefreshAction.REUSE -> refreshRuntimeState(config)
         }
     }
 
-    private fun rebuildRuntime(config: ApiProviderConfig?) {
+    private fun rebuildRuntime(config: ApiProviderConfig?, fullAuthorizationEnabled: Boolean) {
         stopAgent(clearQueuedMessages = true)
         conversationRuntime.agentRuntime?.close()
         val processAuthorizationStore = AgentAuthorizationSettingsStore(applicationContext)
@@ -1166,7 +1170,7 @@ class MainActivity : ComponentActivity() {
             toolDecorator = capabilityInterlock.toolDecorator(),
             supportsBackgroundPromptExecution = false
         )
-        conversationRuntime.appliedRuntimeConfig = DemoRuntimeConfig.from(config)
+        conversationRuntime.appliedRuntimeConfig = DemoRuntimeConfig.from(config, fullAuthorizationEnabled)
         refreshRuntimeState(config)
     }
 
