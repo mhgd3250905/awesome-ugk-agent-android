@@ -22,7 +22,14 @@ import org.junit.Test
  */
 class DemoRuntimeAuthorizationSyncTest {
 
-    /** Control: matching preference and built runtime never rebuild, in either activity state. */
+    /**
+     * Control: a matching preference and a matching built runtime rebuild nothing.
+     *
+     * The `inFlight` sweep here carries no judgment - with `applied == current` the function
+     * returns false before the flag can matter. It is kept as the exhaustive corner of the
+     * truth table, not as a pin; the load-bearing arms are
+     * aMismatchNeverStopsATurnThatIsAlreadyRunning and the two idle-rebuild cases.
+     */
     @Test
     fun anAppliedModeThatMatchesThePreferenceRebuildsNothing() {
         listOf(true, false).forEach { mode ->

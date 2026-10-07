@@ -148,15 +148,17 @@ class UserConfirmationButtonVocabularyTest {
     }
 
     /**
-     * The reading is the same whatever the device's default locale, because the comparison names
-     * `Locale.ROOT`.
+     * The reading is the same whatever the device's default locale.
      *
-     * Recorded as a control, not as the bug: this round's review first claimed the pre-existing
-     * split came from a Turkish device folding `DISMISS` to a dotted form, and that was measured
-     * false on this toolchain (`r16-lowercase-locale-probe2.log`: no-argument `lowercase()`
-     * already folds like `Locale.ROOT`). What was real, and what the other cases in this file
-     * pin, is that this module compared ids verbatim while the host folded them, and that two
-     * host readers kept narrower private copies of the same vocabulary.
+     * This is a determinism control, not proof that naming `Locale.ROOT` in the comparison
+     * changes anything: measured on this toolchain
+     * (`build/review-evidence/r16-lowercase-locale-probe2.log`) a no-argument `lowercase()`
+     * already folds like `Locale.ROOT`, and the matrix row that deletes the ROOT pin from the
+     * teaching redactor (m20) stays green - so no case here, including this one, can fail for
+     * want of the pin. The claims this round first made about a Turkish device splitting the
+     * readers were measured false and are recorded as such in
+     * `docs/terminal-runtime-validation.md` section 43. What the case does pin is the real
+     * defect: this module compared ids verbatim while the host folded them.
      */
     @Test
     fun theReadingIsTheSameUnderATurkishDefaultLocale() {

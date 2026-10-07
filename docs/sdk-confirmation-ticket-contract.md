@@ -31,8 +31,13 @@
 >    （`ugk-pi-android/.../UserConfirmationButtonVocabulary.kt`）做 trim + `Locale.ROOT` 折叠后再查集合，
 >    accepted 先于 declined（保持受保护 Tool 一直有的优先级，重叠注入不会把授权读成拒绝）。
 >    受保护 Tool 的两个判据、确认 Tool 的「按钮是否在请求里」判据、demo 的可视化分类、headless 兜底、
->    完整授权自动同意这五个落点全部走它；headless 与授权策略的两份手抄集合已删除。
->    新自查：`git grep -n "userConfirmationButtonIntent" -- '*/src/main/*'`。
+>    完整授权自动同意这五个落点全部走它；headless 与授权策略各自的两份手抄集合（合计四份私有 set）已删除。
+>    新自查（两个 API，不是一条命令覆盖全部五处）：
+>    `git grep -n "userConfirmationButtonIntent" -- '*/src/main/*'` 命中受保护 Tool 的两处判据、
+>    可视化分类、headless 兜底与授权策略；offered-id 那一处走的是同一文件里的
+>    `normalizeUserConfirmationButtonId`（它只需要折叠，不需要三态结论），自查
+>    `git grep -n "normalizeUserConfirmationButtonId" -- '*/src/main/*'`。
+>    把两条命令并排跑才算核完——第一稿这里写的是「一条命令看五个落点」，实测只有四个，已订正。
 >    旧自查命令 `git grep -n "USER_CONFIRMATION_DECLINED_BUTTON_IDS" -- '*/src/main/*'` 现在只剩 3 个命中
 >    （集合定义、受保护 Tool 的注入默认值、词汇表的归一化别名），**demo 侧不再是它的读者**——
 >    命中集从「SDK + demo 两处」变成「只有 SDK」，这正是本条要的效果，不是集合丢了。

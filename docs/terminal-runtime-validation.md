@@ -1116,13 +1116,17 @@ SDK `E:/Android/SDK`（NDK 28.2.13676358 在位）。磁盘 `C: 200G/190G/9.9G 9
 
 修复：新增 `UserConfirmationButtonVocabulary.kt`，`userConfirmationButtonIntent(id[, accepted, declined])`
 成为唯一比较（trim + `Locale.ROOT`，accepted 先于 declined 以保持既有优先级，空白 id 归 UNRECOGNIZED），
-五个落点全部改走它，两份手抄集合删除；两个公开集合在 `*/src/main/**` 里的读者实测只剩三个——定义处、
+五个落点全部改走它，四份手抄集合删除（headless 的拒绝表与授权表、授权策略的拒绝表与授权表）；两个公开集合在 `*/src/main/**` 里的读者实测只剩三个——定义处、
 受保护 Tool 的注入默认值、词汇表的归一化别名（`git grep -n "USER_CONFIRMATION_ACCEPTED_BUTTON_IDS" -- '*/src/main/*'`），
 demo 侧不再是它们的读者。
 兄弟落点核对：同值第五个读者是 `UserConfirmationDialogTool` 的 offered-id 判据（改为同归一化比较，
-否则宿主回显 `OK` 会被读成「没提供过的 id」而把用户的选择改写成「没有人决定」）；第六、第七个读者
-`DemoTeachingExperiencePlugin` 与 `DemoOperationLearningActivity` 比较的是宿主自造的
-`use/verified/resume/compile/delete` 且列表也由同一宿主构造，属已核查不可达，登记不改。
+否则宿主回显 `OK` 会被读成「没提供过的 id」而把用户的选择改写成「没有人决定」）；第六、第七、第八个读者：
+`DemoTeachingExperiencePlugin`、`DemoOperationLearningActivity`，以及两者共用的宿主选择器
+`TeachingExperienceChoiceDialog`（`button.id != "cancel"`，只决定按钮强调色；调用链
+`ActivityUserConfirmationDialogPresenter.teachingExperienceChoiceDialog` ←
+`showExplicitConfirmationDialog` ← `DemoAgentRuntimeFactory` / `DemoOperationLearningActivity`）
+比较的都是宿主自己写出的 `use/verified/cancel/resume/compile/delete`，按钮列表也来自同一宿主，
+模型无从注入，属已核查不可达，登记不改。
 `AgentAuthorizationPolicy` 第二臂的语义一并收窄为「优先 UNRECOGNIZED」，不再把拒绝词汇表的 id 当自动同意提交；
 第一臂（accepted）折叠大小写后确实变宽（`OK` 现在会命中），这是与受保护 Tool 对齐的结果，
 且完整授权本就是宿主显式开启，不构成授权面扩大——`anIdOutsideBothVocabulariesIsNotReadAsTheUsersDecline`
@@ -1134,14 +1138,16 @@ demo 侧不再是它们的读者。
 `DemoRuntimeConfig` 不含该偏好，`onResume` → `refreshRuntime()` 于是判 REUSE，
 「在开启态建出来的 runtime」在用户关掉开关后仍继续用：受保护 Tool 要求先调用一个模型手里没有的 Tool，
 所有高影响动作（启动应用、Intent、系统设置、剪贴板、屏幕动作、文件写入、bash）进入死路，直到进程重启。
-修复分两步，且第一步被推翻重做（见「本轮修复自己引入的缺陷」第 1 条）：最终形态是
+修复分两步，且第一步被推翻重做（见「本轮修复自己引入的缺陷」第 1 条）；
+「下一次回合开头同步」只对**前台/用户发起**的回合成立，见「已核查但不修」第 7 条。最终形态是
 `DemoRuntimeAuthorizationSync.shouldRebuild`（纯判定，四个布尔/可空入参）+
 `DemoConversationRuntime.appliedAuthorizationMode`（记录注册时的偏好，不塞进 provider 身份）+
 `MainActivity.syncAuthorizationMode()` 在 `onResume`（空闲时）与 `runAgent` 顶部（该函数已确认无在跑回合）各调一次。
 判别用例：`turningFullAuthorizationOffWhileIdleRebuildsTheStrandedRuntime`、
 `aMismatchNeverStopsATurnThatIsAlreadyRunning`、`anUnrecordedModeIsCorrectedWhenIdleAndLeftAloneWhileRunning`、
 `nothingIsRebuiltBeforeARuntimeExists`。残留与取舍写明：在跑时不改建，那一回合仍带着死路的受保护 Tool
-（有界、下一回合即恢复），换的是不再销毁用户队列与计时任务；仓外宿主「建一次、随后翻偏好」同形，
+（有界：前台/用户发起的下一回合即恢复；后台定时与悬浮交互两条路径不在本轮接线，见「已核查但不修」第 7 条），
+换的是不再销毁用户队列与计时任务；仓外宿主「建一次、随后翻偏好」同形，
 属 SDK 契约文档项，本轮只在 `docs/sdk-confirmation-ticket-contract.md` 追加声明，不改公开接口形状。
 
 **F3 P0** `ugk-agent-task-runtime-android` 的 `TaskRecordStore` / `AgentTaskJsonCodec.decode` —
@@ -1223,11 +1229,21 @@ baseUrl/apiKey）无痕消失。`ApiProviderSettingsJson.read` 上方的注释�
    改为按内容去重、并移到锁外（`oneUnreadableRecordIsArchivedOnceHoweverManyTimesItIsRead`）。
 6. **P2**：provider store 无缓存，新放宽的保留规则会让 `activeConfig()` 的每条渲染路径反复哈希 + 写文件；
    加「同一份字节只保留一次」。
-7. **P2**：`UserConfirmationButtonVocabulary.kt` 里两个私有归一化集合定义后从未被读（默认路径其实每次调用都在
+7. **P1**：拒绝的另一半没被折叠掉。`isCancellation` 除 id 词表外还看 label 词表，所以
+   `{"id":"no_thanks","label":"取消"}`（两个字段都由模型书写）仍被画成 Cancel，而 SDK 对
+   `no_thanks` 读成 UNRECOGNIZED → 还是那句「先调用确认 Tool 再重试」→ 同一条再弹窗路径从 label 侧活着。
+   本轮把 id 侧与「id 说是要、label 说是否」那一格关掉（上面第 2 条），label 侧要的是宿主能一等公民地
+   表达「这个按钮就是拒绝」，即扩 `UserConfirmationDialogResult`——第十五轮已把它登记成接口决策而非补丁。
+   本轮动作：把这个残留钉成可执行事实（`aRefusalLabelOnAnUnrecognizedIdIsStillNotReadAsTheUsersDecline`
+   同时断言两侧现状，任何一侧被改成「一致」它就红），并在契约文档写明它还活着。
+8. **P2**：`UserConfirmationButtonVocabulary.kt` 里两个私有归一化集合定义后从未被读（默认路径其实每次调用都在
    重建集合），且文件头写着「every reader … must use」在本树上不成立。接线 + 收窄措辞。
-8. **P2**：四条新用例结构上不可能判红（label 用了词表里的「取消」；空白 id 在 `stringField` 的
+9. **P2**：四条新用例结构上不可能判红（label 用了词表里的「取消」；空白 id 在 `stringField` 的
    `isNotBlank` 处就被挡掉、走不到判定；一条只断言「不是 accepted」的恒真属性；加上第 1 条那个自证的
-   mirrored tracer）。全部换成真判别式，并由 m1–m20 逐行验证。
+   mirrored tracer）。全部换成真判别式，并由 m1–m21 逐行验证。收口轮又抓到两处同类残留并已改掉：
+   「tr-TR 控制」里那句 `lowercase()` 与 `lowercase(Locale.ROOT)` 互比的断言没有任何改动能让它红（stdlib 事实，
+   不是本仓行为），删除；`anAppliedModeThatMatchesThePreferenceRebuildsNothing` 扫 `inFlight` 那一维在
+   `applied == current` 时结构上不可能改变结论，保留为穷举控制但在注释里写明它不承载判据。
 
 ### 变异矩阵（每条整改都要「退回旧实现即判红」）
 
@@ -1236,6 +1252,12 @@ pass 1 `build/review-evidence/r16-mutation-matrix.tsv` + `-run.log`：19 行，1
 pass 2 `r16-mutation-matrix-pass2.tsv` + `-run.log`：m5、m19 重写后判红，另加 m20 与双站探针。
 最终处置：m1–m11、m13–m19 判红 OK；m12 记「单站等价、双站判红」；m20 有意判绿——它证明
 「pin `Locale.ROOT`」在本工具链上不改变行为，也就是本轮那句土耳其故事是假的，留在矩阵里比删掉更有价值。
+改名后的重跑：`0d6441f` 把 `theCancellationVocabularyDoesNotDependOnTheDeviceLocale` 更名为
+`theVocabularyReadsTheSameUnderATurkishDefaultLocale`，pass 1 的 m9 是以旧名判红的，收口轮以新名重跑 m9
+（`r16-mutation-matrix-pass3-run.log`，ROW=m9 VERDICT=OK）。另补 m21：把 `normalizeUserConfirmationButtonId`
+里的 `Locale.ROOT` 摘掉 → 套件仍绿，这与 m20 同形，是把「ROOT 只是确定性钉、不是行为钉」这句话变成可复核事实的行，
+不是漏网。两行的最终处置都写进上面「最终处置」那段。
+
 每行先跑 CONTROL（不绿即整行作废并登记）、注入后回读锚点证明真变了、`git checkout --` 复原后核对
 `git status --porcelain` 为空（两遍 pass 的 `WORKTREE_DIRTY_*=NONE` 即此）。
 「汇总行会红」不是推理：pass 1 自身就以 `MATRIX_EXIT=1` 红过（三行不合格被抓），
@@ -1256,7 +1278,9 @@ pass 2 亦为 `PASS2_EXIT=1`（m20 的有意判绿如实计入 NOT_OK），两�
    把同一条规则只用于 6 个 id 而不用于同一词表的另外 5 个，正是本轮在消除的形状。
    两条臂都不执行受保护 Tool——`anUnattendedRunNeverAuthorizesTheProtectedTool` 在主干语义与分支同时为绿
    （它不在 `r16-main-semantics-full2.log` 的红集里），差别只在给模型的措辞。
-   复测：`./gradlew :demo-app:testDebugUnitTest --tests "*HeadlessConfirmation*" --console=plain`。
+   复测：`./gradlew :demo-app:testDebugUnitTest --tests "*HeadlessConfirmation*" --tests "*ConfirmationButtonVocabularyAgreementTest*" --rerun-tasks --console=plain`。
+   （`anUnattendedRunNeverAuthorizesTheProtectedTool` 与 `theHeadlessFallbackTreatsEveryPublishedRefusalAsACancellation`
+   都在后一个类里；这条复测命令最初只写了前一个 pattern，复现不出本条结论，被收口轮按原文执行时抓到。）
 3. 「正解是永远注册 `show_user_confirmation_dialog`」——否：根目录 `AGENTS.md` 明写
    「宿主显式开启 full authorization 时不注册确认 Tool，但仍保留工具自身校验」，且
    `AndroidAutomationAgentIntegrationInstrumentedTest` 有
@@ -1289,11 +1313,14 @@ pass 2 亦为 `PASS2_EXIT=1`（m20 的有意判绿如实计入 NOT_OK），两�
    （`update/delete/write` 都要求 `read(id) != null`，`recover()` 跳过读不出的目录，`create` 只新建目录），
    后果是被低估的容量与无提示的隐身；修法要同时定 UI 出路，登记给后续。
    复测：`grep -n "mapNotNull { read" demo-app/src/main/java/com/ugk/pi/android/testapp/DemoTeachingStore.kt`。
-3. 裸 `lowercase()`（不写 Locale）的同族还有 `DemoRunState.friendlyName/formatInputSummary`、
-   `ProviderProfile`（baseUrl 与协议识别）、`DemoFileImportStore`（扩展名/MIME）、`DemoAgentTraceStore`、
-   `AgentSkillTools`（loadPolicy 文字）。本轮只修会造成出密（F6）与授权判定（F1）的两处；
-   其余按「只影响显示文字，或在本工具链上与 ROOT 折叠等价（见被否立案第 1 条）」登记。
-   复测（命中数即登记数，勿凭印象写「几处」）：`git grep -n "\.lowercase()" -- '*/src/main/*' | grep -v Locale`。
+3. 不写 Locale 的 `lowercase()` 同族：本轮按文档原样实测
+   `git grep -n "\.lowercase()" -- '*/src/main/*' | grep -v Locale` 命中 **36 处 / 15 个文件**
+   （不是「还有几处」——我第一稿就是这么写的，被收口轮按值重数后订正）。功能性代表：`AgentRuntime`
+   （stopReason 归一）、`AndroidSkill`（trigger 匹配）、`AndroidAppIntentTool`（scheme 白名单）、
+   `AgentAttentionPlugin`（枚举字符串）、`ProviderProfile`（baseUrl 与协议识别）、`DemoFileImportStore`
+   （扩展名/MIME）、`DemoRunState`（显示名与摘要）、`DemoAgentTraceStore`、`AgentSkillTools`（loadPolicy 文字）。
+   本轮只修会造成出密（F6）与授权判定（F1）的两处；其余按「只影响显示文字，或在本工具链上与 ROOT 折叠等价
+   （见被否立案第 1 条）」登记。逐条命中清单在 `build/review-evidence/r16-doc-selfcheck.txt` 第 4 节。
 4. `ActivityUserConfirmationDialogPresenter` 的 `?: CANCEL_BUTTON_ID` 造一个请求里没有的按钮 id：
    SDK 侧已把它压成绑定票据的「没有用户决定」，改它要给 `UserConfirmationDialogResult` 加一等
    「用户主动放弃」语义，属公开接口扩面 + 宿主迁移。
@@ -1305,6 +1332,36 @@ pass 2 亦为 `PASS2_EXIT=1`（m20 的有意判绿如实计入 NOT_OK），两�
    （不放宽执行、不谎称已授权），与 F1「画成拒绝却读成授权」不同形；本轮不动，登记为
    「同一参数被两处按不同规则解释」的已知实例，供后续与 `AndroidClipboardTools` 的 `sensitive`
    三态读取口一起判。复测：`grep -n "dangerMarkers" -A 4 demo-app/src/main/java/com/ugk/pi/android/testapp/ConfirmationVisualPolicy.kt`。
+7. 「下一次回合开头同步」这个出路只覆盖前台/用户发起的回合。`DemoDelayedMessageDispatcher` 与
+   `DemoUrgentInteractionDispatcher` 直接在 `conversationRuntime.agentRuntime` 上起回合，不经过
+   `MainActivity.runAgent`，因此不调 `syncAuthorizationMode()`；而 `runInFlight` 里含「有计时任务在等」，
+   所以那条路径上的 `onResume` 也判为不改建。后果：定时器到点或悬浮交互发起的后台回合可以长期跑在
+   一个注册面与实时偏好不一致的 runtime 上。本轮**不**把改建塞进这两条后台启动路径（§10 的规矩：
+   可选工作进启动路径前要先证明「真的欠」且不抢锁、不打断在跑回合，这里两样都还没测），而是把 F2 的
+   措辞收窄成「前台/用户发起的下一回合」，并在此登记。合并前应跑：仪器面「定时任务到点时切换授权偏好」
+   一条断言（见「未证实项」第 2 条），或直接补第三处 sync 调用点并配一条不打断在跑回合的判别用例。
+   复测：`git grep -n "conversationRuntime.agentRuntime" -- demo-app/src/main/java/com/ugk/pi/android/testapp/DemoDelayedMessageDispatcher.kt demo-app/src/main/java/com/ugk/pi/android/testapp/DemoUrgentInteractionDispatcher.kt`。
+
+### 取值域实测（收口轮重新枚举被审判断的输入，不是复查上一轮有没有落地）
+
+- `userConfirmationButtonIntent` 逐格实测：全小写、全大写、混合大小写、首尾空格、制表/换行、空白串、
+  纯标点、超长串、`close/later/no`（同时在 id 词表与 label 词表里）→ 与预期一致。**`trim()` 不剥
+  U+00A0 / U+2007 / U+202F 一类不换行空格**，`\u00A0cancel\u00A0` 两侧都读成 UNRECOGNIZED；全角 `ＯＫ`
+  同样 UNRECOGNIZED（不做 NFKC）。由于 SDK 与 demo 现在调同一个函数，风险只剩「折叠不到」，
+  不再是「两读法折叠不一致」——这是本轮把四套规则合成一套之后唯一剩下的形状。
+- `screen_find_ui_element` 未知键：空串键名会被点名 `''`；只差大小写的 `TEXT` 也判未知（协议键保持区分
+  大小写，与既有 `status`/`activeOnly` 一侧一致）；零键输入仍走「至少一个选择器」。被点名的键取
+  `call.input.keys` 里第一个未知项，即模型书写顺序——**多个未知键时消息顺序相关**，本轮判别用例只放一个
+  未知键，故这条顺序性未被钉住（登记，与「已核查但不修」里 `agent_task_list` 那条一起做）。
+- `TaskRecordStore` 读法逐形实测：`[null]` → 归档 + 空（不是诚实空）；`[]` 与 `" [] "` → 诚实空、不归档；
+  首元素不可读、以及 200 元素里夹一条不可读 → 走逐元素路径，16 次前缀预算根本不介入；合法 JSON 但非数组 →
+  归档，前缀循环 1 次后 break → 空。单槽 `KEY_TASKS_BACKUP` 被**下一次不可读读**覆盖（不是被下一次 `upsert`：
+  `upsert` 只写 `KEY_TASKS`），与「已核查但不修」第 5 条一致。
+- `DemoRuntimeAuthorizationSync.shouldRebuild` 四入参真值表全覆盖（含 `runtimeExists=false`、`applied=null`
+  与「相等时 `runInFlight` 两值都不改建」）。
+- 有意判绿的矩阵行也列在这儿，免得被误当缺口：m20（摘掉教学脱敏的 `Locale.ROOT`）与 m21（摘掉
+  `normalizeUserConfirmationButtonId` 的 `Locale.ROOT`）都判绿，二者共同构成「ROOT 是确定性钉、不是行为钉」
+  这句话的证据。
 
 ### 未证实项（合并前应跑）
 
@@ -1373,8 +1430,12 @@ pass 2 亦为 `PASS2_EXIT=1`（m20 的有意判绿如实计入 NOT_OK），两�
    两者在 pass 2 重写后判红。
 6. m12 报 `STILL_GREEN` 时先怀疑用例假覆盖，逐位复算 `lastIndexOf('}', end - 2)` 的候选序列后确认单站回退
    确实等价（salvage 的第二候选重现整数组），于是补双站探针，而不是去「修」一条不存在的缺陷。
-7. 本节点名时踩到 `grep -c` 命中 0 会以退出码 1 截断 `&&` 链：`N=$(… | grep -Ec …) && echo … >> 日志`
-   让归属行没写进去。改为分号分隔的独立语句后重跑，日志现含该行（第十五轮同坑，本轮又踩一次）。
+7. `grep -c`/`grep -Ec` 命中 0 会以退出码 1 截断 `&&` 链，本轮踩两次且第二次伪装成「已修好」：
+   一次让交付日志的归属行没写进去；第二次 `sed -i … && N=$(… | grep -Ec …) && python - <<PY` 里
+   python 整段没跑，而我随后在 §43 写下了「已把 runner 补上 STATUS_BEFORE/AFTER 两行」——**那句当时是假的**，
+   `run-full-gate.sh` 的 mtime 与 grep 都证明没改过。收口轮复核时抓到，本轮末把该两行真正补进 runner 并用
+   `grep` + `stat` 双证（见「门禁自身的状态」），并把这条按「同一轮内同坑复发的失实断言」登记在此。
+   固化动作：任何「我已经改了 X」的句子，落笔前必须跑一次针对 X 的读回命令并把输出留在证据文件里。
 
 ### 本轮新增教训（并给出固化动作）
 

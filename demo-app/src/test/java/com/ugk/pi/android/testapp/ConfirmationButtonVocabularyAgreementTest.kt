@@ -5,6 +5,8 @@ import com.ugk.pi.android.AgentTool
 import com.ugk.pi.android.ToolCall
 import com.ugk.pi.android.ToolExecutionContext
 import com.ugk.pi.android.ToolResult
+import com.ugk.pi.android.UserConfirmationButtonIntent
+import com.ugk.pi.android.userConfirmationButtonIntent
 import com.ugk.pi.android.USER_CONFIRMATION_ACCEPTED_BUTTON_IDS
 import com.ugk.pi.android.USER_CONFIRMATION_DECLINED_BUTTON_IDS
 import com.ugk.pi.android.UserConfirmationDialogButton
@@ -26,9 +28,11 @@ import java.util.Locale
 /**
  * The demo has three readers of one model-authored button id: the classifier that decides
  * how a button is drawn, the fallback that resolves a dialog nobody is looking at, and the
- * full-authorization auto-approval. They compared the id with different normalisations -
- * two of them used `lowercase()` with no locale, so on a Turkish device `DISMISS` became
- * `dısmıss` and stopped matching the vocabulary the first reader still matched.
+ * full-authorization auto-approval. They compared the id with different rules - the SDK
+ * compared it verbatim while all three host readers folded case, and the latter two kept
+ * private copies of the vocabulary that were narrower than the published one (six refusal
+ * ids where the SDK publishes eleven), so the button a user pressed was not the answer the
+ * protected Tool reported.
  *
  * These cases pin the agreement, not one reader's private list: a button drawn as a Cancel
  * button cannot be the id the host resolves with as if it meant anything else.
@@ -249,11 +253,6 @@ class ConfirmationButtonVocabularyAgreementTest {
         val previous = Locale.getDefault()
         try {
             Locale.setDefault(Locale.forLanguageTag("tr-TR"))
-            assertEquals(
-                "measured control: no-arg lowercase() matches Locale.ROOT on this toolchain",
-                "DISMISS".lowercase(Locale.ROOT),
-                "DISMISS".lowercase()
-            )
             assertTrue(ConfirmationVisualPolicy.isCancellation(button("DISMISS", "关闭")))
             assertFalse(
                 "the visual classifier calls DISMISS a Cancel button while full authorization " +
@@ -264,6 +263,34 @@ class ConfirmationButtonVocabularyAgreementTest {
         } finally {
             Locale.setDefault(previous)
         }
+    }
+
+    /**
+     * The gap this round closed only on the id arm, stated as what it is.
+     *
+     * `isCancellation` also classifies by the button's *label*, and the SDK reads only ids, so
+     * an offer like `{"id":"no_thanks","label":"取消"}` is still drawn as the refusal while the
+     * protected Tool reads neither yes nor no and answers "call the dialog first, then retry" -
+     * the re-prompt this whole family exists to remove, reachable through the label arm.
+     * Making that safe requires the host to be able to say "this button was the refusal" as
+     * first-class data instead of a colour, i.e. widening `UserConfirmationDialogResult`, which
+     * round 15 already registered as an interface decision rather than a patch. This case pins
+     * the pair so the next round cannot claim the fold is complete: change either side to make
+     * them agree and one of these two assertions goes red.
+     */
+    @Test
+    fun aRefusalLabelOnAnUnrecognizedIdIsStillNotReadAsTheUsersDecline() {
+        val labelled = button("no_thanks", "取消")
+        assertTrue(
+            "control - the host draws this as the refusal",
+            ConfirmationVisualPolicy.isCancellation(labelled)
+        )
+        assertEquals(
+            "the SDK has no idea what the label said; this is the gap, not an assertion that " +
+                "it is fine",
+            UserConfirmationButtonIntent.UNRECOGNIZED,
+            userConfirmationButtonIntent(labelled.id)
+        )
     }
 
     /** True when full authorization would resolve the dialog with [id] as the chosen button. */
