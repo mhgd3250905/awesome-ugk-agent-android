@@ -27,10 +27,10 @@ class AgentAuthorizationSettingsStore(context: Context) {
  * Pure button policy so the high-risk auto-approval rule stays testable.
  *
  * Both vocabularies come from the SDK through [userConfirmationButtonIntent]. They were
- * hand-copied here and compared with `lowercase()` and no locale, which did two things: an
- * id like `DISMISS` stopped matching the refusal vocabulary on a Turkish device, and an id
- * this list did not know (`later`, `not_now`) was returned as the auto-approval - so the
- * host resolved a dialog with an id the protected Tool reads as the user saying no.
+ * hand-copied here, and the copied refusal list carried only six of the eleven published ids,
+ * so `later`, `not_now`, `abort`, `dismiss` and `decline` were handed back as the auto-approval
+ * by a host that an earlier round had already made draw them as Cancel buttons - the answer the
+ * protected Tool then reports is the user saying no.
  */
 object AgentAuthorizationPolicy {
     /**

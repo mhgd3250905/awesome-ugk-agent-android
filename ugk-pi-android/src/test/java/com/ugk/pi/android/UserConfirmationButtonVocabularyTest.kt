@@ -148,12 +148,18 @@ class UserConfirmationButtonVocabularyTest {
     }
 
     /**
-     * Turkish dotted-I is the reachable reason the comparison pins `Locale.ROOT`: with the
-     * device locale in charge, `DISMISS` and `CONTINUE` stop matching their vocabularies, so
-     * one device would honour the user's decline and another would ask them again.
+     * The reading is the same whatever the device's default locale, because the comparison names
+     * `Locale.ROOT`.
+     *
+     * Recorded as a control, not as the bug: this round's review first claimed the pre-existing
+     * split came from a Turkish device folding `DISMISS` to a dotted form, and that was measured
+     * false on this toolchain (`r16-lowercase-locale-probe2.log`: no-argument `lowercase()`
+     * already folds like `Locale.ROOT`). What was real, and what the other cases in this file
+     * pin, is that this module compared ids verbatim while the host folded them, and that two
+     * host readers kept narrower private copies of the same vocabulary.
      */
     @Test
-    fun theReadingDoesNotDependOnTheDeviceLocale() {
+    fun theReadingIsTheSameUnderATurkishDefaultLocale() {
         val previous = Locale.getDefault()
         try {
             Locale.setDefault(Locale.forLanguageTag("tr-TR"))

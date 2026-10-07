@@ -11,17 +11,32 @@ import java.util.Locale
 
 /**
  * Teaching evidence is persisted text, and this guard is the only thing keeping a credential
- * out of it. It matched the parameter name after `lowercase()` with no locale, so on a Turkish
- * device `APIKEY` became `apıkey` with a dotless ı and stopped matching - the device locale
- * decided whether a secret was written down. The same list also missed the underscored
- * spelling (`api_key`), which contains neither `apikey` nor `token`.
+ * out of it. Two claims this round first made about *why* it failed were measured and found
+ * false - see `build/review-evidence/r16-lowercase-locale-probe2.log`, where Kotlin's
+ * no-argument `lowercase()` folds like `Locale.ROOT` under a `tr-TR` default locale, so no
+ * device locale was ever involved. What the sweep does pin is the fold's determinism, and what
+ * was actually leaking is the marker list: it knew `apikey` and nothing else, so a parameter
+ * named `api_key` matched no marker in any language and its value was written out verbatim.
  *
  * The other direction matters just as much: an over-broad redaction silently destroys the
- * evidence the teaching run exists to collect, so a benign parameter is asserted here as
- * preserved.
+ * evidence a teaching run exists to collect, so ordinary parameters are asserted preserved.
  */
 class DemoTeachingEvidenceRedactionTest {
 
+    /** The load-bearing arm: the underscored spelling was never matched by the old list. */
+    @Test
+    fun theUnderscoredCredentialKeyIsRedacted() {
+        listOf("api_key", "API_KEY", " Api_Key ")
+            .forEach { key ->
+                val scrubbed = DemoTeachingEvidence.input(
+                    ToolCall("c1", "open_android_settings_page", buildJsonObject { put(key, "sk-live-value") })
+                ).toString()
+
+                assertFalse("key=$key leaked: $scrubbed", scrubbed.contains("sk-live-value"))
+            }
+    }
+
+    /** The fold is deterministic across device locales; that is a control, not the bug. */
     @Test
     fun credentialShapedKeysAreRedactedUnderEveryDeviceLocale() {
         val previous = Locale.getDefault()

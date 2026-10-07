@@ -232,23 +232,34 @@ class ConfirmationButtonVocabularyAgreementTest {
     }
 
     /**
-     * A device's default locale must not decide whether a button is a cancellation: the
-     * Turkish dotted-I is the reachable case, and it is the reason the shared comparison
-     * pins `Locale.ROOT`.
+     * The refusal and approval vocabularies must be read the same way no matter what the
+     * device's default locale is.
+     *
+     * Recorded because a claim this round's own review made twice was measured and found
+     * false: Kotlin's no-argument `String.lowercase()` is root-locale on this toolchain, so the
+     * pre-fix readers were never Turkish-sensitive. Measured output
+     * `build/review-evidence/r16-lowercase-locale-probe2.log`: under a `tr-TR` default locale
+     * `"APIKEY".lowercase()` == `"APIKEY".lowercase(Locale.ROOT)` == `apikey`. The load-bearing
+     * difference here is the six-id private copy in `AgentAuthorizationPolicy`, not the locale -
+     * which is exactly what the second assertion below catches, and the first line is kept as a
+     * determinism control so a future reader does not have to re-derive it.
      */
     @Test
-    fun theCancellationVocabularyDoesNotDependOnTheDeviceLocale() {
+    fun theVocabularyReadsTheSameUnderATurkishDefaultLocale() {
         val previous = Locale.getDefault()
         try {
             Locale.setDefault(Locale.forLanguageTag("tr-TR"))
-            val drawnAsCancel = ConfirmationVisualPolicy.isCancellation(button("DISMISS", "关闭"))
-            val offeredAsApproval = idIsOfferedAsApproval("DISMISS")
-
-            assertTrue("DISMISS .lowercase() under tr-TR: ${"DISMISS".lowercase()}", drawnAsCancel)
+            assertEquals(
+                "measured control: no-arg lowercase() matches Locale.ROOT on this toolchain",
+                "DISMISS".lowercase(Locale.ROOT),
+                "DISMISS".lowercase()
+            )
+            assertTrue(ConfirmationVisualPolicy.isCancellation(button("DISMISS", "关闭")))
             assertFalse(
                 "the visual classifier calls DISMISS a Cancel button while full authorization " +
-                    "resolves it as an approval - the two readers split on the device locale",
-                offeredAsApproval
+                    "resolved it as an approval, because the policy's own list knew only six " +
+                    "refusal ids - the two readers split on the vocabulary, not on the locale",
+                idIsOfferedAsApproval("DISMISS")
             )
         } finally {
             Locale.setDefault(previous)

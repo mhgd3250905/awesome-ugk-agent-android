@@ -21,13 +21,16 @@ enum class UserConfirmationButtonIntent {
  * A button id is authored by the model and echoed back by the host, so it is not under this
  * SDK's control: `Not_Now`, `CANCEL` and `" cancel"` are all things a model writes for a
  * button the host then draws as a Cancel button. Before this existed, the host's visual
- * classifier trimmed-and-lowercased while this module compared the id verbatim, so the
- * button the user pressed was not the answer the protected Tool reported - and two of the
- * host's own readers lowercased with the *device* locale, which splits `DISMISS` from
- * `dismiss` on a Turkish device while the visual classifier still matched it.
+ * classifier trimmed-and-lowercased while this module compared the id verbatim, so the button
+ * the user pressed was not the answer the protected Tool reported - in both the yes and the no
+ * direction.
  *
- * `Locale.ROOT` is deliberate: the vocabulary is ASCII identifiers, so a locale-sensitive
- * mapping can only ever lose matches.
+ * `Locale.ROOT` is pinned for determinism, not to fix an observed split: measured on this
+ * toolchain (`build/review-evidence/r16-lowercase-locale-probe2.log`), Kotlin's no-argument
+ * `lowercase()` already folds like `Locale.ROOT` - a `tr-TR` default locale turned `APIKEY`
+ * into `apikey`, not the dottedless form - so the pre-existing host readers were never
+ * Turkish-sensitive, and the two claims this round's review made that they were are recorded
+ * as falsified. Naming the locale keeps the mapping fixed whatever a host adds later.
  */
 fun normalizeUserConfirmationButtonId(buttonId: String): String =
     buttonId.trim().lowercase(Locale.ROOT)
