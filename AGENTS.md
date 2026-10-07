@@ -44,13 +44,19 @@ API 内容不得复制进源码、文档或提交；Release 默认不嵌入 API 
 
 # 跑全部单元测试（十个 testDebugUnitTest 任务，十个模块全部贡献用例。
 # :pi-attention-skill-android 自 2026-10-02 起有 JVM 单元测试；在此之前它是
-# NO-SOURCE、永远不可能变红，第九轮曾把该缺口明示在这里。当前交付态合计
+# NO-SOURCE、永远不可能变红，第九轮曾把该缺口明示在这里。已合并交付态合计
 # `1097 tests / 3 skipped / 0 failure`（PR #18+#19 合并后 2026-10-07 独占
 # `--rerun-tasks` 实测，163 份 JUnit XML；第十四轮交付态 `1077` 与第十五轮交付态
 # `1054` 的逐模块差值与窗口原文分别见 docs/terminal-runtime-validation.md §41
 # 与 §42。上一交付态 `1034`（PR #16+#17 合并后 2026-10-04 实测）本身可复核，
 # 不是假绿；更早的 `984`、第十一轮 950 与第十二轮 890 的逐模块数值分别见
 # §40、§39 与 §38。）
+# 第十六轮（PR #20，分支 fix/p0-review-round16-20261008）待合并：该分支代码状态
+# `0d6441f` 独占 `--rerun-tasks` 实测 `1154 tests / 3 skipped / 0 failure`，169 份
+# JUnit XML，逐模块差值与窗口原文见 docs/terminal-runtime-validation.md §43。
+# 这个数字属于那个分支，不属于 main：合并后请按本文件下面那十条任务重跑一次并就地
+# 重述，不要让它随 HEAD 自动有效。自查（判断取数之后是否只有文档改动）：
+# `git log --format='%h %p' 0d6441f..HEAD --name-only | grep -E "src/|build.gradle"`。
 .\gradlew.bat `
   :ugk-pi-android:testDebugUnitTest `
   :pi-file-skill-android:testDebugUnitTest `
@@ -71,6 +77,10 @@ API 内容不得复制进源码、文档或提交；Release 默认不嵌入 API 
   --console=plain
 
 # Runtime 静态/打包验收
+# 前置：-CheckPackages 会校验 release AAR 与两个探针 app 的 release APK，这些产物必须先构建出来，
+# 否则该命令照抄执行必然以 `Release package is missing: ...-release-unsigned.apk` 抛错退出 1
+# （第十六轮实测，见 docs/terminal-runtime-validation.md §43「门禁自身的状态」）。
+.\gradlew.bat :terminal-probe-demo-a:assembleRelease :terminal-probe-demo-b:assembleRelease --console=plain
 .\scripts\terminal-runtime\verify-runtime.ps1 `
   -CheckPackages `
   -NdkRoot (Join-Path $env:ANDROID_HOME 'ndk\28.2.13676358')
