@@ -1247,21 +1247,25 @@ baseUrl/apiKey）无痕消失。`ApiProviderSettingsJson.read` 上方的注释�
 
 ### 变异矩阵（每条整改都要「退回旧实现即判红」）
 
-pass 1 `build/review-evidence/r16-mutation-matrix.tsv` + `-run.log`：19 行，16 行 OK；
-3 行不合格（m5 我的替换式类型不合法导致编译失败、m12 见上第 4 条、m19 期望用例名写错）。
-pass 2 `r16-mutation-matrix-pass2.tsv` + `-run.log`：m5、m19 重写后判红，另加 m20 与双站探针。
-最终处置：m1–m11、m13–m19 判红 OK；m12 记「单站等价、双站判红」；m20 有意判绿——它证明
-「pin `Locale.ROOT`」在本工具链上不改变行为，也就是本轮那句土耳其故事是假的，留在矩阵里比删掉更有价值。
-改名后的重跑：`0d6441f` 把 `theCancellationVocabularyDoesNotDependOnTheDeviceLocale` 更名为
-`theVocabularyReadsTheSameUnderATurkishDefaultLocale`，pass 1 的 m9 是以旧名判红的，收口轮以新名重跑 m9
-（`r16-mutation-matrix-pass3-run.log`，ROW=m9 VERDICT=OK）。另补 m21：把 `normalizeUserConfirmationButtonId`
-里的 `Locale.ROOT` 摘掉 → 套件仍绿，这与 m20 同形，是把「ROOT 只是确定性钉、不是行为钉」这句话变成可复核事实的行，
-不是漏网。两行的最终处置都写进上面「最终处置」那段。
+三遍矩阵，共 21 行独立回退（每行都是「CONTROL 先绿 → 注入落地（回读锚点自证）→ 指定那一条用例变红 →
+`git checkout --` 复原 → `git status --porcelain` 为空」）：
 
-每行先跑 CONTROL（不绿即整行作废并登记）、注入后回读锚点证明真变了、`git checkout --` 复原后核对
-`git status --porcelain` 为空（两遍 pass 的 `WORKTREE_DIRTY_*=NONE` 即此）。
-「汇总行会红」不是推理：pass 1 自身就以 `MATRIX_EXIT=1` 红过（三行不合格被抓），
-pass 2 亦为 `PASS2_EXIT=1`（m20 的有意判绿如实计入 NOT_OK），两处都不是 tee 之后的恒 0 尾码。
+- pass 1（`r16-mutation-matrix.tsv` + `-run.log`，19 行）：16 行判红；3 行不合格并如实登记——
+  m5 我的替换式类型不合法（红在编译，被脚本判为 `RED_BY_COMPILE_FAILURE`，没有被误读成「抓不住」）、
+  m12 单站回退等价（见「本轮修复自己引入的缺陷」第 4 条）、m19 期望用例名写错。
+  该遍以 `MATRIX_EXIT=1` 红过，这就是「汇总行会红」的实证，不是推理。
+- pass 2（`r16-mutation-matrix-pass2.tsv` + `-run.log`，4 行）：m5、m19 重写后判红；
+  m12 改双站回退探针 `m12-two-site-strict-decode` 判红；m20（摘掉教学脱敏的 `Locale.ROOT`）**有意判绿**，
+  该遍 `PASS2_EXIT=1` 是因为把这次判绿如实计入 NOT_OK 而不是偷偷豁免。
+- pass 3（`r16-mutation-matrix-pass3.tsv` + `-run.log`，2 行，带预期值跑）：m9 因 `0d6441f` 改名而以新名
+  重跑，原文 `ROW=m9-autoapproval-vocabulary-restated VERDICT=RED_AS_NAMED EXPECTED=RED_AS_NAMED named_red=1
+  mut_rc=1`；m21（摘掉 `normalizeUserConfirmationButtonId` 的 `Locale.ROOT`）原文
+  `ROW=m21-vocabulary-root-pin-not-pinned VERDICT=STILL_GREEN EXPECTED=STILL_GREEN`。m20/m21 这一对
+  就是「`Locale.ROOT` 是确定性钉、不是行为钉」这句话的可复核证据——也是本轮那句土耳其故事的最终处置。
+  该遍 `PASS3_FINAL=ALL_ROWS_AS_EXPECTED`、`PASS3_EXIT=0`。
+
+最终处置一句话：**每一条本轮立下的规则都有至少一行回退判红**（m12 由双站回承担），**两处刻意的判绿
+（m20、m21）被写成行而不是省略**。三遍结束时的 `WORKTREE_DIRTY_AFTER_PASS*=NONE` 即「复原干净」的自证。
 
 ### 被否掉的复核立案（附复测命令）
 
