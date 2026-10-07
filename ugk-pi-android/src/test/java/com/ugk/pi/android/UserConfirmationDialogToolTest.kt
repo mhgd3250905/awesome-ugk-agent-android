@@ -137,6 +137,13 @@ class UserConfirmationDialogToolTest {
 
     @Test
     fun rejectsPresenterButtonThatWasNotRequested() = runBlocking {
+        // The id is still refused - it never becomes an authorization. What it
+        // became is a `withoutUserDecision` answer rather than an error, because the
+        // modal had already been shown and an error reads downstream as "no
+        // confirmation yet", which sends the model back to ask the user again.
+        // See `UserConfirmationAnswerConsumedBeforeValidationTest` for the half that
+        // drives the protected Tool, and `anUnofferedButtonIdWithoutAnyTicketStillFailsLoudly`
+        // for the arm that stays an error because nothing binds it to an input.
         val tool = UserConfirmationDialogTool(
             presenter = FakePresenter(selectedButtonId = "unexpected"),
             nowEpochMillis = { NOW },
@@ -160,8 +167,15 @@ class UserConfirmationDialogToolTest {
             ToolExecutionContext(sessionId = SESSION)
         )
 
-        assertTrue(result.isError)
-        assertFalse(result.content.contains("ticket"))
+        val parsed = Json.parseToJsonElement(result.content).jsonObject
+        assertFalse(result.isError)
+        assertFalse(result.content.contains("\"selectedButtonId\""))
+        assertTrue(result.content.contains("withoutUserDecision"))
+        assertEquals(
+            "the bound ticket must name the exact input the dialog was about",
+            UserConfirmationInputFingerprint.sha256(buildJsonObject { put("packageName", "com.example") }),
+            ((parsed["ticket"] as JsonObject)["inputFingerprint"] as JsonPrimitive).content
+        )
     }
 
     private fun kotlinx.serialization.json.JsonObjectBuilder.putJsonButtons() {

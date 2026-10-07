@@ -111,38 +111,76 @@ class UserConfirmationDialogTool(
         call: ToolCall,
         context: ToolExecutionContext
     ): ToolResult {
-        val request = call.toDialogRequest() ?: return ToolResult(
-            toolCallId = call.id,
-            name = name,
-            content = "Dialog requires title, message, and at least one button with id and label.",
-            isError = true
-        )
-        val result = presenter.showConfirmationDialog(request)
-        if (request.buttons.none { it.id == result.selectedButtonId }) {
+        val parsed = call.toDialogRequest()
+        if (parsed is DialogRequestParse.Invalid) {
             return ToolResult(
                 toolCallId = call.id,
                 name = name,
-                content = "Dialog returned a button id that was not present in the request.",
+                content = parsed.reason,
                 isError = true
             )
         }
-        val ticket = request.target?.let { target ->
+        val request = (parsed as DialogRequestParse.Valid).request
+
+        // Nothing that can be decided without the user may wait for them: an
+        // answer already given cannot be re-collected except by raising the modal
+        // again on a question the user already left. The nonce is generated here so
+        // it is drawn exactly once, and the clock is read again when the ticket is
+        // written so the TTL still starts at the answer rather than at the prompt.
+        val pending = request.target?.let { target ->
+            val nonce = nonceGenerator()
             runCatching {
-                UserConfirmationTicket.issue(
+                UserConfirmationTicket.requireIssuable(
                     sessionId = context.sessionId,
                     target = target,
                     issuedAtEpochMillis = nowEpochMillis(),
-                    nonce = nonceGenerator()
+                    nonce = nonce
                 )
             }.getOrElse {
                 return ToolResult(
                     toolCallId = call.id,
                     name = name,
-                    content = "Unable to issue a confirmation ticket: " +
-                        (it.message ?: "invalid target or nonce") + ".",
+                    content = "Cannot ask the user about this target: " +
+                        (it.message?.take(BOUND_DIAGNOSTIC_CHARS) ?: "invalid target or nonce") + ".",
                     isError = true
                 )
             }
+            PendingTicket(target = target, nonce = nonce)
+        }
+
+        val result = presenter.showConfirmationDialog(request)
+        val ticket = pending?.let {
+            UserConfirmationTicket.issue(
+                sessionId = context.sessionId,
+                target = it.target,
+                issuedAtEpochMillis = nowEpochMillis(),
+                nonce = it.nonce
+            )
+        }
+        if (request.buttons.none { it.id == result.selectedButtonId }) {
+            // The dialog is spent and no offered button can be attributed to the
+            // user. With a ticket the honest, bound answer is "nobody decided",
+            // which a protected Tool reports without sending the model back to the
+            // dialog. Without one nothing ties that claim to this exact input, so
+            // stay a loud error instead of asserting what the user did not say.
+            if (ticket != null) {
+                return ToolResult(
+                    toolCallId = call.id,
+                    name = name,
+                    content = buildJsonObject {
+                        put("withoutUserDecision", true)
+                        put("ticket", ticket.toJsonObject())
+                    }.toString()
+                )
+            }
+            return ToolResult(
+                toolCallId = call.id,
+                name = name,
+                content = "Dialog returned a button id that was not present in the request, " +
+                    "and this dialog carries no confirmation ticket to bind a 'no user decision' " +
+                    "answer to one exact Tool input.",
+                isError = true
+            )
         }
         return ToolResult(
             toolCallId = call.id,
@@ -157,22 +195,46 @@ class UserConfirmationDialogTool(
         )
     }
 
-    private fun ToolCall.toDialogRequest(): UserConfirmationDialogRequest? {
+    private class PendingTicket(
+        val target: UserConfirmationTarget,
+        val nonce: String
+    )
+
+    private sealed interface DialogRequestParse {
+        class Valid(val request: UserConfirmationDialogRequest) : DialogRequestParse
+        class Invalid(val reason: String) : DialogRequestParse
+    }
+
+    private fun ToolCall.toDialogRequest(): DialogRequestParse {
         val title = input.stringField("title")
-            ?: return null
+            ?: return DialogRequestParse.Invalid(MALFORMED_DIALOG_REQUEST)
         val message = input.stringField("message")
-            ?: return null
-        val buttons = input["buttons"]
+            ?: return DialogRequestParse.Invalid(MALFORMED_DIALOG_REQUEST)
+        val buttonsElement = input["buttons"]
+        val buttons = buttonsElement
             ?.let { it as? JsonArray }
             ?.mapNotNull { it.toDialogButtonOrNull() }
             ?.takeIf { it.isNotEmpty() }
-            ?: return null
+            ?: return DialogRequestParse.Invalid(
+                if (buttonsElement != null && buttonsElement !is JsonArray) {
+                    "Dialog buttons must be an array of objects each with a non-blank id and label; " +
+                        "the request sent something else in `buttons`."
+                } else {
+                    MALFORMED_DIALOG_REQUEST
+                }
+            )
 
         val target = when (val targetElement = input["target"]) {
             null, JsonNull -> null
-            else -> targetElement.toDialogTargetOrNull() ?: return null
+            else -> targetElement.toDialogTargetOrNull()
+                ?: return DialogRequestParse.Invalid(
+                    "Dialog `target` is present but unusable: it must be an object with a non-blank " +
+                        "`toolName` and an `input` object. `title`, `message` and `buttons` were valid."
+                )
         }
-        return UserConfirmationDialogRequest(title, message, buttons, target)
+        return DialogRequestParse.Valid(
+            UserConfirmationDialogRequest(title, message, buttons, target)
+        )
     }
 
     private fun JsonObject.stringField(name: String): String? =
@@ -196,5 +258,18 @@ class UserConfirmationDialogTool(
         val label = button.stringField("label")
             ?: return null
         return UserConfirmationDialogButton(id, label)
+    }
+
+    private companion object {
+        const val MALFORMED_DIALOG_REQUEST =
+            "Dialog requires title, message, and at least one button with id and label."
+
+        /**
+         * An echo of an internal failure message lands in a tool result, a log and
+         * the transcript, so it is capped even though every producer here is an
+         * SDK-authored literal. Round 13 recorded an unbounded echo on the other arm
+         * of this same method.
+         */
+        const val BOUND_DIAGNOSTIC_CHARS = 200
     }
 }

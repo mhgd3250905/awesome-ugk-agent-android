@@ -7,10 +7,39 @@ import kotlinx.serialization.json.booleanOrNull
 import kotlinx.serialization.json.contentOrNull
 import kotlinx.serialization.json.jsonObject
 
+/**
+ * Button ids that read as "the user said go ahead", and button ids that read as
+ * "the user said no".
+ *
+ * The refusal list has to cover the vocabulary a host actually renders. The demo
+ * colors `close`, `abort`, `dismiss`, `later` and `not_now` as Cancel buttons; when
+ * those ids were absent from this set, a user who tapped 「暂不」 was answered with
+ * "confirmation required, call the dialog first, then retry" and the same modal came
+ * back on top of the decision they had just made. Nothing here widens what can be
+ * *authorized*: an id outside the accepted set still runs nothing.
+ *
+ * Hosts classify buttons against these same sets instead of keeping a second list.
+ */
+val USER_CONFIRMATION_ACCEPTED_BUTTON_IDS: Set<String> = setOf("confirm", "continue", "ok", "yes", "allow")
+
+val USER_CONFIRMATION_DECLINED_BUTTON_IDS: Set<String> = setOf(
+    "cancel",
+    "deny",
+    "no",
+    "reject",
+    "decline",
+    "stop",
+    "close",
+    "abort",
+    "dismiss",
+    "later",
+    "not_now"
+)
+
 class UserConfirmationRequiredTool(
     private val delegate: AgentTool,
-    private val acceptedButtonIds: Set<String> = setOf("confirm", "continue", "ok", "yes", "allow"),
-    private val declinedButtonIds: Set<String> = setOf("cancel", "deny", "no", "reject", "decline", "stop"),
+    private val acceptedButtonIds: Set<String> = USER_CONFIRMATION_ACCEPTED_BUTTON_IDS,
+    private val declinedButtonIds: Set<String> = USER_CONFIRMATION_DECLINED_BUTTON_IDS,
     private val shouldBypassConfirmation: () -> Boolean = { false },
     private val nowEpochMillis: () -> Long = System::currentTimeMillis
 ) : AgentTool {

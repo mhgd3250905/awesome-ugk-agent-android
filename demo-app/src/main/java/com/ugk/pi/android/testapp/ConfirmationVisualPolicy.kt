@@ -1,5 +1,6 @@
 package com.ugk.pi.android.testapp
 
+import com.ugk.pi.android.USER_CONFIRMATION_DECLINED_BUTTON_IDS
 import com.ugk.pi.android.UserConfirmationDialogButton
 import com.ugk.pi.android.UserConfirmationDialogRequest
 import java.util.Locale
@@ -22,18 +23,13 @@ enum class ConfirmationVisualRole {
  * never copied into [AgentOverlayConfirmation].
  */
 object ConfirmationVisualPolicy {
-    private val cancellationIds = setOf(
-        "cancel",
-        "deny",
-        "no",
-        "reject",
-        "stop",
-        "close",
-        "abort",
-        "dismiss",
-        "later",
-        "not_now"
-    )
+    /**
+     * The same ids the SDK reads as a refusal. This used to be a second, hand-kept
+     * copy: the button a user taps because it is drawn as Cancel has to be the very
+     * id the protected Tool reports back as their decline, or the answer is a dialog
+     * that comes back after they already chose.
+     */
+    private val cancellationIds = USER_CONFIRMATION_DECLINED_BUTTON_IDS
 
     private val cancellationLabels = setOf(
         "取消",

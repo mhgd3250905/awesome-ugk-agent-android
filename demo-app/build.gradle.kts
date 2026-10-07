@@ -126,6 +126,19 @@ android {
     kotlinOptions {
         jvmTarget = "17"
     }
+
+    testOptions {
+        unitTests {
+            // The unreadable-snapshot recovery path logs its warning via
+            // android.util.Log and is exercised by JVM tests; the default-value
+            // stubs turn those calls into no-ops instead of "not mocked" errors.
+            // Same convention and reason as :ugk-agent-task-runtime-android.
+            // Trade-off, stated because it is not free: a future JVM test that
+            // accidentally reaches an android.jar stub now reads a default value
+            // instead of failing loudly.
+            isReturnDefaultValues = true
+        }
+    }
 }
 
 dependencies {

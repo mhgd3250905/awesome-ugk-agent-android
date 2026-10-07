@@ -2,6 +2,28 @@
 
 更新时间：2026-09-29
 
+> **2026-10-07 追加（第十五轮）**：第 4 节列出的「三种状态」与「`withoutUserDecision` 由宿主声明」
+> 已不再完备。`UserConfirmationDialogTool` 现在还会**自己**产出第四种回执：宿主返回的
+> `selectedButtonId` 不在本次请求的按钮集合内、且本次确认存在绑定票据时，确认 Tool 返回
+> `{withoutUserDecision:true, ticket}`（**没有** `selectedButtonId` 字段），受保护 Tool 按
+> 「未得到用户决定」分派。这样改的理由是：弹窗已经展示、用户已经操作过一次，把它答成
+> `isError` 会被受保护 Tool 读成「还没有确认，请先调用确认 Tool 再重试」，于是同一个问题再弹一次窗。
+> 该回执不构成任何授权：授权判定与拒绝判定都要求一个非空且属于允许/拒绝集合的 `selectedButtonId`，
+> 缺失即两侧都为假。没有票据时（旧的不带 `target` 的确认请求）这条无法绑定到某一组输入，
+> 因此仍按 `isError` 响亮失败——即第 4 节原有措辞对那种形状仍然成立。
+> 同节「宿主无法区分时保持 `false`，SDK 视同一次真实按钮选择」需按此收窄：SDK 会检查该 id
+> 是否在本次请求的按钮集合内，不在则不视为真实选择。自查：
+> `git grep -n "not present in the request" -- ugk-pi-android/src/main`。
+> **第 4 节正文里那句「拒绝按钮集合默认 `cancel/deny/no/reject/decline/stop`」也已过期**：
+> 第十五轮把按钮词汇收成唯一公开定义
+> `USER_CONFIRMATION_DECLINED_BUTTON_IDS`（`ugk-pi-android/.../UserConfirmationRequiredTool.kt`，
+> 实测 11 个 id：另含 `close/abort/dismiss/later/not_now`），因为 demo 正是把这些 id 画成 Cancel 按钮，
+> 用户点「暂不」却被告知「请先调用确认 Tool 再重试」等于把刚做完的决定再弹一次窗。
+> 放宽只发生在**拒绝**一侧，授权集合 `USER_CONFIRMATION_ACCEPTED_BUTTON_IDS` 未变。
+> 仍未解决且如实登记：SDK 比较 id 大小写敏感，而 demo 的可视化分类与 Headless presenter 都先
+> `lowercase()`，所以 `"Not_Now"` 这类混合大小写仍会被画成 Cancel 却读不成拒绝。
+> 自查：`git grep -n "USER_CONFIRMATION_DECLINED_BUTTON_IDS" -- '*/src/main/*'`。
+
 本文是 SDK-OPT-008 的协议设计结果。它先固化确认边界，再进入 Core、System、Terminal 和 Demo 的一次性实现；本文件本身不改变运行时行为。
 
 ## 1. 为什么不能继续只使用 selectedButtonId
