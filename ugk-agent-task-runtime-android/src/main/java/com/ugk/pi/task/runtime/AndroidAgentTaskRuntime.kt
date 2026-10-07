@@ -105,7 +105,7 @@ internal class TaskRecordStore(
 ) {
     fun upsert(task: AgentTask) {
         synchronized(lock) {
-            val tasks = readForWrite().toMutableList()
+            val tasks = readCurrent().toMutableList()
             val index = tasks.indexOfFirst { it.id == task.id }
             if (index >= 0) tasks[index] = task else tasks += task
             writeRaw(AgentTaskJsonCodec.encode(tasks))
@@ -113,23 +113,30 @@ internal class TaskRecordStore(
     }
 
     fun get(taskId: String): AgentTask? = synchronized(lock) {
-        AgentTaskJsonCodec.decode(readRaw()).firstOrNull { it.id == taskId }
+        readCurrent().firstOrNull { it.id == taskId }
     }
 
-    fun list(): List<AgentTask> = synchronized(lock) {
-        AgentTaskJsonCodec.decode(readRaw())
-    }
+    fun list(): List<AgentTask> = synchronized(lock) { readCurrent() }
 
-    private fun readForWrite(): List<AgentTask> {
+    /**
+     * One read for every arm of this store: upsert's read-modify-write, the lookup the
+     * trigger handler uses, and the list both the `agent_task_list` Tool and the boot
+     * re-arm iterate.
+     *
+     * They used to be two functions, and only the write path knew that an unreadable record
+     * is not an empty one. Reading the list arms as empty told the model "No scheduled tasks
+     * found." about tasks still sitting in the record, left the re-arm loop with nothing to
+     * schedule, and let the next `upsert` rewrite the whole record from that empty list.
+     */
+    private fun readCurrent(): List<AgentTask> {
         val raw = readRaw()
         if (raw.isNullOrBlank()) return emptyList()
-        return AgentTaskJsonCodec.decodeOrNull(raw) ?: run {
-            // One unreadable payload must not erase every stored task: keep
-            // the raw record under a backup key before the next write
-            // replaces it, so the data is still recoverable by hand.
-            writeBackup(raw)
-            emptyList()
-        }
+        AgentTaskJsonCodec.decodeOrNull(raw)?.let { return it }
+        // The record exists and cannot be read as written. Keep the bytes before anything
+        // can replace them - best effort, see the writeBackup comment above - then hand back
+        // the complete records a torn tail still holds instead of nothing.
+        writeBackup(raw)
+        return AgentTaskJsonCodec.decodeSalvagedPrefix(raw)
     }
 
     private companion object {
@@ -146,14 +153,43 @@ internal object AgentTaskJsonCodec {
 
     fun encode(tasks: List<AgentTask>): String = json.encodeToString(serializer, tasks)
 
-    fun decode(value: String?): List<AgentTask> {
-        if (value.isNullOrBlank()) return emptyList()
-        return decodeOrNull(value) ?: emptyList()
-    }
-
-    /** Returns null only when the payload exists but cannot be decoded. */
+    /**
+     * The payload parsed exactly as it was written, or null when this build cannot read it.
+     *
+     * There is deliberately no `decode(...)` that answers "empty" here: every caller used to
+     * route through one, and "cannot read" and "nothing stored" are different facts - the
+     * first one still holds the user's tasks. [TaskRecordStore] distinguishes them.
+     */
     fun decodeOrNull(value: String): List<AgentTask>? =
         runCatching { json.decodeFromString(serializer, value) }.getOrNull()
+
+    /**
+     * The complete records a torn payload still holds, reading it again as the half-written
+     * array an interrupted write actually leaves: the earlier tasks stay complete and only
+     * the closing bracket, the last record, or both are missing.
+     *
+     * The parser alone decides whether a candidate is the array - nothing here
+     * pattern-matches the text - and at most [MAX_SALVAGE_CUTS] prefixes are tried, so the
+     * cost stays bounded on a large blob. Each boundary has to be strictly smaller than the
+     * last: `lastIndexOf(ch, fromIndex)` includes `fromIndex`, so searching from `end - 1`
+     * when the prefix already ends on a brace returns that same brace and spends the whole
+     * budget re-testing one candidate - and a write that stops right after a closing brace
+     * is the most likely torn offset there is.
+     */
+    fun decodeSalvagedPrefix(value: String): List<AgentTask> {
+        var end = value.length
+        var cuts = 0
+        while (cuts < MAX_SALVAGE_CUTS && end > 1) {
+            decodeOrNull(value.substring(0, end) + "]")?.let { return it }
+            val previousBrace = value.lastIndexOf('}', end - 2)
+            if (previousBrace < 0) break
+            end = previousBrace + 1
+            cuts++
+        }
+        return emptyList()
+    }
+
+    private const val MAX_SALVAGE_CUTS = 16
 }
 
 internal enum class AgentTaskTriggerRoute {
