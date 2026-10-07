@@ -13,10 +13,7 @@ import android.os.Build
 import android.os.PersistableBundle
 import kotlinx.serialization.json.JsonObject
 import kotlinx.serialization.json.JsonPrimitive
-import kotlinx.serialization.json.booleanOrNull
 import kotlinx.serialization.json.buildJsonObject
-import kotlinx.serialization.json.contentOrNull
-import kotlinx.serialization.json.jsonPrimitive
 import kotlinx.serialization.json.put
 import kotlinx.serialization.json.putJsonArray
 import kotlinx.serialization.json.putJsonObject
@@ -244,9 +241,20 @@ class ClipboardReadTextTool(
     }
 
     override suspend fun execute(call: ToolCall, context: ToolExecutionContext): ToolResult {
-        val result = backend.readText(
-            call.input.intValue("maxChars") ?: ClipboardLimits.DEFAULT_MAX_READ_CHARS
-        )
+        val maxChars = when (val declared = call.input.declaredInt("maxChars")) {
+            DeclaredArgument.Undeclared -> ClipboardLimits.DEFAULT_MAX_READ_CHARS
+            // Refused rather than defaulted: the default is 8000 characters of clipboard
+            // handed to the next model request, so reading an unusable bound as "no bound
+            // asked for" widens exactly what the argument exists to narrow.
+            DeclaredArgument.Unusable -> return clipboardErrorResult(
+                call.id,
+                name,
+                ClipboardErrorCodes.INVALID_INPUT,
+                unusableArgumentMessage("maxChars", call.input["maxChars"])
+            )
+            is DeclaredArgument.Of -> declared.value
+        }
+        val result = backend.readText(maxChars)
         val payload = buildJsonObject {
             put("success", result.success)
             put("code", result.code)
@@ -309,15 +317,54 @@ class ClipboardWriteTextTool(
     }
 
     override suspend fun execute(call: ToolCall, context: ToolExecutionContext): ToolResult {
-        val text = call.input["text"]?.jsonPrimitive?.contentOrNull
+        // `sensitive` is deliberately NOT in this list: it has a safe direction (see
+        // below), so an unreadable value there must not turn a legal write into a
+        // refusal. text and label have no safe substitute for a value that was sent.
+        call.input.firstStructuredArgument(listOf("text", "label"))?.let { key ->
+            return clipboardErrorResult(
+                call.id,
+                name,
+                ClipboardErrorCodes.INVALID_INPUT,
+                unusableArgumentMessage(key, call.input[key])
+            )
+        }
+        val textArgument = call.input.declaredString("text")
+        if (textArgument === DeclaredArgument.Unusable) {
+            return clipboardErrorResult(
+                call.id,
+                name,
+                ClipboardErrorCodes.INVALID_INPUT,
+                unusableArgumentMessage("text", call.input["text"])
+            )
+        }
+        val text = (textArgument as? DeclaredArgument.Of)?.value
             ?: return clipboardErrorResult(
                 call.id,
                 name,
                 ClipboardErrorCodes.INVALID_INPUT,
                 "text is required; use clipboard_clear for an explicit clear operation."
             )
-        val label = call.input.stringValue("label") ?: ClipboardLimits.DEFAULT_LABEL
-        val sensitive = call.input["sensitive"]?.jsonPrimitive?.booleanOrNull ?: true
+        // A blank label keeps the documented substitution: unlike an empty search
+        // selector, it does not widen anything, and refusing it would reject a
+        // caller that only omitted the label text. An unreadable shape is refused.
+        val label = when (val declared = call.input.declaredString("label")) {
+            DeclaredArgument.Undeclared -> ClipboardLimits.DEFAULT_LABEL
+            DeclaredArgument.Unusable -> return clipboardErrorResult(
+                call.id,
+                name,
+                ClipboardErrorCodes.INVALID_INPUT,
+                unusableArgumentMessage("label", call.input["label"])
+            )
+            is DeclaredArgument.Of -> declared.value.ifBlank { ClipboardLimits.DEFAULT_LABEL }
+        }
+        // Unreadable stays fail-closed rather than becoming an error: the safe answer
+        // to "is this clipboard write sensitive?" is yes, and refusing would block a
+        // write the caller did ask for. Only the throwing accessor was the bug.
+        val sensitive = when (val declared = call.input.declaredBoolean("sensitive")) {
+            DeclaredArgument.Undeclared -> true
+            DeclaredArgument.Unusable -> true
+            is DeclaredArgument.Of -> declared.value
+        }
         return backend.writeText(text, label, sensitive).toToolResult(call.id, name)
     }
 }
@@ -414,9 +461,3 @@ private fun clipboardRecoveryHint(code: String): String = when (code) {
     else ->
         "Report the structured clipboard error; do not claim that the clipboard changed."
 }
-
-private fun JsonObject.stringValue(name: String): String? =
-    this[name]?.jsonPrimitive?.contentOrNull?.takeIf { it.isNotBlank() }
-
-private fun JsonObject.intValue(name: String): Int? =
-    this[name]?.jsonPrimitive?.contentOrNull?.toIntOrNull()

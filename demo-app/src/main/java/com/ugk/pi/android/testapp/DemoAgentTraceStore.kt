@@ -7,8 +7,6 @@ import com.ugk.pi.android.ToolResult
 import kotlinx.serialization.json.JsonObject
 import kotlinx.serialization.json.JsonObjectBuilder
 import kotlinx.serialization.json.buildJsonObject
-import kotlinx.serialization.json.contentOrNull
-import kotlinx.serialization.json.jsonPrimitive
 import kotlinx.serialization.json.put
 import java.io.File
 import java.nio.charset.StandardCharsets
@@ -304,9 +302,9 @@ internal object DemoAgentTraceFormatter {
         when (normalizedName) {
             "screen_perform_action" -> {
                 call.input.stringValue("action")?.take(32)?.let { put("action", it) }
-                put("snapshotIdPresent", call.input.containsKey("snapshotId"))
-                put("nodeIdPresent", call.input.containsKey("nodeId"))
-                put("textPresent", call.input.containsKey("text"))
+                put("snapshotIdPresent", call.input.displayedPresence("snapshotId") == "present")
+                put("nodeIdPresent", call.input.displayedPresence("nodeId") == "present")
+                put("textPresent", call.input.displayedPresence("text") == "present")
             }
 
             "screen_find_ui_element" -> {
@@ -314,7 +312,9 @@ internal object DemoAgentTraceFormatter {
             }
 
             "screen_gesture" -> {
-                call.input.stringValue("gesture")?.take(32)?.let { put("gesture", it) }
+                // The Tool's schema field is `action`; reading `gesture` recorded
+                // nothing for every gesture the Agent performed.
+                call.input.stringValue("action")?.take(32)?.let { put("gesture", it) }
             }
 
             "screen_press_key", "screen_global_action" -> {
@@ -322,8 +322,10 @@ internal object DemoAgentTraceFormatter {
                 call.input.stringValue("action")?.take(32)?.let { put("action", it) }
             }
 
-            "screen_launch_app" -> {
-                put("packageNamePresent", call.input.containsKey("packageName"))
+            "launch_android_app" -> {
+                // No Tool is named `screen_launch_app`; this branch recorded nothing for
+                // any app the Agent actually launched.
+                put("packageNamePresent", call.input.displayedPresence("package_name") == "present")
             }
         }
     }
@@ -335,13 +337,20 @@ internal object DemoAgentTraceFormatter {
         put("contentChars", result.content.length)
         put("contentHash", fingerprint(result.content))
         put("metadataKeys", result.metadata.keys.sorted().joinToString(","))
-        result.metadata.stringValue("code")?.let { put("code", it) }
-        result.metadata.stringValue("recovery")?.let { put("recovery", it) }
-        result.metadata.stringValue("recoveryTool")?.let { put("recoveryTool", it) }
+        result.metadata.metadataValue("code")?.let { put("code", it) }
+        result.metadata.metadataValue("recovery")?.let { put("recovery", it) }
+        result.metadata.metadataValue("recoveryTool")?.let { put("recoveryTool", it) }
     }
 
     private fun JsonObject.stringValue(key: String): String? =
-        this[key]?.jsonPrimitive?.contentOrNull
+        displayedArgumentText(key).takeIf { it.isNotEmpty() }
+
+    /**
+     * Metadata is written by this SDK, not by the model: `recovery` is a whole sentence
+     * the next reader needs intact, so it is recorded untruncated and only through the
+     * same non-throwing reader the arguments use.
+     */
+    private fun JsonObject.metadataValue(key: String): String? = displayedMetadata(key)
 
     private fun fingerprint(value: String): String {
         val digest = MessageDigest.getInstance("SHA-256")

@@ -4,8 +4,6 @@ import com.ugk.pi.android.AgentEvent
 import com.ugk.pi.android.ToolCall
 import com.ugk.pi.android.ToolResult
 import kotlinx.serialization.json.JsonObject
-import kotlinx.serialization.json.contentOrNull
-import kotlinx.serialization.json.jsonPrimitive
 
 /**
  * The small set of states that the demo UI needs to render.
@@ -168,7 +166,7 @@ object DemoToolSemanticMapper {
         "clipboard_read_text" -> "读取剪贴板文本"
         "clipboard_write_text" -> "写入剪贴板文本"
         "clipboard_clear" -> "清空剪贴板"
-        "screen_launch_app" -> "启动应用"
+        "launch_android_app" -> "启动应用"
         "screen_gesture" -> "执行屏幕手势"
         "screen_press_key" -> "触发按键"
         "screen_global_action" -> "系统全局按键"
@@ -195,70 +193,108 @@ object DemoToolSemanticMapper {
 
     fun formatInputSummary(name: String, input: JsonObject): String = when (name.lowercase()) {
         "screen_find_ui_element" -> {
-            val selector = input.entries
-                .filter { (key, value) -> key in setOf("text", "content_desc", "view_id", "type") && value.toString().isNotBlank() }
-                .joinToString(", ") { (key, value) -> "$key=${value.toString()}" }
+            // Six selectors, mirroring ScreenAutomationTools.selectorKeys: leaving out
+            // text_exact and content_desc_exact made an exact-match find render as the
+            // generic label while the Tool had applied a real filter.
+            val selector = findUiSelectorKeys.mapNotNull { key ->
+                when (val argument = input.displayedArgument(key)) {
+                    DisplayedArgument.NotSent -> null
+                    DisplayedArgument.Unreadable -> "$key=$UNREADABLE_ARGUMENT_LABEL"
+                    is DisplayedArgument.Sent -> "$key=${argument.text.take(24)}"
+                }
+            }.joinToString(", ")
             if (selector.isNotBlank()) "查找: $selector" else "查找屏幕 UI 元素"
         }
         "screen_capture_visual" -> "获取当前屏幕截图并交给视觉模型"
         "clipboard_read_text" -> "读取当前剪贴板文本"
         "clipboard_write_text" -> {
-            val textLength = input["text"]?.jsonPrimitive?.contentOrNull?.length
-            val sensitive = input["sensitive"]?.jsonPrimitive?.contentOrNull != "false"
+            // Compared the same way the Tool compares it: kotlinx `booleanOrNull` measured
+            // case-insensitive, so "FALSE" must read 普通 here too (the arm list is pinned
+            // in DemoArgumentRemediationTest alongside the Tool's own arm).
+            val sensitive = (input.displayedArgument("sensitive") as? DisplayedArgument.Sent)
+                ?.text?.equals("false", ignoreCase = true) != true
             val sensitivityLabel = if (sensitive) "敏感" else "普通"
-            if (textLength != null) "写入剪贴板（${textLength} 字符，$sensitivityLabel）" else "写入剪贴板"
+            // The character count is the real length; the text itself is never echoed.
+            val characters = (input.displayedArgument("text") as? DisplayedArgument.Sent)?.text?.length
+            if (characters != null) "写入剪贴板（$characters 字符，$sensitivityLabel）" else "写入剪贴板"
         }
         "clipboard_clear" -> "清空当前剪贴板"
         "screen_visual_gesture" -> {
-            val action = input["action"]?.jsonPrimitive?.contentOrNull ?: "手势"
-            val description = input["targetDescription"]?.jsonPrimitive?.contentOrNull
-            if (!description.isNullOrBlank()) "视觉目标: $description ($action)" else "视觉手势: $action"
+            val action = shownArgument(input, "action", fallback = "手势")
+            val description = displayedLabel(input.displayedArgument("targetDescription"))
+            if (description != null) "视觉目标: $description ($action)" else "视觉手势: $action"
         }
-        "screen_launch_app" -> {
-            val pkg = input["packageName"]?.jsonPrimitive?.contentOrNull
-            val app = input["appName"]?.jsonPrimitive?.contentOrNull
+        "launch_android_app" -> {
+            val packageLabel = displayedLabel(input.displayedArgument("package_name"))
             when {
-                !app.isNullOrBlank() -> "应用: $app"
-                !pkg.isNullOrBlank() -> "包名: $pkg"
+                packageLabel != null -> "包名: $packageLabel"
+                input.displayedArgument("package_name") === DisplayedArgument.Unreadable ->
+                    "准备启动应用（$UNREADABLE_ARGUMENT_LABEL：package_name）"
                 else -> "准备启动应用"
             }
         }
         "screen_perform_action" -> {
-            val action = input["action"]?.jsonPrimitive?.contentOrNull ?: "操作"
-            val text = input["text"]?.jsonPrimitive?.contentOrNull
-            val nodeId = input["nodeId"]?.jsonPrimitive?.contentOrNull
+            val action = shownArgument(input, "action", fallback = "操作")
+            val textLabel = displayedLabel(input.displayedArgument("text"))
+            val nodeLabel = displayedLabel(input.displayedArgument("nodeId"))
             when {
-                !text.isNullOrBlank() -> "输入: \"$text\" (节点 $nodeId)"
-                !nodeId.isNullOrBlank() -> "操作: $action (节点 $nodeId)"
+                textLabel != null -> "输入: \"$textLabel\" (节点 ${nodeLabel ?: "无"})"
+                nodeLabel != null -> "操作: $action (节点 $nodeLabel)"
+                input.displayedArgument("action") === DisplayedArgument.Unreadable ||
+                    input.displayedArgument("text") === DisplayedArgument.Unreadable ||
+                    input.displayedArgument("nodeId") === DisplayedArgument.Unreadable ->
+                    "操作: $UNREADABLE_ARGUMENT_LABEL"
                 else -> "操作: $action"
             }
         }
         "screen_gesture" -> {
-            val gesture = input["gesture"]?.jsonPrimitive?.contentOrNull ?: "手势"
+            // The Tool's schema field is `action`; reading `gesture` always fell back to
+            // the generic word, so no gesture the Agent performed was ever named here.
+            val gesture = shownArgument(input, "action", fallback = "手势")
             "手势: $gesture"
         }
         "screen_press_key" -> {
-            val key = input["key"]?.jsonPrimitive?.contentOrNull ?: "按键"
+            val key = shownArgument(input, "key", fallback = "按键")
             "按键: $key"
         }
         "screen_read_ui_tree" -> "读取当前屏幕可见 UI 元素"
         "bash", "terminal_exec" -> {
-            val cmd = input["command"]?.jsonPrimitive?.contentOrNull ?: input["cmd"]?.jsonPrimitive?.contentOrNull
-            if (!cmd.isNullOrBlank()) "命令: $cmd" else "执行 Shell 命令"
+            val cmd = displayedLabel(input.displayedArgument("command"))
+                ?: displayedLabel(input.displayedArgument("cmd"))
+            if (cmd != null) "命令: $cmd" else "执行 Shell 命令"
         }
         "file_read", "file_write" -> {
-            val path = input["path"]?.jsonPrimitive?.contentOrNull ?: input["file"]?.jsonPrimitive?.contentOrNull
-            if (!path.isNullOrBlank()) "文件: $path" else "文件操作"
+            val path = displayedLabel(input.displayedArgument("path"))
+                ?: displayedLabel(input.displayedArgument("file"))
+            if (path != null) "文件: $path" else "文件操作"
         }
         "show_user_confirmation_dialog" -> {
-            val message = input["message"]?.jsonPrimitive?.contentOrNull ?: input["prompt"]?.jsonPrimitive?.contentOrNull
-            if (!message.isNullOrBlank()) "提示: $message" else "等待授权确认"
+            val message = displayedLabel(input.displayedArgument("message"))
+                ?: displayedLabel(input.displayedArgument("prompt"))
+            if (message != null) "提示: $message" else "等待授权确认"
         }
         else -> {
             val first = input.entries.firstOrNull()
-            if (first != null) "${first.key}: ${first.value}" else "执行工具操作"
+            if (first != null) "${first.key}: ${first.value.toString().take(60)}" else "执行工具操作"
         }
     }
+
+    /**
+     * A label must never abort a run: an argument this client cannot read is named as
+     * unreadable instead of throwing, and is never shown as one of the values nobody
+     * sent. The value is bounded by [displayedLabel], not by each branch remembering to.
+     */
+    private fun shownArgument(input: JsonObject, key: String, fallback: String): String =
+        displayedLabel(input.displayedArgument(key)) ?: fallback
+
+    internal val findUiSelectorKeys = listOf(
+        "text",
+        "text_exact",
+        "content_desc",
+        "content_desc_exact",
+        "view_id",
+        "type"
+    )
 
     fun formatResultSummary(result: ToolResult): String {
         if (result.isError) {
@@ -277,7 +313,7 @@ object DemoToolSemanticMapper {
             "clipboard_read_text" -> "剪贴板文本已读取（内容仅供本轮模型使用）"
             "clipboard_write_text" -> "剪贴板文本已写入"
             "clipboard_clear" -> "剪贴板已清空"
-            "screen_launch_app" -> "已发起目标应用启动"
+            "launch_android_app" -> "已发起目标应用启动"
             "screen_gesture" -> "手势操作已完成"
             "bash", "terminal_exec" -> {
                 val lines = result.content.lines().filter { it.isNotBlank() }

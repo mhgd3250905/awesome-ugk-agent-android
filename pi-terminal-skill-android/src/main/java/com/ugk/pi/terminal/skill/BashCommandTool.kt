@@ -30,6 +30,7 @@ import kotlinx.coroutines.runInterruptible
 import kotlinx.coroutines.supervisorScope
 import kotlinx.coroutines.sync.Semaphore
 import kotlinx.coroutines.sync.withPermit
+import kotlinx.serialization.json.JsonArray
 import kotlinx.serialization.json.JsonElement
 import kotlinx.serialization.json.JsonNull
 import kotlinx.serialization.json.JsonObject
@@ -300,7 +301,27 @@ class BashCommandTool(
             )
         }
 
-        val workingDirectory = resolveWorkingDirectory(call.input.string("workingDirectory"))
+        // `string()` read a structured value as "nobody chose a directory", so the child
+        // ran in the workspace root while the confirmation ticket stayed bound to the
+        // path the model actually wrote. This file's own instruction text forbids exactly
+        // that divergence ("the target binding must cover the complete input, including
+        // ... workingDirectory"), and the NUL screen below exists for the same reason.
+        // JSON null and an absent key still mean the workspace root.
+        val declaredWorkingDirectory = call.input.optionalElement("workingDirectory")
+        val pathPrimitive = declaredWorkingDirectory as? JsonPrimitive
+        if (declaredWorkingDirectory != null && pathPrimitive?.isString != true) {
+            // Not only an object or array: a bare `true` or `20` is a JSON primitive, and
+            // the first form of this guard let it through, so the runtime mkdir()-ed a
+            // directory called "true" and ran the confirmed command there while the
+            // confirmation ticket stayed bound to the value `true`.
+            return error(
+                call,
+                "INVALID_WORKSPACE_PATH",
+                "workingDirectory was sent as " + describedShape(declaredWorkingDirectory) +
+                    "; it must be a relative path string inside the terminal workspace."
+            )
+        }
+        val workingDirectory = resolveWorkingDirectory(pathPrimitive?.contentOrNull)
             ?: return error(
                 call,
                 "INVALID_WORKSPACE_PATH",
@@ -453,6 +474,19 @@ class BashCommandTool(
 
     private fun JsonObject.string(name: String): String? =
         (this[name] as? JsonPrimitive)?.contentOrNull
+
+    /**
+     * A refusal says what shape arrived, never its contents: a gateway value can be a
+     * whole document, and pasting it into a tool result, a log and the transcript is the
+     * unbounded-echo defect round 13 recorded. This module keeps its own copy of the
+     * reading rules (see `optionalElement` below) because promoting them to
+     * `ugk-pi-android` would widen the published AAR.
+     */
+    private fun describedShape(value: JsonElement): String = when (value) {
+        is JsonArray -> "an array of " + value.size + " items"
+        is JsonObject -> "an object with " + value.size + (if (value.size == 1) " key" else " keys")
+        else -> "the value " + ((value as? JsonPrimitive)?.content?.take(40) ?: "it cannot read")
+    }
 
     /**
      * The value an argument declares for [key], or null when nobody filled it in.

@@ -45,11 +45,11 @@ API 内容不得复制进源码、文档或提交；Release 默认不嵌入 API 
 # 跑全部单元测试（十个 testDebugUnitTest 任务，十个模块全部贡献用例。
 # :pi-attention-skill-android 自 2026-10-02 起有 JVM 单元测试；在此之前它是
 # NO-SOURCE、永远不可能变红，第九轮曾把该缺口明示在这里。当前交付态合计
-# `1034 tests / 3 skipped / 0 failure`（PR #16+#17 合并后 2026-10-04 独占
-# `--rerun-tasks` 实测，154 份 JUnit XML；第十三轮交付态 `1033` 的逐模块差值与
-# 窗口原文见 docs/terminal-runtime-validation.md §40，+1 为合并前复核补交的
-# 有界回显钉子用例。上一交付态 `984`（PR #13+#15 合并后 2026-10-03 实测）本身
-# 可复核，不是假绿；第十一轮 950 与第十二轮 890 的逐模块数值分别见 §39 与 §38。）
+# `1077 tests / 3 skipped / 0 failure`（第十四轮 2026-10-06 在代码状态 `9b508f9`
+# 上独占 `--rerun-tasks` 实测，160 份 JUnit XML 时间戳全部落在同一次运行窗口内；
+# 逐模块差值与窗口原文见 docs/terminal-runtime-validation.md §41。上一交付态
+# `1034`（PR #16+#17 合并后 2026-10-04 实测）本身可复核，不是假绿；更早的
+# `984`、第十一轮 950 与第十二轮 890 的逐模块数值分别见 §40、§39 与 §38。）
 .\gradlew.bat `
   :ugk-pi-android:testDebugUnitTest `
   :pi-file-skill-android:testDebugUnitTest `

@@ -12,9 +12,6 @@ import java.util.Locale
 import kotlinx.serialization.json.JsonObject
 import kotlinx.serialization.json.JsonPrimitive
 import kotlinx.serialization.json.buildJsonObject
-import kotlinx.serialization.json.contentOrNull
-import kotlinx.serialization.json.intOrNull
-import kotlinx.serialization.json.jsonPrimitive
 import kotlinx.serialization.json.put
 import kotlinx.serialization.json.putJsonArray
 import kotlinx.serialization.json.putJsonObject
@@ -54,15 +51,37 @@ class AndroidAppCatalogTool(
         call: ToolCall,
         context: ToolExecutionContext
     ): ToolResult {
-        val query = call.input["query"]?.jsonPrimitive?.contentOrNull?.trim().orEmpty()
+        call.input.firstStructuredArgument(listOf("query", "max_results"))?.let { key ->
+            return error(
+                call,
+                // The code the Tool already uses for that argument: answering
+                // INVALID_QUERY about a broken max_results sends the caller to rewrite
+                // the field that was fine.
+                if (key == "max_results") "INVALID_MAX_RESULTS" else "INVALID_QUERY",
+                unusableArgumentMessage(key, call.input[key])
+            )
+        }
+        val queryArgument = call.input.declaredTrimmed("query")
+        if (queryArgument === DeclaredArgument.Unusable) {
+            return error(call, "INVALID_QUERY", unusableArgumentMessage("query", call.input["query"]))
+        }
+        // Trimmed because the matcher compares label and package text directly: an
+        // untrimmed " gmail " scored zero and the Tool answered ok=true with no
+        // candidates, which is the same success-shaped wrong answer this family produces.
+        val query = (queryArgument as? DeclaredArgument.Of)?.value.orEmpty()
         if (query.isBlank()) {
             return error(call, "INVALID_QUERY", "query must be a non-empty app label or package name.")
         }
 
-        val maxResults = call.input["max_results"]
-            ?.jsonPrimitive
-            ?.intOrNull
-            ?: DEFAULT_MAX_RESULTS
+        val maxResults = when (val declared = call.input.declaredInt("max_results")) {
+            DeclaredArgument.Undeclared -> DEFAULT_MAX_RESULTS
+            DeclaredArgument.Unusable -> return error(
+                call,
+                "INVALID_MAX_RESULTS",
+                unusableArgumentMessage("max_results", call.input["max_results"])
+            )
+            is DeclaredArgument.Of -> declared.value
+        }
         if (maxResults !in 1..MAX_RESULTS) {
             return error(call, "INVALID_MAX_RESULTS", "max_results must be between 1 and $MAX_RESULTS.")
         }
