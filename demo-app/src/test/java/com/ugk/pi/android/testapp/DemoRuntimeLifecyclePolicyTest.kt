@@ -131,6 +131,7 @@ class DemoRuntimeLifecyclePolicyTest {
     private class RuntimeRefreshTracer {
         private var runtimeExists = false
         private var installedConfig: DemoRuntimeConfig? = null
+
         var runtimeIdentity: Int = 0
             private set
         val events = mutableListOf<String>()
@@ -165,6 +166,7 @@ class DemoRuntimeLifecyclePolicyTest {
     private class ProcessOwnedRuntimeState {
         var agentRuntimeExists = false
         var appliedRuntimeConfig: DemoRuntimeConfig? = null
+
         var agentRuntimeIdentity = 0
             private set
         val events = mutableListOf<String>()

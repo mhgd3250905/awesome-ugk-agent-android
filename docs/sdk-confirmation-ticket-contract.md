@@ -24,6 +24,49 @@
 > `lowercase()`，所以 `"Not_Now"` 这类混合大小写仍会被画成 Cancel 却读不成拒绝。
 > 自查：`git grep -n "USER_CONFIRMATION_DECLINED_BUTTON_IDS" -- '*/src/main/*'`。
 
+> **2026-10-08 追加（第十六轮）**：上一条末尾那句「仍未解决」已解决，且上面那条自查命令的命中集**变了**，
+> 按原样跑它会误导读者，所以在这里更新而不是删改 2026-10-07 那段历史。
+>
+> 1. 比较规则现在只有一个定义：`userConfirmationButtonIntent(id[, accepted, declined])`
+>    （`ugk-pi-android/.../UserConfirmationButtonVocabulary.kt`）做 trim + `Locale.ROOT` 折叠后再查集合，
+>    accepted 先于 declined（保持受保护 Tool 一直有的优先级，重叠注入不会把授权读成拒绝）。
+>    受保护 Tool 的两个判据、确认 Tool 的「按钮是否在请求里」判据、demo 的可视化分类、headless 兜底、
+>    完整授权自动同意这五个落点全部走它；headless 与授权策略各自的两份手抄集合（合计四份私有 set）已删除。
+>    新自查（两个 API，不是一条命令覆盖全部五处）：
+>    `git grep -n "userConfirmationButtonIntent" -- '*/src/main/*'` 命中受保护 Tool 的两处判据、
+>    可视化分类、headless 兜底与授权策略；offered-id 那一处走的是同一文件里的
+>    `normalizeUserConfirmationButtonId`（它只需要折叠，不需要三态结论），自查
+>    `git grep -n "normalizeUserConfirmationButtonId" -- '*/src/main/*'`。
+>    把两条命令并排跑才算核完——第一稿这里写的是「一条命令看五个落点」，实测只有四个，已订正。
+>    旧自查命令 `git grep -n "USER_CONFIRMATION_DECLINED_BUTTON_IDS" -- '*/src/main/*'` 现在只剩 3 个命中
+>    （集合定义、受保护 Tool 的注入默认值、词汇表的归一化别名），**demo 侧不再是它的读者**——
+>    命中集从「SDK + demo 两处」变成「只有 SDK」，这正是本条要的效果，不是集合丢了。
+>    本轮实测输出留在 `build/review-evidence/r16-doc-selfcheck.txt` 第 1 节。
+> 2. 折叠两侧（授权与拒绝）是本轮的决定，理由与边界写清楚：授权仍必须同时满足「id 属于 accepted 词汇」
+>    「非 `withoutUserDecision`」「票据结构有效且未过期」「票据的 sessionId/toolName/inputFingerprint 绑定本次调用」
+>    「该 id 确实在本次请求的按钮集合里」，折叠大小写只让 `OK`/` Ok` 这类拼写进入既有门槛，
+>    不新增任何一类「没人按键也能过」的路径。反面由两条用例钉住：`approve` 这类两个词表都不在的 id
+>    既不授权也不报拒绝（`anIdOutsideBothVocabulariesIsNotReadAsTheUsersDecline`），
+>    空白 id 归 UNRECOGNIZED（`aBlankIdIsNeitherApprovalNorRefusalAtTheClassifier`）。
+> 3. 一条本轮打开又关掉的门，写进契约免得再被打开：demo 的分类除 id 词表外还有一条 **label 词表**，
+>    因此 `{"id":"OK","label":"取消"}` 会被画成 Cancel 而 SDK 读成授权。现在的规则是
+>    **id 读作授权时永不归入拒绝样式**（`ConfirmationVisualPolicy.isCancellation`）。
+>    这条只在宿主可见的层面成立；第三方宿主若另有一套 label 词表仍可能画出矛盾，
+>    SDK 看不见 label——要把它变成硬约束需要给确认结果加一等「视觉与词汇相冲突」语义，属接口扩面，
+>    本轮登记不做。
+> 4. 请求里两个按钮折叠后同 id（如 `["OK","ok "]`）现在**在问用户之前**就被拒绝：答案是 id，
+>    折叠后无法归属到用户实际按下的那个按钮。上一条追加里「SDK 会检查该 id 是否在本次请求的按钮集合内」
+>    那句由此获得新的边界：检查按归一化比较，因此不再能把大小写不同的回显当成「没提供过的 id」。
+> 5. 本契约第 4 节默认「确认 Tool 是否注册」与「受保护 Tool 是否需要确认」一致，这一点要靠宿主保证：
+>    能力插件只在 `AgentRuntime` 构建时按当时的偏好决定注册与否，而受保护 Tool 每次调用都读实时偏好。
+>    宿主若在运行时切换该偏好，必须重建 runtime（或在没有回合在跑时重建）；否则受保护 Tool 会要求先调用
+>    一个模型手里没有的 Tool。demo 侧的接线与不打断在跑回合的取舍见
+>    `docs/terminal-runtime-validation.md` §43 的 F2。
+> 6. 第十五轮追加说「headless 有真正取消按钮时保持一次普通拒绝而不是『没有人决定』」——该规则保留，
+>    现在一致地适用于 published 拒绝词表的全部 11 个 id（此前只适用于其中 6 个）。
+>    两条臂都不执行受保护 Tool；差别只在给模型的措辞。这仍是产品规则而非本轮的修复对象，
+>    登记见 §43「被否掉的复核立案」第 2 条。
+
 本文是 SDK-OPT-008 的协议设计结果。它先固化确认边界，再进入 Core、System、Terminal 和 Demo 的一次性实现；本文件本身不改变运行时行为。
 
 ## 1. 为什么不能继续只使用 selectedButtonId

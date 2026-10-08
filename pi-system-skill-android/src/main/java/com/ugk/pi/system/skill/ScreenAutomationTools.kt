@@ -76,6 +76,14 @@ private val selectorKeys = listOf(
     "type"
 )
 
+/**
+ * Every argument `screen_find_ui_element` reads. A key outside this list is refused where the
+ * arguments are read: the selector loop only ever visits [selectorKeys], so an unsupported
+ * key never reaches `matchesSelector` and its `else -> false` arm - it is simply not applied,
+ * which drops a constraint and widens the match set the caller then acts on.
+ */
+private val findUiElementArgumentKeys = selectorKeys + "max_results"
+
 private const val DEFAULT_MAX_RESULTS = 20
 private const val MAX_RESULTS_LIMIT = 50
 
@@ -91,9 +99,12 @@ private val identitySelectorKeys = setOf("text_exact", "content_desc_exact", "vi
 private val visualTargetFields = listOf("left", "top", "right", "bottom")
 
 /**
- * One arm per selector key, and an unknown key matches nothing: adding a selector to
- * [selectorKeys] without adding its arm here can only ever narrow the result set,
- * never silently widen it to "everything".
+ * One arm per selector key. Adding a selector to [selectorKeys] without adding its arm here
+ * can only ever narrow the result set, never silently widen it to "everything".
+ *
+ * This does not cover a key the *caller* invented: the argument reader only visits
+ * [selectorKeys], so an unsupported key is refused at [findUiElementArgumentKeys] instead of
+ * reaching this `else`.
  */
 private fun ScreenUiElement.matchesSelector(key: String, value: String): Boolean = when (key) {
     "text" -> text?.contains(value, ignoreCase = true) == true
@@ -193,6 +204,10 @@ class ScreenFindUiElementTool(
                 put("description", "Maximum matches to return. Default 20, capped at 50.")
             }
         }
+        // The closed set the reader enforces: `execute` refuses a key outside
+        // [findUiElementArgumentKeys], so the schema must not keep telling the model that an
+        // extra selector is legal. Same rule, both sides of one contract.
+        put("additionalProperties", false)
     }
 
     override suspend fun execute(call: ToolCall, context: ToolExecutionContext): ToolResult {
@@ -236,6 +251,19 @@ class ScreenFindUiElementTool(
         // caller has to fix, and a refusal that names a different one sends them away.
         if (maxResultsArgument === DeclaredArgument.Unusable) {
             return unusableArgument(call, name, "max_results", call.input)
+        }
+        // Before "give me a selector": a call whose only selector is one this tool does not
+        // implement has to learn which key it cannot honour, not that it sent no selectors.
+        call.input.keys.firstOrNull { it !in findUiElementArgumentKeys }?.let { unsupportedKey ->
+            return screenErrorResult(
+                callId = call.id,
+                toolName = name,
+                code = ScreenAutomationErrorCodes.INVALID_INPUT,
+                message = "'$unsupportedKey' is not an argument this tool reads. Supported: " +
+                    "${findUiElementArgumentKeys.joinToString(", ")}. An argument that cannot be " +
+                    "honoured is refused rather than dropped: dropping a selector removes a " +
+                    "constraint and returns every element the remaining ones allow."
+            )
         }
         if (selectors.isEmpty()) {
             return screenErrorResult(

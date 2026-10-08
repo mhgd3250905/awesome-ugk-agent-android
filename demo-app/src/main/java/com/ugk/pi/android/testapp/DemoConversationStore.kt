@@ -491,10 +491,19 @@ internal fun encodeStoredConversations(conversations: List<DemoConversation>): S
 /**
  * A stored value, separated into what could be read and what could not.
  *
- * [unreadableRaw] is non-null only when a value was present and no array could be
- * parsed from it at all. "The user has no conversations" and "the user's
- * conversations cannot be read" must not arrive through the same door, because the
- * caller writes the whole collection back either way.
+ * [unreadableRaw] is non-null when a value was present, the array was read whole (or
+ * salvaged), and some record *inside that array* could not be decoded - or when no record at
+ * all could be. A tail the write never finished is deliberately not one of those: after a
+ * salvage the array the app recovered *is* everything the payload declared, so
+ * `conversations.size < root.size` stays false and nothing is archived. That is the
+ * distinction round 15 pinned in `DemoUnreadableSnapshotValueDomainTest`, and it differs from
+ * `TaskRecordStore`, which archives any payload the strict decoder rejected - the task record
+ * keeps no per-element salvage of a *whole* array, so it cannot tell the two shapes apart and
+ * preserves the bytes instead.
+ *
+ * "The user has no conversations" and "some of the user's conversations cannot be read" must
+ * not arrive through the same door, because the caller writes the whole collection back
+ * either way.
  */
 internal class StoredSnapshotLoad(
     val conversations: List<DemoConversation>,
@@ -514,10 +523,12 @@ internal fun loadStoredSnapshot(raw: String?): StoredSnapshotLoad {
             if (conversation != null) add(conversation)
         }
     }
-    // An empty array is the store's own way of writing "nothing stored"; an array that
-    // held records which all failed to decode is not, and reading it as "nothing stored"
-    // would let the next save replace bytes the app simply could not use.
-    return StoredSnapshotLoad(conversations, raw.takeIf { conversations.isEmpty() && root.isNotEmpty() })
+    // An empty array is the store's own way of writing "nothing stored". Anything else that
+    // leaves a record behind is not: a payload that held three conversations and yielded two
+    // still holds the third user's data in the bytes, and the next save writes this list back
+    // as the whole collection. The rule is "every record the payload declared came back
+    // usable", applied per record - not "did the array parse".
+    return StoredSnapshotLoad(conversations, raw.takeIf { conversations.size < root.size })
 }
 
 internal fun decodeStoredConversations(raw: String): List<DemoConversation> =

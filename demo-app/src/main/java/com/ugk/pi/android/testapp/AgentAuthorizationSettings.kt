@@ -1,7 +1,9 @@
 package com.ugk.pi.android.testapp
 
 import android.content.Context
+import com.ugk.pi.android.UserConfirmationButtonIntent
 import com.ugk.pi.android.UserConfirmationDialogButton
+import com.ugk.pi.android.userConfirmationButtonIntent
 
 /** Stores the local, explicit opt-in for skipping high-impact confirmations. */
 class AgentAuthorizationSettingsStore(context: Context) {
@@ -21,21 +23,28 @@ class AgentAuthorizationSettingsStore(context: Context) {
     }
 }
 
-/** Pure button policy so the high-risk auto-approval rule stays testable. */
+/**
+ * Pure button policy so the high-risk auto-approval rule stays testable.
+ *
+ * Both vocabularies come from the SDK through [userConfirmationButtonIntent]. They were
+ * hand-copied here, and the copied refusal list carried only six of the eleven published ids,
+ * so `later`, `not_now`, `abort`, `dismiss` and `decline` were handed back as the auto-approval
+ * by a host that an earlier round had already made draw them as Cancel buttons - the answer the
+ * protected Tool then reports is the user saying no.
+ */
 object AgentAuthorizationPolicy {
-    private val acceptedButtonIds = setOf("confirm", "continue", "ok", "yes", "allow")
-    private val cancellationButtonIds = setOf(
-        "cancel",
-        "deny",
-        "no",
-        "reject",
-        "stop",
-        "close"
-    )
-
+    /**
+     * The button full authorization resolves a confirmation with: an id the SDK reads as
+     * approval if the model offered one, otherwise a button that means neither yes nor no,
+     * and only then the first offered button.
+     */
     fun autoApproveButtonId(buttons: List<UserConfirmationDialogButton>): String =
-        buttons.firstOrNull { it.id.lowercase() in acceptedButtonIds }?.id
-            ?: buttons.firstOrNull { it.id.lowercase() !in cancellationButtonIds }?.id
+        buttons.firstOrNull {
+            userConfirmationButtonIntent(it.id) == UserConfirmationButtonIntent.ACCEPTED
+        }?.id
+            ?: buttons.firstOrNull {
+                userConfirmationButtonIntent(it.id) == UserConfirmationButtonIntent.UNRECOGNIZED
+            }?.id
             ?: buttons.firstOrNull()?.id
             ?: "cancel"
 }

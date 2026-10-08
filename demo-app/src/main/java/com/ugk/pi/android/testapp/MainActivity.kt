@@ -1149,9 +1149,34 @@ class MainActivity : ComponentActivity() {
             DemoRuntimeRefreshAction.REBUILD -> rebuildRuntime(config)
             DemoRuntimeRefreshAction.REUSE -> refreshRuntimeState(config)
         }
+        // A resume is also the moment the authorization preference may have moved, and the
+        // registered Tool set was decided once, at the build above.
+        syncAuthorizationMode()
+    }
+
+    /**
+     * Rebuild when the stored authorization preference no longer matches what this runtime
+     * registered, but never while the user has a turn in flight or a timer waiting.
+     * `runAgent` asks it again before starting a run, so a change made mid-turn is applied by
+     * the next turn instead of destroying the current one.
+     */
+    private fun syncAuthorizationMode() {
+        val current = authorizationStore.isFullAuthorizationEnabled()
+        if (!DemoRuntimeAuthorizationSync.shouldRebuild(
+                runtimeExists = conversationRuntime.agentRuntime != null,
+                applied = conversationRuntime.appliedAuthorizationMode,
+                current = current,
+                runInFlight = runState.isBusy || runCoordinator.isRunning() ||
+                    delayedTasks.snapshot() !is DemoDelayedTaskState.Idle
+            )
+        ) {
+            return
+        }
+        rebuildRuntime(apiStore.activeConfig())
     }
 
     private fun rebuildRuntime(config: ApiProviderConfig?) {
+        val fullAuthorizationEnabled = authorizationStore.isFullAuthorizationEnabled()
         stopAgent(clearQueuedMessages = true)
         conversationRuntime.agentRuntime?.close()
         val processAuthorizationStore = AgentAuthorizationSettingsStore(applicationContext)
@@ -1167,6 +1192,7 @@ class MainActivity : ComponentActivity() {
             supportsBackgroundPromptExecution = false
         )
         conversationRuntime.appliedRuntimeConfig = DemoRuntimeConfig.from(config)
+        conversationRuntime.appliedAuthorizationMode = fullAuthorizationEnabled
         refreshRuntimeState(config)
     }
 
@@ -1365,6 +1391,9 @@ class MainActivity : ComponentActivity() {
         if (DemoCapabilityInterlock.isScreenOperationOwned() || delayedTasks.snapshot() !is DemoDelayedTaskState.Idle ||
             runState.isBusy || runCoordinator.isRunning()
         ) return false
+        // Nothing is in flight here, so this is the safe place to apply an authorization
+        // change a resume had to leave pending.
+        syncAuthorizationMode()
         val currentRuntime = conversationRuntime.agentRuntime ?: return false
         val effectiveText = if (text.isBlank() && images.isNotEmpty()) {
             resolveDefaultImagePromptText(images.size)

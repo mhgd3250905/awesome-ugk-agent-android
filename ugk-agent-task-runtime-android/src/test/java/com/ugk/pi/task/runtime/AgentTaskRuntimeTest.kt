@@ -29,7 +29,7 @@ class AgentTaskRuntimeTest {
     fun jsonCodecRoundTripsPolymorphicTask() {
         val task = sampleTask()
 
-        val decoded = AgentTaskJsonCodec.decode(AgentTaskJsonCodec.encode(listOf(task))).single()
+        val decoded = checkNotNull(AgentTaskJsonCodec.decodeOrNull(AgentTaskJsonCodec.encode(listOf(task)))).single()
 
         assertEquals(task, decoded)
         assertTrue(decoded.action is AgentTaskAction.NotifyUser)
@@ -38,7 +38,7 @@ class AgentTaskRuntimeTest {
 
     @Test
     fun jsonCodecRejectsCorruptPayloadWithoutBreakingStartup() {
-        assertEquals(emptyList<AgentTask>(), AgentTaskJsonCodec.decode("not-json"))
+        assertNull(AgentTaskJsonCodec.decodeOrNull("not-json"))
     }
 
     @Test
@@ -198,7 +198,7 @@ class AgentTaskRuntimeTest {
         writerA.join()
         writerB.join()
 
-        val ids = AgentTaskJsonCodec.decode(backing.get()).map { it.id }.toSet()
+        val ids = checkNotNull(AgentTaskJsonCodec.decodeOrNull(backing.get())).map { it.id }.toSet()
         assertEquals(setOf("task_1", "task_2", "task_3"), ids)
     }
 
@@ -216,7 +216,8 @@ class AgentTaskRuntimeTest {
             writerA.join()
             writerB.join()
 
-            val ids = AgentTaskJsonCodec.decode(backing.get()).map { it.id }.toSet()
+            val stored = checkNotNull(backing.get())
+            val ids = checkNotNull(AgentTaskJsonCodec.decodeOrNull(stored)).map { it.id }.toSet()
             assertEquals(setOf("task_a", "task_b"), ids)
         }
     }
@@ -234,7 +235,7 @@ class AgentTaskRuntimeTest {
         store.upsert(sampleTask())
 
         assertEquals("{ definitely not json", backedUp.get())
-        assertEquals(listOf(sampleTask()), AgentTaskJsonCodec.decode(backing.get()))
+        assertEquals(listOf(sampleTask()), checkNotNull(AgentTaskJsonCodec.decodeOrNull(backing.get())))
     }
 
     private fun sampleTask(): AgentTask = AgentTask(

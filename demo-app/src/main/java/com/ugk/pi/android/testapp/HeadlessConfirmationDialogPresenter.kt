@@ -1,8 +1,10 @@
 package com.ugk.pi.android.testapp
 
+import com.ugk.pi.android.UserConfirmationButtonIntent
 import com.ugk.pi.android.UserConfirmationDialogPresenter
 import com.ugk.pi.android.UserConfirmationDialogRequest
 import com.ugk.pi.android.UserConfirmationDialogResult
+import com.ugk.pi.android.userConfirmationButtonIntent
 
 /**
  * Explicitly denies protected confirmation requests when no UI is present.
@@ -13,7 +15,7 @@ internal object HeadlessConfirmationDialogPresenter : UserConfirmationDialogPres
         request: UserConfirmationDialogRequest
     ): UserConfirmationDialogResult {
         val cancellationId = request.buttons.firstOrNull {
-            it.id.lowercase() in CANCELLATION_BUTTON_IDS
+            userConfirmationButtonIntent(it.id) == UserConfirmationButtonIntent.DECLINED
         }?.id
         // The button list is authored by the model, so "the last button" was
         // never a safe denial: a set such as [confirm] answered the protected
@@ -21,7 +23,9 @@ internal object HeadlessConfirmationDialogPresenter : UserConfirmationDialogPres
         // button that cannot read as approval, and when the model offered only
         // approval ids report honestly that nobody decided at all.
         val selectedButtonId = cancellationId
-            ?: request.buttons.firstOrNull { it.id.lowercase() !in ACCEPTANCE_BUTTON_IDS }?.id
+            ?: request.buttons.firstOrNull {
+                userConfirmationButtonIntent(it.id) != UserConfirmationButtonIntent.ACCEPTED
+            }?.id
             ?: request.buttons.lastOrNull()?.id
             ?: "cancel"
         return UserConfirmationDialogResult(
@@ -29,22 +33,4 @@ internal object HeadlessConfirmationDialogPresenter : UserConfirmationDialogPres
             withoutUserDecision = cancellationId == null
         )
     }
-
-    private val CANCELLATION_BUTTON_IDS = setOf(
-        "cancel",
-        "deny",
-        "no",
-        "reject",
-        "stop",
-        "close"
-    )
-
-    /** Mirrors `UserConfirmationRequiredTool`'s accepted ids: what would authorize a Tool. */
-    private val ACCEPTANCE_BUTTON_IDS = setOf(
-        "confirm",
-        "continue",
-        "ok",
-        "yes",
-        "allow"
-    )
 }

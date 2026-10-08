@@ -328,11 +328,21 @@ internal class DemoTeachingCapacityException(message: String) : IllegalStateExce
 
 /** Never persist transient model text, image base64, clipboard values, or terminal output. */
 internal object DemoTeachingEvidence {
+    /** Lower-cased parameter-name fragments whose value must never reach the transcript. */
+    private val REDACTION_MARKERS = listOf("password", "token", "secret", "apikey", "api_key")
+
     fun input(call: ToolCall): JsonObject {
         if (call.name.startsWith("terminal_") || call.name.startsWith("clipboard_")) return buildJsonObject { put("redacted", true) }
         fun scrub(value: JsonElement, key: String = ""): JsonElement = when {
-            key.lowercase().contains("password") || key.lowercase().contains("token") || key.lowercase().contains("secret") ||
-                key.lowercase().contains("apikey") || key == "text" && call.name == "screen_perform_action" -> JsonPrimitive("[已省略输入值]")
+            // The list is compared against one normalised key. What actually leaked was the
+            // underscored spelling: the old inline checks knew "apikey" only, so a parameter
+            // named api_key matched nothing at all. Locale.ROOT is pinned because a security
+            // boundary must not depend on a fold that is locale-sensitive in principle - on
+            // this toolchain the no-argument lowercase() was measured to fold like ROOT already
+            // (build/review-evidence/r16-lowercase-locale-probe2.log), so no Turkish device was
+            // ever the cause, and that claim is recorded as falsified.
+            REDACTION_MARKERS.any { marker -> key.lowercase(java.util.Locale.ROOT).contains(marker) } ||
+                key == "text" && call.name == "screen_perform_action" -> JsonPrimitive("[已省略输入值]")
             value is JsonObject -> JsonObject(value.mapValues { (k, v) -> scrub(v, k) })
             value is JsonArray -> JsonArray(value.take(100).map { scrub(it) })
             value is JsonPrimitive && value.isString -> JsonPrimitive(value.content.take(2000))
